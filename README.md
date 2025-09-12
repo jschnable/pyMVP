@@ -36,47 +36,48 @@ cd pyMVP
 
 **Step 2: Choose Installation Method**
 
-Due to modern Python packaging requirements and externally-managed environments, choose the approach that works for your system:
+Choose the approach that works for your system:
 
-**Option 1: Virtual Environment (Recommended)**
+**Option 1: User-local Installation**
+
+```bash
+# Install to user directory (no admin/root required)
+pip install -e . --user
+
+# Install optional dependencies supporting additional file formats
+pip install -e .[plink] --user
+pip install -e .[vcf] --user
+pip install -e .[all] --user
+```
+
+**Option 2: System-wide Override (Use with caution)**
+
+```bash
+# Override system package management restrictions
+pip install -e . --break-system-packages
+
+# Install optional dependencies supporting additional file formats
+pip install -e .[plink] --break-system-packages
+pip install -e .[vcf] --break-system-packages
+pip install -e .[all] --break-system-packages
+```
+
+**Option 3: Virtual Environment**
 
 ```bash
 # Create and activate virtual environment
 python3 -m venv pymvp-env
 source pymvp-env/bin/activate  # On Windows: pymvp-env\Scripts\activate
 
-# Core install (with JIT acceleration via Numba)
+# Core install
 pip install -e .
 
-# Optional format extras
+# Install optional dependencies supporting additional file formats
 pip install -e .[plink]  # PLINK .bed support
 pip install -e .[vcf]    # Faster VCF parsing and .bcf support
 pip install -e .[all]    # All optional loaders
 ```
 
-**Option 2: User-local Installation**
-
-```bash
-# Install to user directory (no admin/root required)
-pip install -e . --user
-
-# Optional format extras
-pip install -e .[plink] --user
-pip install -e .[vcf] --user
-pip install -e .[all] --user
-```
-
-**Option 3: System-wide Override (Use with caution)**
-
-```bash
-# Override system package management restrictions
-pip install -e . --break-system-packages
-
-# Optional format extras
-pip install -e .[plink] --break-system-packages
-pip install -e .[vcf] --break-system-packages
-pip install -e .[all] --break-system-packages
-```
 
 ## Quickstart (run_GWAS.py)
 
