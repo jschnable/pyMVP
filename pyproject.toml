@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymvp"
+version = "0.1.0"
+description = "Pure Python implementation of rMVP for Genome Wide Association Studies with Numba JIT acceleration"
+authors = [
+    {name = "pyMVP Development Team"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.7"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research", 
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8", 
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.19.0",
+    "scipy>=1.6.0", 
+    "pandas>=1.2.0",
+    "h5py>=3.0.0",
+    "tables>=3.6.0",
+    "statsmodels>=0.12.0",
+    "scikit-learn>=0.24.0",
+    "matplotlib>=3.3.0",
+    "seaborn>=0.11.0",
+    "tqdm>=4.60.0",
+    "numba>=0.50.0",
+]
+
+[project.optional-dependencies]
+# Faster VCF parsing and required for .bcf files
+vcf = [
+    "cyvcf2>=0.30.0",
+]
+# PLINK .bed support  
+plink = [
+    "bed-reader>=1.0.0",
+]
+# Convenience extra to pull in all optional loaders
+all = [
+    "cyvcf2>=0.30.0",
+    "bed-reader>=1.0.0", 
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/pyMVP"
+Repository = "https://github.com/your-org/pyMVP"
+Issues = "https://github.com/your-org/pyMVP/issues"
+
+[tool.setuptools.packages.find]
+include = ["pymvp*"]
+
+[tool.setuptools.package-data]
+pymvp = ["py.typed"]

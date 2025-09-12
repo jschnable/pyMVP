@@ -1,0 +1,116 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+htmlcov/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# AI/Claude related
+.claude/
+.claudeignore
+
+# Test data and validation
+validation_data/
+performance_test_large/
+test_datasets/
+*test_data*
+
+# GWAS results and outputs
+*results*/
+*_results/
+*_output/
+gwas_analysis_results/
+farmcpu_comparison_results/
+rMVP_FarmCPU_*/
+pyMVP_FarmCPU_*/
+*_pvals/
+
+# Generated files and outputs
+*.jpg
+*.jpeg
+*.pdf
+*.csv
+*.tsv
+*.txt
+*.log
+*.out
+
+# Working files and temporary
+*.tmp
+*.temp
+temp/
+tmp/
+scratch/
+
+# Development and testing directories
+DevTests/
+DevScripts/
+
+# Archived/experimental code
+*/_archived/
+*/archived/
+*_old*
+*_backup*
+
+# Build artifacts
+*.deb
+*.rpm
+*.tar.gz
+*.zip
