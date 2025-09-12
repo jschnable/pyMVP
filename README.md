@@ -25,7 +25,16 @@ If this python package works for you, all credit goes to the original authors of
 
 Requirements: Python 3.7+.
 
-### Installation Options
+### Installation Steps
+
+**Step 1: Clone the Repository**
+
+```bash
+git clone https://github.com/jschnable/pyMVP.git
+cd pyMVP
+```
+
+**Step 2: Choose Installation Method**
 
 Due to modern Python packaging requirements and externally-managed environments, choose the approach that works for your system:
 
