@@ -104,8 +104,8 @@ DevTests/
 DevScripts/
 
 # Archived/experimental code
-*/_archived/
-*/archived/
+**/_archived/
+**/archived/
 *_old*
 *_backup*
 
