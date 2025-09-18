@@ -12,6 +12,7 @@ from typing import Optional, Union, Dict, List, Tuple
 import warnings
 
 from ..utils.data_types import AssociationResults, GenotypeMap
+from ..association.farmcpu_resampling import FarmCPUResamplingResults
 
 def MVP_Report(results: Union[AssociationResults, Dict],
                map_data: Optional[GenotypeMap] = None,
@@ -67,6 +68,16 @@ def MVP_Report(results: Union[AssociationResults, Dict],
         results_dict = results
     else:
         raise ValueError("Results must be AssociationResults object or dictionary")
+
+    contains_resampling = any(
+        isinstance(result_obj, FarmCPUResamplingResults)
+        for result_obj in results_dict.values()
+    )
+
+    if contains_resampling and multi_panel:
+        if verbose:
+            print("FarmCPU resampling results excluded from multi-panel Manhattan; generating individual plots instead.")
+        multi_panel = False
 
     # Handle multi-panel Manhattan plot
     if multi_panel and "manhattan" in plot_types and isinstance(results, dict) and len(results_dict) > 1:
@@ -169,6 +180,62 @@ def MVP_Report(results: Union[AssociationResults, Dict],
     for method_name, result_obj in results_dict.items():
         if verbose:
             print(f"Processing results for method: {method_name}")
+
+        if isinstance(result_obj, FarmCPUResamplingResults):
+            method_plots = {}
+            rmip_values = result_obj.rmip_values
+
+            if len(rmip_values) == 0:
+                if verbose:
+                    print(f"No markers identified by FarmCPU resampling for {method_name}")
+                report['summary'][method_name] = {
+                    'n_markers': 0,
+                    'max_rmip': 0.0,
+                    'mean_rmip': 0.0,
+                    'cluster_mode': result_obj.cluster_mode,
+                    'total_runs': result_obj.total_runs
+                }
+                report['plots'][method_name] = method_plots
+                continue
+
+            if "manhattan" in plot_types:
+                if verbose:
+                    print(f"Creating RMIP Manhattan plot for {method_name}...")
+
+                rmip_fig = create_rmip_manhattan_plot(
+                    chromosomes=result_obj.chromosomes,
+                    positions=result_obj.positions,
+                    rmip_values=rmip_values,
+                    title=f"FarmCPU Resampling - RMIP ({method_name})",
+                    figsize=figsize,
+                    colors=colors,
+                    point_size=point_size
+                )
+                method_plots['manhattan'] = rmip_fig
+
+                if save_plots:
+                    filename = f"{output_prefix}_{method_name}_rmip_manhattan.png"
+                    rmip_fig.savefig(filename, dpi=dpi, bbox_inches='tight')
+                    report['files_created'].append(filename)
+
+            report['plots'][method_name] = method_plots
+
+            rmip_summary = {
+                'n_markers': len(result_obj.entries),
+                'max_rmip': float(np.max(rmip_values)),
+                'mean_rmip': float(np.mean(rmip_values)),
+                'cluster_mode': result_obj.cluster_mode,
+                'total_runs': result_obj.total_runs
+            }
+            report['summary'][method_name] = rmip_summary
+
+            if verbose:
+                print(f"Summary for {method_name}:")
+                print(f"  Entries: {rmip_summary['n_markers']}")
+                print(f"  Max RMIP: {rmip_summary['max_rmip']:.3f}")
+                print(f"  Mean RMIP: {rmip_summary['mean_rmip']:.3f}")
+                print(f"  Clustering enabled: {rmip_summary['cluster_mode']}")
+            continue
 
         # Extract data
         if hasattr(result_obj, 'to_numpy'):
@@ -336,6 +403,50 @@ def create_manhattan_plot(pvalues: np.ndarray,
 
     # Remove grid (no gray grid marks)
 
+    plt.tight_layout()
+    return fig
+
+
+def create_rmip_manhattan_plot(chromosomes: np.ndarray,
+                               positions: np.ndarray,
+                               rmip_values: np.ndarray,
+                               title: str,
+                               figsize: Tuple[int, int] = (12, 6),
+                               colors: Optional[List[str]] = None,
+                               point_size: float = 10.0) -> plt.Figure:
+    """Create Manhattan-style plot using RMIP values on the y-axis."""
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if len(rmip_values) == 0:
+        ax.set_xlabel('Chromosome', fontsize=12)
+        ax.set_ylabel('RMIP', fontsize=12)
+        if title and title.strip():
+            ax.set_title(title)
+        ax.text(0.5, 0.5, 'No markers identified', transform=ax.transAxes,
+                ha='center', va='center', fontsize=12)
+        plt.tight_layout()
+        return fig
+
+    try:
+        plot_manhattan_with_positions(
+            ax,
+            np.asarray(chromosomes),
+            np.asarray(positions, dtype=np.float64),
+            np.asarray(rmip_values, dtype=np.float64),
+            colors=colors,
+            point_size=point_size
+        )
+    except Exception as exc:
+        warnings.warn(f"Falling back to sequential RMIP plotting: {exc}")
+        plot_manhattan_sequential(ax, np.asarray(rmip_values, dtype=np.float64), point_size=point_size)
+
+    ax.set_xlabel('Chromosome', fontsize=12)
+    ax.set_ylabel('RMIP', fontsize=12)
+    if title and title.strip():
+        ax.set_title(title)
+
+    ax.set_ylim(0, 1.05)
     plt.tight_layout()
     return fig
 

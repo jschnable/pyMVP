@@ -65,6 +65,8 @@ Thumbs.db
 # AI/Claude related
 .claude/
 .claudeignore
+AGENTS.md
+CLAUDE.md
 
 # Test data and validation
 validation_data/
@@ -102,6 +104,7 @@ scratch/
 # Development and testing directories
 DevTests/
 DevScripts/
+simple_test/
 
 # Archived/experimental code
 **/_archived/

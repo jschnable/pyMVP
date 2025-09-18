@@ -3,16 +3,18 @@
 Comprehensive GWAS Analysis Script using pyMVP
 
 This script demonstrates the full functionality of the pyMVP package for
-conducting Genome-Wide Association Studies (GWAS) using GLM, MLM, and FarmCPU methods.
+conducting Genome-Wide Association Studies (GWAS) using GLM, MLM, FarmCPU,
+and FarmCPU resampling methods.
 """
 
 import argparse
 import sys
 import time
+import warnings
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 # Add the parent directory to the path to import pyMVP
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,6 +29,10 @@ from pymvp.utils.stats import (
     genomic_inflation_factor
 )
 from pymvp.utils.data_types import GenotypeMatrix, AssociationResults
+from pymvp.association.farmcpu_resampling import (
+    MVP_FarmCPUResampling,
+    FarmCPUResamplingResults,
+)
 from pymvp.association.glm import MVP_GLM
 from pymvp.association.mlm import MVP_MLM
 from pymvp.association.farmcpu import MVP_FarmCPU
@@ -178,20 +184,66 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                      geno_map,
                      population_structure: Dict[str, Any],
                      trait_name: str,
-                     methods: List[str] = ['GLM', 'MLM', 'FarmCPU'],
-                     max_iterations: int = 10) -> Dict[str, AssociationResults]:
-    """Run GWAS analysis using specified methods for a single trait"""
+                     methods: List[str] = ['GLM', 'MLM', 'FARMCPU'],
+                     max_iterations: int = 10,
+                     farmcpu_resampling_params: Optional[Dict[str, Any]] = None,
+                     default_significance: Optional[float] = None
+                     ) -> Dict[str, Union[AssociationResults, FarmCPUResamplingResults]]:
+    """Run GWAS analysis using specified methods for a single trait.
+
+    Args:
+        phenotype_df: Phenotype dataframe containing ID and trait columns.
+        genotype_matrix: Genotype matrix aligned to phenotype individuals.
+        geno_map: Genetic map with marker metadata.
+        population_structure: Dictionary containing PCs and optional kinship.
+        trait_name: Name of trait column to analyze.
+        methods: Methods to execute (upper-case identifiers).
+        max_iterations: Maximum FarmCPU iterations.
+        farmcpu_resampling_params: Optional overrides for resampling configuration.
+    """
     
     results = {}
-    
+
     # Prepare data for the specified trait
     if trait_name not in phenotype_df.columns:
         raise ValueError(f"Trait '{trait_name}' not found in phenotype data")
     phe_array = phenotype_df[['ID', trait_name]].values
     pcs = population_structure['pcs']
-    
+
     print(f"Running GWAS for trait: {trait_name}")
     print(f"Using {pcs.shape[1]} principal components as covariates")
+
+    default_resampling_params = {
+        'runs': 100,
+        'mask_proportion': 0.1,
+        'significance_threshold': default_significance,
+        'cluster_markers': False,
+        'ld_threshold': 0.7,
+        'random_seed': None,
+    }
+    significance_override = None
+    if farmcpu_resampling_params:
+        significance_override = farmcpu_resampling_params.get('significance_threshold')
+        params_copy = dict(farmcpu_resampling_params)
+        params_copy.pop('significance_threshold', None)
+        default_resampling_params.update(params_copy)
+    if significance_override is not None:
+        default_resampling_params['significance_threshold'] = significance_override
+    if default_resampling_params['significance_threshold'] is None:
+        # Fallback if neither default nor override supplied
+        default_resampling_params['significance_threshold'] = 5e-8
+
+    resampling_significance = default_resampling_params['significance_threshold']
+    resampling_p_threshold = 0.05
+    resampling_qtn_threshold = max(resampling_p_threshold, 0.01)
+    override_used = significance_override is not None
+    if resampling_significance > resampling_qtn_threshold and override_used:
+        warnings.warn(
+            "FarmCPU resampling significance threshold "
+            f"({resampling_significance:.3g}) is less stringent than the FarmCPU "
+            f"QTN threshold ({resampling_qtn_threshold:.3g}). Markers above "
+            "the QTN threshold cannot enter later FarmCPU iterations."
+        )
     
     # GLM Analysis
     if 'GLM' in methods:
@@ -249,7 +301,7 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
     if 'FARMCPU' in methods:
         step_start = time.time()
         print_step("Running FarmCPU analysis")
-        
+
         try:
             farmcpu_results = MVP_FarmCPU(
                 phe=phe_array,
@@ -272,10 +324,42 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
             print(f"   FarmCPU analysis failed: {e}")
             import traceback
             traceback.print_exc()
-    
+
+    # FarmCPU Resampling Analysis
+    if 'FARMCPU_RESAMPLING' in methods:
+        step_start = time.time()
+        print_step("Running FarmCPU resampling analysis")
+
+        try:
+            resampling_results = MVP_FarmCPUResampling(
+                phe=phe_array,
+                geno=genotype_matrix,
+                map_data=geno_map,
+                CV=pcs,
+                runs=default_resampling_params['runs'],
+                mask_proportion=default_resampling_params['mask_proportion'],
+                significance_threshold=default_resampling_params['significance_threshold'],
+                cluster_markers=default_resampling_params['cluster_markers'],
+                ld_threshold=default_resampling_params['ld_threshold'],
+                trait_name=trait_name,
+                random_seed=default_resampling_params['random_seed'],
+                maxLoop=max_iterations,
+                p_threshold=0.05,
+                QTN_threshold=0.01,
+                verbose=False,
+            )
+            results['FarmCPUResampling'] = resampling_results
+            print(f"   RMIP markers/clusters identified: {len(resampling_results.entries)}")
+            print_step("FarmCPU resampling analysis", step_start)
+
+        except Exception as e:
+            print(f"   FarmCPU resampling analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
+
     return results
 
-def analyze_results_and_save(results: Dict[str, AssociationResults],
+def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCPUResamplingResults]],
                            genotype_matrix: GenotypeMatrix,
                            geno_map,
                            output_dir: str,
@@ -293,6 +377,14 @@ def analyze_results_and_save(results: Dict[str, AssociationResults],
     step_start = time.time()
     print_step("Analyzing results and calculating significance")
     
+    standard_results: Dict[str, AssociationResults] = {}
+    resampling_results: Dict[str, FarmCPUResamplingResults] = {}
+    for method, result in results.items():
+        if isinstance(result, FarmCPUResamplingResults):
+            resampling_results[method] = result
+        else:
+            standard_results[method] = result
+
     # Calculate MAF for all markers
     genotype_data = genotype_matrix._data if hasattr(genotype_matrix, '_data') else genotype_matrix
     maf = calculate_maf_from_genotypes(genotype_data)
@@ -310,7 +402,7 @@ def analyze_results_and_save(results: Dict[str, AssociationResults],
     significant_snps = []
     summary_stats = {}
     
-    for method, result in results.items():
+    for method, result in standard_results.items():
         # Add method results to main dataframe
         all_results_df[f'{method}_Effect'] = result.effects
         all_results_df[f'{method}_SE'] = result.se
@@ -356,6 +448,37 @@ def analyze_results_and_save(results: Dict[str, AssociationResults],
             sig_snps['Method'] = method
             significant_snps.append(sig_snps)
     
+    for method, res_result in resampling_results.items():
+        rmip_col = f"{method}_RMIP"
+        all_results_df[rmip_col] = np.nan
+
+        res_df = res_result.to_dataframe().copy()
+        if trait_label:
+            res_df['Trait'] = trait_label
+
+        rmip_lookup = dict(zip(res_df.get('SNP', []), res_df.get('RMIP', [])))
+        if rmip_lookup:
+            all_results_df[rmip_col] = all_results_df['SNP'].map(rmip_lookup)
+
+        if res_result.cluster_mode and 'ClusterMembers' in res_df.columns:
+            cluster_col = f"{method}_ClusterMembers"
+            cluster_lookup = dict(zip(res_df['SNP'], res_df['ClusterMembers']))
+            all_results_df[cluster_col] = all_results_df['SNP'].map(cluster_lookup)
+
+        res_summary = {
+            'n_identified': len(res_result.entries),
+            'max_rmip': float(np.max(res_result.rmip_values)) if res_result.rmip_values.size else 0.0,
+            'mean_rmip': float(np.mean(res_result.rmip_values)) if res_result.rmip_values.size else 0.0,
+            'cluster_mode': res_result.cluster_mode,
+            'total_runs': res_result.total_runs
+        }
+        summary_stats[method] = res_summary
+
+        res_file = output_path / f"GWAS{suffix}_{method}_RMIP.csv"
+        res_df.to_csv(res_file, index=False)
+        print(f"   Saved {method} RMIP table to: {res_file}")
+        print(f"   {method}: {res_summary['n_identified']} markers/clusters with RMIP > 0 (runs={res_result.total_runs})")
+
     # Save all results
     suffix = f"_{trait_label}" if trait_label else ""
     if save_all_results:
@@ -425,7 +548,7 @@ def generate_plots(results: Dict[str, AssociationResults],
                 plot_types = []
                 if plot_manhattan:
                     plot_types.append("manhattan")
-                if plot_qq:
+                if plot_qq and not isinstance(result, FarmCPUResamplingResults):
                     plot_types.append("qq")
                 plot_results = MVP_Report(
                     results=result,
@@ -444,6 +567,8 @@ def generate_plots(results: Dict[str, AssociationResults],
     # Always generate Q-Q plots individually since they don't have multi-panel support
     if plot_qq:
         for method, result in results.items():
+            if isinstance(result, FarmCPUResamplingResults):
+                continue
             try:
                 qq_results = MVP_Report(
                     results=result,
@@ -496,7 +621,7 @@ def main():
                        choices=['csv', 'tsv', 'numeric', 'vcf', 'plink', 'hapmap'],
                        help="Genotype file format (auto-detect if not specified)")
     parser.add_argument("--methods", default="GLM,MLM,FarmCPU",
-                       help="GWAS methods to run (comma-separated: GLM,MLM,FarmCPU)")
+                       help="GWAS methods to run (comma-separated: GLM,MLM,FarmCPU,FarmCPUResampling)")
     parser.add_argument("--n-pcs", type=int, default=3,
                        help="Number of principal components to use")
     parser.add_argument("--significance", type=float, default=None,
@@ -507,6 +632,18 @@ def main():
                        help="Effective number of markers to use for Bonferroni denominator (optional)")
     parser.add_argument("--max-iterations", type=int, default=10,
                        help="Maximum iterations for FarmCPU")
+    parser.add_argument("--farmcpu-resampling-runs", type=int, default=100,
+                       help="Number of FarmCPU resampling runs (X)")
+    parser.add_argument("--farmcpu-resampling-mask", type=float, default=0.1,
+                       help="Fraction of phenotype values masked per run (Y)")
+    parser.add_argument("--farmcpu-resampling-cluster", action='store_true',
+                       help="Cluster correlated markers when computing RMIP")
+    parser.add_argument("--farmcpu-resampling-ld-threshold", type=float, default=0.7,
+                       help="LD R^2 threshold (Z) for resampling clusters")
+    parser.add_argument("--farmcpu-resampling-significance", type=float, default=None,
+                       help="Per-run p-value threshold for FarmCPU resampling (defaults to Bonferroni alpha / n_tests)")
+    parser.add_argument("--farmcpu-resampling-seed", type=int, default=None,
+                       help="Random seed for FarmCPU resampling phenotype masking")
     parser.add_argument("--traits", default=None,
                        help="Comma-separated list of trait column names (auto-detect if not specified)")
     # Output selection
@@ -539,7 +676,15 @@ def main():
     args = parser.parse_args()
     
     # Parse methods and traits
-    methods = [m.strip().upper() for m in args.methods.split(',')]
+    raw_methods = [m.strip() for m in args.methods.split(',')]
+    methods: List[str] = []
+    for method in raw_methods:
+        if not method:
+            continue
+        key = method.upper().replace('-', '_')
+        if key == 'FARMCPURESAMPLING':
+            key = 'FARMCPU_RESAMPLING'
+        methods.append(key)
     trait_columns = [t.strip() for t in args.traits.split(',')] if args.traits else None
     
     # Parse true QTNs
@@ -559,7 +704,7 @@ def main():
             print(f"Parsed {len(true_qtns)} true QTNs from command line")
     
     # Validate methods
-    valid_methods = ['GLM', 'MLM', 'FARMCPU']
+    valid_methods = ['GLM', 'MLM', 'FARMCPU', 'FARMCPU_RESAMPLING']
     for method in methods:
         if method not in valid_methods:
             raise ValueError(f"Invalid method: {method}. Valid methods: {valid_methods}")
@@ -583,6 +728,15 @@ def main():
             loader_kwargs.update({
                 'include_indels': (not args.snps_only),
             })
+
+        resampling_params = {
+            'runs': args.farmcpu_resampling_runs,
+            'mask_proportion': args.farmcpu_resampling_mask,
+            'significance_threshold': args.farmcpu_resampling_significance,
+            'cluster_markers': args.farmcpu_resampling_cluster,
+            'ld_threshold': args.farmcpu_resampling_ld_threshold,
+            'random_seed': args.farmcpu_resampling_seed,
+        }
 
         # Step 1: Load and validate data
         print("Step 1: Loading and validating input data")
@@ -612,6 +766,12 @@ def main():
             n_pcs=args.n_pcs,
             calculate_kinship=('MLM' in methods)
         )
+
+        n_markers_total = matched_data['genotype_matrix'].n_markers
+        if n_markers_total <= 0:
+            raise ValueError("No markers available after matching; cannot compute significance threshold")
+        effective_tests = args.n_eff if (args.n_eff and args.n_eff > 0) else n_markers_total
+        base_significance = args.significance if args.significance is not None else args.alpha / max(effective_tests, 1)
         
         # Step 4: Determine traits to analyze
         phe_df = matched_data['phenotype_df']
@@ -661,7 +821,9 @@ def main():
                 population_structure,
                 trait_name=trait_name,
                 methods=methods,
-                max_iterations=args.max_iterations
+                max_iterations=args.max_iterations,
+                farmcpu_resampling_params=(resampling_params if 'FARMCPU_RESAMPLING' in methods else None),
+                default_significance=base_significance
             )
             if not gwas_results:
                 print(f"   ❌ No GWAS results for trait '{trait_name}' — skipping saving/plots")

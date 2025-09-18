@@ -12,6 +12,7 @@ from ..utils.data_types import Phenotype, GenotypeMatrix, GenotypeMap, KinshipMa
 from ..association.glm import MVP_GLM
 from ..association.mlm import MVP_MLM
 from ..association.farmcpu import MVP_FarmCPU
+from ..association.farmcpu_resampling import MVP_FarmCPUResampling
 from ..matrix.kinship import MVP_K_VanRaden
 from ..matrix.pca import MVP_PCA
 from ..visualization.manhattan import MVP_Report
@@ -177,6 +178,28 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
         if kinship_matrix is not None:
             analysis_results['data']['kinship'] = kinship_matrix
         
+        # Extract FarmCPU resampling parameters to avoid propagating them to other methods
+        resampling_significance_kwarg = kwargs.pop('farmcpu_resampling_significance_threshold', None)
+        resampling_params = {
+            'runs': kwargs.pop('farmcpu_resampling_runs', 100),
+            'mask_proportion': kwargs.pop('farmcpu_resampling_mask_proportion', 0.1),
+            'significance_threshold': threshold,
+            'cluster_markers': kwargs.pop('farmcpu_resampling_cluster', False),
+            'ld_threshold': kwargs.pop('farmcpu_resampling_ld_threshold', 0.7),
+            'random_seed': kwargs.pop('farmcpu_resampling_random_seed', None),
+        }
+        resampling_override_used = resampling_significance_kwarg is not None
+        if resampling_override_used:
+            resampling_params['significance_threshold'] = resampling_significance_kwarg
+
+        farmcpu_extra_keys = [
+            'maxLoop', 'p_threshold', 'QTN_threshold', 'bin_size',
+            'method_bin', 'reward_method'
+        ]
+        farmcpu_extra_kwargs = {
+            key: kwargs[key] for key in farmcpu_extra_keys if key in kwargs
+        }
+
         # Phase 3: Association Analysis
         if verbose:
             print(f"\n[Phase 3] Running association analysis...")
@@ -251,7 +274,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
         if "FarmCPU" in method:
             if verbose:
                 print("\nRunning FarmCPU analysis...")
-            
+
             farmcpu_start = time.time()
             farmcpu_results = MVP_FarmCPU(
                 phe=phenotype_array,
@@ -261,7 +284,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 maxLine=maxLine,
                 cpu=ncpus,
                 verbose=verbose,
-                **kwargs
+                **farmcpu_extra_kwargs
             )
             farmcpu_time = time.time() - farmcpu_start
             
@@ -277,6 +300,51 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
             if verbose:
                 print(f"FarmCPU analysis complete ({farmcpu_time:.2f}s)")
                 print(f"  Significant markers (p < {threshold}): {n_sig}")
+
+        # Run FarmCPU Resampling
+        if "FarmCPUResampling" in method:
+            if verbose:
+                print("\nRunning FarmCPU resampling analysis...")
+
+            resampling_start = time.time()
+            resampling_significance = resampling_params.get('significance_threshold')
+            if resampling_significance is None:
+                resampling_significance = threshold
+                resampling_params['significance_threshold'] = resampling_significance
+            resampling_p_threshold = farmcpu_extra_kwargs.get('p_threshold', 0.05)
+            resampling_qtn_threshold = max(resampling_p_threshold, farmcpu_extra_kwargs.get('QTN_threshold', 0.01))
+            if resampling_significance > resampling_qtn_threshold and resampling_override_used:
+                warnings.warn(
+                    "FarmCPU resampling significance threshold "
+                    f"({resampling_significance:.3g}) is less stringent than the "
+                    f"QTN threshold ({resampling_qtn_threshold:.3g}); markers with "
+                    "p-values above the QTN threshold cannot act as pseudo QTNs in "
+                    "later FarmCPU iterations."
+                )
+            resampling_results = MVP_FarmCPUResampling(
+                phe=phenotype_array,
+                geno=genotype,
+                map_data=genetic_map,
+                CV=CV,
+                maxLine=maxLine,
+                cpu=ncpus,
+                trait_name=phenotype.data.columns[1] if hasattr(phenotype, 'data') else 'Trait',
+                verbose=verbose,
+                **resampling_params,
+                **farmcpu_extra_kwargs,
+            )
+            resampling_time = time.time() - resampling_start
+
+            analysis_results['results']['FarmCPUResampling'] = resampling_results
+            analysis_results['summary']['methods_run'].append('FarmCPUResampling')
+            analysis_results['summary']['runtime']['FarmCPUResampling'] = resampling_time
+
+            n_identified = len(resampling_results.entries)
+            analysis_results['summary']['significant_markers']['FarmCPUResampling'] = n_identified
+
+            if verbose:
+                print(f"FarmCPU resampling complete ({resampling_time:.2f}s)")
+                print(f"  Markers/clusters with RMIP > 0: {n_identified}")
         
         # Phase 4: Visualization and Reporting
         if verbose:
@@ -402,7 +470,7 @@ def save_results_to_files(results: Dict[str, Any],
         for method_name, result_obj in results['results'].items():
             result_file = f"{output_prefix}_{method_name}_results.csv"
             result_df = result_obj.to_dataframe()
-            
+
             # Add map information if available
             if 'map' in results['data']:
                 map_obj = results['data']['map']
@@ -412,12 +480,15 @@ def save_results_to_files(results: Dict[str, Any],
                     map_df = map_obj.data
                 else:
                     map_df = None
-                
+
                 if map_df is not None:
-                    result_df['SNP'] = map_df['SNP'].values[:len(result_df)]
-                    result_df['CHROM'] = map_df['CHROM'].values[:len(result_df)]
-                    result_df['POS'] = map_df['POS'].values[:len(result_df)]
-            
+                    if 'SNP' not in result_df.columns:
+                        result_df['SNP'] = map_df['SNP'].values[:len(result_df)]
+                    if 'Chr' not in result_df.columns and 'CHROM' in map_df.columns:
+                        result_df['Chr'] = map_df['CHROM'].values[:len(result_df)]
+                    if 'Pos' not in result_df.columns and 'POS' in map_df.columns:
+                        result_df['Pos'] = map_df['POS'].values[:len(result_df)]
+
             result_df.to_csv(result_file, index=False)
             saved_files.append(result_file)
         
