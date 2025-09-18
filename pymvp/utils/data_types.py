@@ -224,33 +224,84 @@ class GenotypeMatrix:
                     major_allele_idx = np.argmax(counts)
                     self._major_alleles[marker_idx] = unique_vals[major_allele_idx]
     
-    def get_marker_imputed(self, marker_idx: int) -> np.ndarray:
-        """Get genotypes for a specific marker with missing data imputed using pre-computed major allele
-        
-        This is much faster than computing major allele on-the-fly.
-        """
-        marker = self._data[:, marker_idx].copy()
-        
-        if self._major_alleles is not None:
-            # Use pre-computed major allele
-            missing_mask = (marker == -9) | np.isnan(marker)
-            if np.sum(missing_mask) > 0:
-                marker[missing_mask] = self._major_alleles[marker_idx]
-        
+    def get_marker_imputed(self, marker_idx: int, *, fill_value: Optional[float] = None) -> np.ndarray:
+        """Get genotypes for a specific marker with optional missing-data imputation."""
+        marker = self._data[:, marker_idx].copy().astype(np.float64)
+
+        missing_mask = (marker == -9) | np.isnan(marker)
+        if not missing_mask.any():
+            return marker
+
+        if fill_value is not None:
+            marker[missing_mask] = float(fill_value)
+        elif self._major_alleles is not None:
+            marker[missing_mask] = self._major_alleles[marker_idx]
+        else:
+            marker[missing_mask] = 0.0
+
         return marker
-    
-    def get_batch_imputed(self, marker_start: int, marker_end: int) -> np.ndarray:
-        """Get batch of markers with missing data imputed using pre-computed major alleles"""
+
+    def get_batch_imputed(self,
+                          marker_start: int,
+                          marker_end: int,
+                          *,
+                          fill_value: Optional[float] = None) -> np.ndarray:
+        """Get batch of markers with missing data imputed.
+
+        Args:
+            marker_start: Inclusive start index
+            marker_end: Exclusive end index
+            fill_value: Optional constant to impute missing genotypes.
+                If None, the pre-computed major allele is used (rMVP default).
+        """
         batch = self._data[:, marker_start:marker_end].copy().astype(np.float64)
-        
-        if self._major_alleles is not None:
-            # Vectorized imputation using pre-computed major alleles
-            for i, marker_idx in enumerate(range(marker_start, marker_end)):
-                marker = batch[:, i]
-                missing_mask = (marker == -9) | np.isnan(marker)
-                if np.sum(missing_mask) > 0:
-                    batch[missing_mask, i] = self._major_alleles[marker_idx]
-        
+
+        if batch.size == 0:
+            return batch
+
+        missing_mask = (batch == -9) | np.isnan(batch)
+        if not missing_mask.any():
+            return batch
+
+        if fill_value is not None:
+            batch[missing_mask] = float(fill_value)
+        elif self._major_alleles is not None:
+            fill_vals = self._major_alleles[marker_start:marker_end].astype(np.float64)
+            batch[missing_mask] = np.broadcast_to(fill_vals, batch.shape)[missing_mask]
+        else:
+            batch[missing_mask] = 0.0
+
+        return batch
+
+    def get_columns_imputed(self,
+                             indices: Union[np.ndarray, list],
+                             *,
+                             fill_value: Optional[float] = None) -> np.ndarray:
+        """Get arbitrary marker columns with missing data imputed.
+
+        Optimized for fetching non-contiguous SNPs (e.g., pseudo-QTNs) in one call.
+        Returns a float64 array of shape (n_individuals, len(indices)).
+        """
+        if isinstance(indices, list):
+            indices = np.array(indices, dtype=int)
+        # Slice and copy to ensure we don't mutate underlying storage
+        batch = self._data[:, indices].copy().astype(np.float64)
+
+        if batch.size == 0:
+            return batch
+
+        missing_mask = (batch == -9) | np.isnan(batch)
+        if not missing_mask.any():
+            return batch
+
+        if fill_value is not None:
+            batch[missing_mask] = float(fill_value)
+        elif self._major_alleles is not None:
+            fill_vals = self._major_alleles[indices].astype(np.float64)
+            batch[missing_mask] = np.broadcast_to(fill_vals, batch.shape)[missing_mask]
+        else:
+            batch[missing_mask] = 0.0
+
         return batch
     
     @property

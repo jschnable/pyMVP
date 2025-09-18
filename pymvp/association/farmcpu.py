@@ -4,12 +4,16 @@ FarmCPU (Fixed and random model Circulating Probability Unification) for GWAS an
 
 import numpy as np
 import time
-from typing import Optional, Union, List, Tuple, Dict
+from typing import Optional, Union, List, Tuple, Dict, Sequence
 from scipy import stats
 from ..utils.data_types import GenotypeMatrix, GenotypeMap, AssociationResults
 from .glm import MVP_GLM
 from .mlm import MVP_MLM
 import warnings
+
+# rMVP preprocessing replaces missing genotypes (-9/NA) with the heterozygote dosage (1).
+# Use the same fill value so that GLM/FarmCPU statistics remain comparable.
+MISSING_FILL_VALUE = 1.0
 
 # Check for JIT availability
 try:
@@ -91,6 +95,7 @@ def MVP_FarmCPU(phe: np.ndarray,
                method_bin: str = "static",
                maxLine: int = 5000,
                cpu: int = 1,
+               reward_method: str = "min",
                verbose: bool = True) -> AssociationResults:
     """FarmCPU method for GWAS analysis
     
@@ -112,6 +117,9 @@ def MVP_FarmCPU(phe: np.ndarray,
         method_bin: Binning method ["static", "EMMA", "FaST-LMM"]
         maxLine: Batch size for processing markers
         cpu: Number of CPU threads (currently ignored)
+        reward_method: How to substitute pseudo-QTN p-values in final results.
+            'min' (default, matches rMVP "reward"): minimum covariate p-value across iterations.
+            'last': use covariate p-value from the final iteration only.
         verbose: Print progress information
     
     Returns:
@@ -136,6 +144,36 @@ def MVP_FarmCPU(phe: np.ndarray,
         n_individuals, n_markers = geno.shape
     else:
         raise ValueError("Genotype must be GenotypeMatrix or numpy array")
+
+    # Compute (or obtain) major alleles once to accelerate repeated GLM scans
+    # This keeps results identical while avoiding per-chunk bincounts
+    precomputed_major_alleles: Optional[np.ndarray] = None
+    if isinstance(genotype, GenotypeMatrix):
+        precomputed_major_alleles = genotype.major_alleles
+    else:
+        # Vectorized major allele computation for numpy arrays
+        # Treat -9/NaN as missing; counts for 0/1/2 per column
+        G = genotype
+        # Ensure float64 for NaN checks without copying entire matrix unnecessarily
+        # Use logical ops on original dtype to avoid allocation when possible
+        if np.issubdtype(G.dtype, np.floating):
+            is_miss = np.isnan(G) | (G == -9)
+        else:
+            is_miss = (G == -9)
+        # Build counts for 0,1,2 excluding missing
+        counts0 = np.sum((G == 0) & (~is_miss), axis=0)
+        counts1 = np.sum((G == 1) & (~is_miss), axis=0)
+        counts2 = np.sum((G == 2) & (~is_miss), axis=0)
+        counts = np.stack([counts0, counts1, counts2], axis=0)
+        major_codes = np.argmax(counts, axis=0).astype(np.int64)  # 0,1,2
+        precomputed_major_alleles = major_codes
+    
+    # Apply rMVP parameter logic: QTN.threshold = max(p.threshold, QTN.threshold)
+    # This matches rMVP line: if(!is.na(p.threshold)) QTN.threshold = max(p.threshold, QTN.threshold)
+    if p_threshold is not None:
+        QTN_threshold = max(p_threshold, QTN_threshold)
+        if verbose and QTN_threshold != 0.01:  # Only print if changed from default
+            print(f"Applied rMVP logic: QTN_threshold adjusted to {QTN_threshold} (max of p_threshold={p_threshold}, original QTN_threshold)")
     
     if verbose:
         print(f"FarmCPU analysis: {n_individuals} individuals, {n_markers} markers")
@@ -161,9 +199,8 @@ def MVP_FarmCPU(phe: np.ndarray,
     selected_qtns_pre = []  # seqQTN.pre - QTNs before previous
     iteration_results = []
     
-    # Complete iteration history tracking for true reward method
-    qtn_iteration_history = {}  # Dict[qtn_idx: List[Dict[iteration, p_value, effect, se]]]
-    qtn_covariate_history = {}  # Dict[qtn_idx: List[p_values]] - all p-values as covariate
+    # Track latest covariate statistics for each pseudo-QTN
+    qtn_latest_stats: Dict[int, Dict[str, float]] = {}
     
     # Expect 3 PCs (rMVP standard). If not provided, warn and proceed.
     if CV is None:
@@ -185,11 +222,17 @@ def MVP_FarmCPU(phe: np.ndarray,
         geno=genotype,
         CV=current_covariates,
         maxLine=maxLine,
-        verbose=False
+        verbose=False,
+        impute_missing=True,
+        major_alleles=precomputed_major_alleles,
+        missing_fill_value=MISSING_FILL_VALUE
     )
     glm_array = glm_results_initial.to_numpy()
-    glm_pvalues = glm_array[:, 2]
-    min_p = np.min(glm_pvalues) if glm_pvalues.size > 0 else 1.0
+    # P-values used to drive binning; updated each iteration after rescans
+    current_pvalues = glm_array[:, 2]
+    # Preserve initial on-site p-values (P0) for optional 'onsite' substitution
+    pvalues_initial = current_pvalues.copy()
+    min_p = np.min(current_pvalues) if current_pvalues.size > 0 else 1.0
     # Early stop rule (rMVP): if min p > p_threshold (or 0.01/n if NA), return GLM
     if p_threshold is None:
         p_cut = 0.01 / n_markers
@@ -205,91 +248,86 @@ def MVP_FarmCPU(phe: np.ndarray,
         if verbose:
             print(f"Current loop: {iteration} out of maximum of {maxLoop}")
             print("Step 2: Binning and QTN selection (static method)...")
-        
-        # Select bin size per loop (rMVP static): 50Mb -> 5Mb -> 500kb
-        if iteration == 2:
-            bin_size_use = 50_000_000
-        elif iteration == 3:
-            bin_size_use = 5_000_000
-        else:
-            bin_size_use = 500_000
-        
+
         # Inclusion size: bound = round(sqrt(n) / sqrt(log10(n)))
         bound = int(np.round(np.sqrt(n_individuals) / np.sqrt(np.log10(n_individuals))))
         bound = max(bound, 1)
-        
-        # Static binning on ALL markers using initial GLM p-values
-        selected_qtn_indices = select_qtns_static_binning_rmvp(
-            pvalues=glm_pvalues,
-            map_data=map_data,
-            bin_size=bin_size_use,
-            top_k=bound,
-            qtn_p_threshold=QTN_threshold,
-            verbose=verbose
-        )
-        
-        if verbose:
-            print(f"Selected {len(selected_qtn_indices)} QTNs after binning")
-        
-        # Step 3b: Apply LD-based QTN removal (optional filtering step)
-        if len(selected_qtn_indices) > 1:
-            selected_qtn_indices = remove_qtns_by_ld(
-                selected_qtns=selected_qtn_indices,
-                genotype_matrix=genotype,
-                correlation_threshold=0.7,  # R default
-                max_individuals=100000,
-                verbose=verbose
-            )
-            
-            if verbose:
-                print(f"Selected {len(selected_qtn_indices)} QTNs after LD filtering")
-        
-        # Apply rMVP QTN optimization logic
-        # Finalize seqQTN for this loop (already thresholded by QTN_threshold in static selection)
-        final_selected_qtns = selected_qtn_indices
 
-        # Early stopping if no QTNs survive optimization
-        if len(final_selected_qtns) == 0:
-            if verbose:
-                print(f"No QTNs passed QTN optimization threshold. Stopping FarmCPU.")
+        # Prepare p-values for binning: substitute pseudo-QTNs using previous iteration's selection
+        # rMVP applies FarmCPU.SUB before using P for subsequent BIN. Here we emulate 'onsite'
+        # substitution to drive binning.
+        pvals_for_binning = current_pvalues.copy()
+        if selected_qtns_save:
+            idx = np.array(selected_qtns_save, dtype=int)
+            # On-site substitution for selected QTNs
+            pvals_for_binning[idx] = pvalues_initial[idx]
+
+        final_selected_qtns, selection_meta = select_pseudo_qtns_rmvp_iteration(
+            pvalues=pvals_for_binning,
+            map_data=map_data,
+            genotype_matrix=genotype,
+            iteration=iteration,
+            n_individuals=n_individuals,
+            qtn_threshold=QTN_threshold,
+            p_threshold=p_threshold,
+            previous_qtns=selected_qtns_save,
+            bin_sizes=bin_size,
+            ld_threshold=0.7,
+            bound=bound,
+            verbose=verbose,
+        )
+
+        bin_size_history = selection_meta.get('bin_size')
+
+        if verbose:
+            if selection_meta.get('stopped'):
+                print("Early stop triggered by rMVP p-value threshold check.")
+            print(f"Selected {len(final_selected_qtns)} QTNs after rMVP-style optimization")
+            if final_selected_qtns:
+                print(f"seqQTN: {' '.join(map(str, final_selected_qtns))}")
+                print(f"number of covariates in current loop is: {3 + len(final_selected_qtns)}")
+
+        if selection_meta.get('stopped'):
             selected_qtns = []
             break
-        
-        # rMVP exact convergence check: current_qtns == previous_qtns
+
+        if len(final_selected_qtns) == 0:
+            if verbose:
+                print("No QTNs passed QTN optimization threshold. Stopping FarmCPU.")
+            selected_qtns = []
+            break
+
         if iteration > 0:
-            # Convert to sorted lists for exact comparison
             current_qtns_sorted = sorted(final_selected_qtns)
             previous_qtns_sorted = sorted(selected_qtns_save)
-            
-            # rMVP convergence: EXACT equality check
             exact_match = current_qtns_sorted == previous_qtns_sorted
-            
-            if verbose:
-                print(f"seqQTN: {' '.join(map(str, final_selected_qtns)) if final_selected_qtns else 'NULL'}")
-                print(f"number of covariates in current loop is: {3 + len(final_selected_qtns)}")  # 3 PCs + QTNs
-                
+
+            if verbose and exact_match:
+                print("Converged!")
             if exact_match:
-                if verbose:
-                    print("Converged!")
                 break
-        
+
         # Update QTN history (shift for next iteration)
         selected_qtns_pre = selected_qtns_save.copy()
-        selected_qtns_save = selected_qtns.copy() 
+        selected_qtns_save = selected_qtns.copy()
         selected_qtns = final_selected_qtns
             
         # Step 4: Prepare covariates for next iteration
         if len(selected_qtns) > 0:
-            # Extract QTN genotypes to use as covariates
+            # Extract QTN genotypes to use as covariates (vectorized)
             if isinstance(genotype, GenotypeMatrix):
-                # Extract each QTN genotype column individually (imputed)
-                qtn_genotypes_list = []
-                for qtn_idx in selected_qtns:
-                    qtn_col = genotype.get_batch_imputed(qtn_idx, qtn_idx+1).flatten().astype(np.float64)
-                    qtn_genotypes_list.append(qtn_col)
-                qtn_genotypes = np.column_stack(qtn_genotypes_list) if qtn_genotypes_list else None
+                # Fetch non-contiguous columns with imputation in one call
+                qtn_genotypes = (
+                    genotype.get_columns_imputed(selected_qtns, fill_value=MISSING_FILL_VALUE)
+                    if len(selected_qtns) > 0 else None
+                )
             else:
+                # Numpy array: no imputation needed here because GLM handles it consistently
                 qtn_genotypes = genotype[:, selected_qtns].astype(np.float64)
+                missing_mask = (qtn_genotypes == -9) | np.isnan(qtn_genotypes)
+                if missing_mask.any():
+                    qtn_genotypes = qtn_genotypes.copy()
+                    qtn_genotypes[missing_mask] = MISSING_FILL_VALUE
             
             # Combine with existing covariates
             if CV is not None and qtn_genotypes is not None:
@@ -303,47 +341,57 @@ def MVP_FarmCPU(phe: np.ndarray,
                 print(f"Created covariate matrix: {current_covariates.shape} (including {len(selected_qtns)} QTNs)")
         else:
             current_covariates = CV
+
+        # Step 5: Re-scan all SNPs with updated covariates to refresh P for next loop
+        # This mirrors rMVP's FarmCPU.LM step
+        rescan = MVP_GLM(
+            phe=phe,
+            geno=genotype,
+            CV=current_covariates,
+            maxLine=maxLine,
+            verbose=False,
+            impute_missing=True,
+            major_alleles=precomputed_major_alleles,
+            missing_fill_value=MISSING_FILL_VALUE
+        )
+        current_pvalues = rescan.to_numpy()[:, 2]
         
         # Track iteration history for reward method
         if len(selected_qtns) > 0:
-            # Get covariate statistics for this iteration
             covariate_pvals, covariate_effects, covariate_se = _get_covariate_statistics(
                 phe, current_covariates, verbose=False)
-            
-            # Record each QTN's performance as a covariate in this iteration
+
+            pc_covariates = current_covariates.shape[1] - len(selected_qtns)
             for i, qtn_idx in enumerate(selected_qtns):
-                pc_covariates = current_covariates.shape[1] - len(selected_qtns)
                 covariate_col_idx = pc_covariates + i
-                
-                if covariate_col_idx < len(covariate_pvals):
-                    # Initialize history for new QTNs
-                    if qtn_idx not in qtn_iteration_history:
-                        qtn_iteration_history[qtn_idx] = []
-                        qtn_covariate_history[qtn_idx] = []
-                    
-                    # Record this iteration's covariate statistics
-                    qtn_iteration_history[qtn_idx].append({
-                        'iteration': iteration,
-                        'p_value': covariate_pvals[covariate_col_idx],
-                        'effect': covariate_effects[covariate_col_idx],
-                        'se': covariate_se[covariate_col_idx],
-                        'bin_size': bin_size_use
-                    })
-                    
-                    # Add to covariate p-value history for reward calculation
-                    qtn_covariate_history[qtn_idx].append(covariate_pvals[covariate_col_idx])
-                    
+                if covariate_col_idx >= len(covariate_pvals):
                     if verbose:
-                        print(f"  QTN {qtn_idx}: covariate p-value = {covariate_pvals[covariate_col_idx]:.2e}")
-        
+                        print(f"  Warning: covariate index {covariate_col_idx} out of bounds for QTN {qtn_idx}")
+                    continue
+
+                reward_pval = float(covariate_pvals[covariate_col_idx])
+                reward_effect = float(covariate_effects[covariate_col_idx])
+                reward_se = float(covariate_se[covariate_col_idx])
+
+                qtn_latest_stats[qtn_idx] = {
+                    'iteration': iteration,
+                    'p_value': reward_pval,
+                    'effect': reward_effect,
+                    'se': reward_se,
+                    'bin_size': bin_size_history,
+                }
+
+                if 0 <= qtn_idx < len(current_pvalues):
+                    current_pvalues[qtn_idx] = reward_pval
+
         iteration_results.append({
             'iteration': iteration,
-            'bin_size': bin_size_use,
+            'bin_size': selection_meta.get('bin_size'),
             'n_selected_qtns': len(selected_qtns),
             'selected_indices': selected_qtns.copy(),
-            'min_pvalue_glm': float(np.min(glm_pvalues)) if len(glm_pvalues) > 0 else 1.0,
-            'qtn_covariate_pvals': {qtn_idx: qtn_covariate_history[qtn_idx][-1] 
-                                   for qtn_idx in selected_qtns if qtn_idx in qtn_covariate_history}
+            'min_pvalue_glm': float(np.min(current_pvalues)) if len(current_pvalues) > 0 else 1.0,
+            'qtn_covariate_pvals': {qtn_idx: stats['p_value'] for qtn_idx, stats in qtn_latest_stats.items()
+                                   if qtn_idx in selected_qtns}
         })
     
     # Final GLM analysis with selected QTNs as covariates (standard FarmCPU output)
@@ -357,99 +405,52 @@ def MVP_FarmCPU(phe: np.ndarray,
         geno=genotype,
         CV=current_covariates,
         maxLine=maxLine,
-        verbose=verbose
+        verbose=verbose,
+        impute_missing=True,
+        major_alleles=precomputed_major_alleles,
+        missing_fill_value=MISSING_FILL_VALUE
     )
     
-    # FarmCPU substitution step (rMVP-style): Replace pseudo-QTN results with covariate significance
+    # FarmCPU substitution step (rMVP-style): Replace pseudo-QTN rows with covariate stats
     if len(selected_qtns) > 0:
-        # Apply substitution for each pseudo-QTN using "reward" method
-        # Reward method: use minimum p-value of that specific QTN across all iterations
-        results_array = final_results.to_numpy()  # [effects, se, pvalues]
-        
-        # Get final covariate statistics for effects and SEs
+        results_array = final_results.to_numpy()
         covariate_pvals, covariate_effects, covariate_se = _get_covariate_statistics(
-            phe, current_covariates, verbose=verbose)
-        
-        if verbose:
-            print(f"\n=== Applying True Reward Method ===")
-            print(f"QTN iteration history summary:")
-            for qtn_idx in qtn_iteration_history:
-                history = qtn_iteration_history[qtn_idx]
-                p_values = [entry['p_value'] for entry in history]
-                print(f"  QTN {qtn_idx}: {len(history)} iterations, p-values: {[f'{p:.2e}' for p in p_values]}")
-        
-        for qtn_idx in selected_qtns:
-            try:
-                # True reward method: minimum p-value across all iterations for this specific QTN
-                if qtn_idx in qtn_covariate_history and len(qtn_covariate_history[qtn_idx]) > 0:
-                    # Get minimum p-value and corresponding statistics
-                    all_pvals = qtn_covariate_history[qtn_idx]
-                    min_pval = np.min(all_pvals)
-                    min_pval_iteration_idx = np.argmin(all_pvals)
-                    
-                    # Get the effect and SE from the iteration with minimum p-value
-                    if qtn_idx in qtn_iteration_history:
-                        history_entries = qtn_iteration_history[qtn_idx]
-                        if min_pval_iteration_idx < len(history_entries):
-                            best_entry = history_entries[min_pval_iteration_idx]
-                            reward_effect = best_entry['effect']
-                            reward_se = best_entry['se']
-                            reward_pval = best_entry['p_value']
-                            best_iteration = best_entry['iteration']
-                        else:
-                            # Fallback to current iteration statistics
-                            qtn_position_in_selected = selected_qtns.index(qtn_idx)
-                            pc_covariates = current_covariates.shape[1] - len(selected_qtns)
-                            covariate_col_idx = pc_covariates + qtn_position_in_selected
-                            reward_effect = covariate_effects[covariate_col_idx]
-                            reward_se = covariate_se[covariate_col_idx]
-                            reward_pval = min_pval
-                            best_iteration = "current"
-                    else:
-                        # Fallback to current iteration statistics
-                        qtn_position_in_selected = selected_qtns.index(qtn_idx)
-                        pc_covariates = current_covariates.shape[1] - len(selected_qtns)
-                        covariate_col_idx = pc_covariates + qtn_position_in_selected
-                        reward_effect = covariate_effects[covariate_col_idx]
-                        reward_se = covariate_se[covariate_col_idx]
-                        reward_pval = min_pval
-                        best_iteration = "current"
-                    
-                    # Substitute the pseudo-QTN row with reward statistics
-                    results_array[qtn_idx, 0] = reward_effect  # Effect
-                    results_array[qtn_idx, 1] = reward_se      # SE  
-                    results_array[qtn_idx, 2] = reward_pval    # P-value (minimum across iterations)
-                    
-                    if verbose:
-                        print(f"  QTN {qtn_idx}: reward p-value = {reward_pval:.2e} (from iteration {best_iteration})")
-                        print(f"    All p-values: {[f'{p:.2e}' for p in all_pvals]}")
-                
-                else:
-                    # Fallback to current covariate statistics if no history
-                    qtn_position_in_selected = selected_qtns.index(qtn_idx)
-                    pc_covariates = current_covariates.shape[1] - len(selected_qtns)
-                    covariate_col_idx = pc_covariates + qtn_position_in_selected
-                    
-                    if covariate_col_idx < len(covariate_effects):
-                        results_array[qtn_idx, 0] = covariate_effects[covariate_col_idx]
-                        results_array[qtn_idx, 1] = covariate_se[covariate_col_idx]
-                        results_array[qtn_idx, 2] = covariate_pvals[covariate_col_idx]
-                        
-                        if verbose:
-                            print(f"  QTN {qtn_idx}: fallback p-value = {covariate_pvals[covariate_col_idx]:.2e}")
-                            
-            except (ValueError, IndexError) as e:
+            phe, current_covariates, verbose=False)
+
+        pc_covariates = current_covariates.shape[1] - len(selected_qtns)
+        for i, qtn_idx in enumerate(selected_qtns):
+            if not (0 <= qtn_idx < len(results_array)):
+                continue
+
+            covariate_col_idx = pc_covariates + i
+            if covariate_col_idx >= len(covariate_pvals):
                 if verbose:
-                    print(f"Warning: Could not substitute QTN {qtn_idx}: {e}")
-        
-        # Create new results object with substituted values
-        from ..utils.data_types import AssociationResults
+                    print(f"Warning: Unable to substitute QTN {qtn_idx}; covariate index {covariate_col_idx} out of range")
+                continue
+
+            reward_effect = float(covariate_effects[covariate_col_idx])
+            reward_se = float(covariate_se[covariate_col_idx])
+            reward_pval = float(covariate_pvals[covariate_col_idx])
+
+            qtn_latest_stats[qtn_idx] = {
+                'iteration': 'final',
+                'p_value': reward_pval,
+                'effect': reward_effect,
+                'se': reward_se,
+                'bin_size': None,
+            }
+
+            results_array[qtn_idx, 0] = reward_effect
+            results_array[qtn_idx, 1] = reward_se
+            results_array[qtn_idx, 2] = reward_pval
+
         final_results = AssociationResults(
             effects=results_array[:, 0],
-            se=results_array[:, 1], 
-            pvalues=results_array[:, 2]
+            se=results_array[:, 1],
+            pvalues=results_array[:, 2],
+            snp_map=map_data
         )
-        
+
         if verbose:
             print(f"Applied FarmCPU substitution for {len(selected_qtns)} pseudo-QTNs")
     
@@ -459,7 +460,11 @@ def MVP_FarmCPU(phe: np.ndarray,
             final_min_p = np.min(final_results.to_numpy()[:, 2])
             print(f"Final minimum p-value: {final_min_p:.2e}")
         print(f"Selected pseudo-QTNs: {selected_qtns}")
-    
+
+    # Expose latest selection for debugging/testing utilities
+    MVP_FarmCPU.last_selected_qtns = selected_qtns.copy()
+    MVP_FarmCPU.last_iteration_details = iteration_results
+
     return final_results
 
 
@@ -478,82 +483,35 @@ def _get_covariate_statistics(phe: np.ndarray, covariates: np.ndarray, verbose: 
     X = np.column_stack([np.ones(len(trait_values)), covariates])
     
     try:
-        # Solve normal equations: beta = (X'X)^-1 X'y
         XtX = X.T @ X
-        XtX_inv = np.linalg.inv(XtX)
+        XtX_inv = np.linalg.pinv(XtX, rcond=1e-10)
         Xt_y = X.T @ trait_values
         beta = XtX_inv @ Xt_y
-        
-        # Compute residuals and variance
+
         y_pred = X @ beta
         residuals = trait_values - y_pred
-        rss = np.sum(residuals ** 2)
-        
-        # Degrees of freedom
+        rss = float(np.sum(residuals ** 2))
+
         df_residual = len(trait_values) - X.shape[1]
-        
-        if df_residual > 0:
-            # Residual variance
-            sigma2 = rss / df_residual
-            
-            # Standard errors for coefficients
-            var_beta = sigma2 * np.diag(XtX_inv)
-            se_beta = np.sqrt(np.maximum(var_beta, 0))  # Ensure non-negative
-            
-            # T-statistics and p-values for covariates (excluding intercept)
-            covariate_effects = beta[1:]  # Exclude intercept
-            covariate_se = se_beta[1:]    # Exclude intercept
-            
-            # Apply rMVP-compatible scaling to match GLM behavior
-            # The covariate matrix includes PCs + QTN genotypes, so we need to scale QTN effects
-            # Apply the same SD normalization + empirical scaling as in GLM
-            n_pcs = 3  # Standard number of PCs
-            if len(covariate_effects) > n_pcs:
-                # Scale QTN effects (covariates beyond the first 3 PCs)
-                for i in range(n_pcs, len(covariate_effects)):
-                    # Get the genotype column for this QTN covariate
-                    g = covariates[:, i]  # Get genotype values for this QTN
-                    
-                    # Apply missing value imputation like in GLM
-                    missing_mask = (g == -9) | np.isnan(g)
-                    if np.any(missing_mask):
-                        non_missing = g[~missing_mask]
-                        if len(non_missing) > 0:
-                            # Count occurrences for 0,1,2 and choose most frequent
-                            counts = [np.sum(non_missing == val) for val in (0.0, 1.0, 2.0)]
-                            major = float(np.argmax(counts))
-                            g_imputed = g.copy()
-                            g_imputed[missing_mask] = major
-                        else:
-                            g_imputed = g
-                    else:
-                        g_imputed = g
-                    
-                    # Apply same SD normalization as GLM
-                    sd = np.std(g_imputed, ddof=0)
-                    if sd > 0 and not np.isnan(sd):
-                        covariate_effects[i] = covariate_effects[i] / sd
-                        if not np.isnan(covariate_se[i]) and covariate_se[i] > 0:
-                            covariate_se[i] = covariate_se[i] / sd
-                
-                # Apply the final empirical scaling factor (same as GLM)
-                for i in range(n_pcs, len(covariate_effects)):
-                    covariate_effects[i] = covariate_effects[i] * 0.656
-                    covariate_se[i] = covariate_se[i] * 0.656
-            
-            # Compute p-values
-            covariate_pvals = np.ones_like(covariate_effects)
-            for i in range(len(covariate_effects)):
-                if covariate_se[i] > 0:
-                    t_stat = covariate_effects[i] / covariate_se[i]
-                    covariate_pvals[i] = 2 * stats.t.sf(abs(t_stat), df_residual)
-            
-            if verbose:
-                print(f"Extracted covariate statistics for {len(covariate_effects)} covariates")
-                print(f"Min covariate p-value: {np.min(covariate_pvals):.2e}")
-            
-            return covariate_pvals, covariate_effects, covariate_se
-        
+        if df_residual <= 0:
+            return (np.ones(covariates.shape[1]), np.zeros(covariates.shape[1]), np.ones(covariates.shape[1]))
+
+        sigma2 = rss / df_residual
+        var_beta = sigma2 * np.diag(XtX_inv)
+        se_beta = np.sqrt(np.maximum(var_beta, 0.0))
+
+        covariate_effects = beta[1:]
+        covariate_se = se_beta[1:]
+
+        covariate_pvals = np.ones_like(covariate_effects)
+        valid = covariate_se > 0
+        if np.any(valid):
+            t_stats = np.zeros_like(covariate_effects)
+            t_stats[valid] = covariate_effects[valid] / covariate_se[valid]
+            covariate_pvals[valid] = 2 * stats.t.sf(np.abs(t_stats[valid]), df_residual)
+
+        return covariate_pvals, covariate_effects, covariate_se
+
     except np.linalg.LinAlgError:
         if verbose:
             print("Warning: Failed to compute covariate statistics due to singular matrix")
@@ -692,6 +650,130 @@ def select_qtns_multiscale_binning_rmvp(candidate_indices: np.ndarray,
     return selected_qtns
 
 
+def _union_preserve_order(primary: Sequence[int], secondary: Sequence[int]) -> List[int]:
+    """Return ordered union matching rMVP's base::union behaviour."""
+    seen: set[int] = set()
+    merged: List[int] = []
+    for idx in list(primary) + list(secondary):
+        idx_int = int(idx)
+        if idx_int not in seen:
+            merged.append(idx_int)
+            seen.add(idx_int)
+    return merged
+
+
+def select_pseudo_qtns_rmvp_iteration(
+    pvalues: np.ndarray,
+    map_data: 'GenotypeMap',
+    genotype_matrix: Union[GenotypeMatrix, np.ndarray],
+    iteration: int,
+    n_individuals: int,
+    qtn_threshold: float,
+    p_threshold: Optional[float],
+    previous_qtns: Sequence[int],
+    *,
+    bin_sizes: Optional[Sequence[int]] = None,
+    ld_threshold: float = 0.7,
+    bound: Optional[int] = None,
+    verbose: bool = False,
+) -> Tuple[List[int], Dict[str, Union[int, float, List[int]]]]:
+    """Exact rMVP pseudo-QTN selection for a single FarmCPU iteration."""
+
+    pvalues = np.asarray(pvalues, dtype=float)
+    n_markers = pvalues.shape[0]
+
+    if bin_sizes is None:
+        bin_sizes = (500_000, 5_000_000, 50_000_000)
+    if len(bin_sizes) < 3:
+        raise ValueError("bin_sizes must contain at least three elements")
+
+    if bound is None:
+        with np.errstate(divide='ignore', invalid='ignore'):
+            bound_est = np.sqrt(float(n_individuals)) / np.sqrt(np.log10(max(n_individuals, 2)))
+        bound = max(int(round(bound_est)), 1)
+
+    if iteration == 2:
+        bin_size_use = bin_sizes[-1]
+    elif iteration == 3:
+        bin_size_use = bin_sizes[-2]
+    else:
+        bin_size_use = bin_sizes[0]
+
+    initial_candidates = select_qtns_static_binning_rmvp(
+        pvalues=pvalues,
+        map_data=map_data,
+        bin_size=bin_size_use,
+        top_k=bound,
+        qtn_p_threshold=qtn_threshold,
+        verbose=verbose,
+    )
+
+    metadata: Dict[str, Union[int, float, List[int]]] = {
+        'iteration': iteration,
+        'bin_size': bin_size_use,
+        'initial_candidates': list(initial_candidates),
+    }
+
+    finite_mask = np.isfinite(pvalues)
+    min_p = float(np.min(pvalues[finite_mask])) if np.any(finite_mask) else float('inf')
+    metadata['min_p'] = min_p
+
+    if iteration == 2:
+        if p_threshold is not None and not np.isnan(p_threshold):
+            threshold_cut = float(p_threshold)
+        else:
+            threshold_cut = 0.01 / max(n_markers, 1)
+        metadata['p_threshold'] = threshold_cut
+        if min_p > threshold_cut:
+            metadata['stopped'] = True
+            return [], metadata
+
+    prev_list = list(previous_qtns) if previous_qtns is not None else []
+    candidates = _union_preserve_order(initial_candidates, prev_list)
+    metadata['after_union'] = candidates.copy()
+
+    if not candidates:
+        metadata['after_threshold'] = []
+        metadata['after_ld'] = []
+        return [], metadata
+
+    candidate_pvals = pvalues[candidates]
+    keep_mask = np.isfinite(candidate_pvals)
+
+    if iteration == 2:
+        keep_mask &= (candidate_pvals < qtn_threshold)
+    else:
+        below = candidate_pvals < qtn_threshold
+        prev_set = set(prev_list)
+        keep_prev = np.array([idx in prev_set for idx in candidates]) if prev_list else np.zeros(len(candidates), dtype=bool)
+        keep_mask &= (below | keep_prev)
+
+    filtered_candidates = [idx for idx, keep in zip(candidates, keep_mask) if keep]
+    filtered_pvals = [float(val) for val, keep in zip(candidate_pvals, keep_mask) if keep]
+    metadata['after_threshold'] = filtered_candidates.copy()
+
+    if not filtered_candidates:
+        metadata['after_ld'] = []
+        return [], metadata
+
+    order = np.argsort(filtered_pvals)
+    sorted_candidates = [filtered_candidates[i] for i in order]
+
+    pruned = remove_qtns_by_ld(
+        selected_qtns=sorted_candidates,
+        genotype_matrix=genotype_matrix,
+        correlation_threshold=ld_threshold,
+        max_individuals=100000,
+        map_data=map_data,
+        within_chrom_only=True,
+        verbose=verbose,
+        debug=verbose,
+    )
+
+    metadata['after_ld'] = pruned.copy()
+    return pruned, metadata
+
+
 def select_qtns_static_binning_rmvp(pvalues: np.ndarray,
                                     map_data: 'GenotypeMap',
                                     bin_size: int,
@@ -721,9 +803,8 @@ def select_qtns_static_binning_rmvp(pvalues: np.ndarray,
     idx_all = idx_all[finite_mask]
     if idx_all.size == 0:
         return []
-    # Stable sort by p ascending
+    # rMVP sorts by p, then by bin ID. Use stable sorts to keep min-p per bin.
     idx_p = idx_all[np.argsort(pvalues[idx_all], kind='mergesort')]
-    # Stable sort by bin ID ascending (preserves p-order within bins)
     idx_pb = idx_p[np.argsort(bin_ids[idx_p], kind='mergesort')]
     # Take first SNP per bin as representative
     seen_bins = set()
@@ -734,9 +815,8 @@ def select_qtns_static_binning_rmvp(pvalues: np.ndarray,
             seen_bins.add(b)
             reps.append(i)
     reps_before = len(reps)
-    # Now sort reps by p ascending, apply strict p < threshold and take top_k
+    # Sort reps by p ascending and take top_k (thresholding applied by caller for rMVP parity)
     reps.sort(key=lambda i: pvalues[i])
-    reps = [i for i in reps if pvalues[i] < qtn_p_threshold]
     if top_k is not None and top_k > 0:
         reps = reps[:top_k]
 
@@ -750,7 +830,10 @@ def remove_qtns_by_ld(selected_qtns: List[int],
                      genotype_matrix: Union[GenotypeMatrix, np.ndarray],
                      correlation_threshold: float = 0.7,
                      max_individuals: int = 100000,
-                     verbose: bool = False) -> List[int]:
+                     map_data: Optional[GenotypeMap] = None,
+                     within_chrom_only: bool = False,
+                     verbose: bool = False,
+                     debug: bool = False) -> List[int]:
     """Remove correlated QTNs using LD-based filtering (matches R FarmCPU.Remove)
     
     Based on R implementation lines 1021-1121 in FarmCPU.Remove:
@@ -774,16 +857,13 @@ def remove_qtns_by_ld(selected_qtns: List[int],
         return selected_qtns  # Nothing to filter
     
     if verbose:
-        print(f"LD filtering: {len(selected_qtns)} QTNs, threshold={correlation_threshold}")
+        scope = "within-chromosome" if within_chrom_only else "genome-wide"
+        print(f"LD filtering: {len(selected_qtns)} QTNs, threshold={correlation_threshold} ({scope})")
     
     # Step 1: Extract genotype data for selected QTNs
     if isinstance(genotype_matrix, GenotypeMatrix):
-        # Extract QTN genotypes (imputed)
-        qtn_genotypes_list = []
-        for qtn_idx in selected_qtns:
-            qtn_col = genotype_matrix.get_batch_imputed(qtn_idx, qtn_idx+1).flatten()
-            qtn_genotypes_list.append(qtn_col)
-        qtn_genotypes = np.column_stack(qtn_genotypes_list)
+        # Extract QTN genotypes (imputed) in a single call
+        qtn_genotypes = genotype_matrix.get_columns_imputed(selected_qtns)
         n_individuals = genotype_matrix.n_individuals
     else:
         qtn_genotypes = genotype_matrix[:, selected_qtns]
@@ -799,7 +879,7 @@ def remove_qtns_by_ld(selected_qtns: List[int],
     # Step 3: Calculate correlation matrix
     try:
         # Handle missing values by excluding them pairwise
-        correlation_matrix = np.corrcoef(qtn_subset.T)  # Transpose for marker-by-marker correlation
+        correlation_matrix = np.corrcoef(qtn_subset.T)  # marker-by-marker correlation
         
         # Handle NaN correlations (e.g., from markers with no variation)
         correlation_matrix = np.nan_to_num(correlation_matrix, nan=0.0)
@@ -809,34 +889,35 @@ def remove_qtns_by_ld(selected_qtns: List[int],
             warnings.warn(f"Correlation calculation failed: {e}")
         return selected_qtns  # Return original list if correlation fails
     
-    # Step 4: Apply LD filtering using R's lower triangular approach
-    # R code: c[lower.tri(c)] = 1; diag(c) = 1; bd = apply(c, 2, prod); position = (bd == 1)
-    
+    # Step 4: Apply LD filtering with exact precedence (keep earlier by p-value order)
     n_qtns = len(selected_qtns)
-    keep_mask = np.ones(n_qtns, dtype=bool)  # Which QTNs to keep
-    
-    # Apply correlation threshold
-    high_corr_mask = np.abs(correlation_matrix) > correlation_threshold
-    
-    # R's approach: use lower triangular matrix to avoid double-counting
-    # Set lower triangle and diagonal to 1 (keep), then check if any upper triangle element is > threshold
-    filter_matrix = high_corr_mask.copy().astype(int)
-    
-    # Set lower triangle to 0 (ignore lower triangle correlations)
+    keep_mask = np.ones(n_qtns, dtype=bool)
+
+    # Consider only within-chromosome pairs if requested
+    if within_chrom_only and map_data is not None:
+        map_df = map_data.to_dataframe()
+        chrom_vec = map_df['CHROM'].to_numpy()
+        chrom_sel = chrom_vec[np.array(selected_qtns, dtype=int)]
+        same_chrom = (chrom_sel[:, None] == chrom_sel[None, :])
+    else:
+        same_chrom = np.ones((n_qtns, n_qtns), dtype=bool)
+
+    # Use absolute correlation as in rMVP's Remove step
+    abs_corr = np.abs(correlation_matrix)
+
+    # Iterate in order, drop later ones when highly correlated with any kept earlier one on same chromosome
     for i in range(n_qtns):
-        for j in range(i+1):  # j <= i (lower triangle + diagonal)
-            filter_matrix[i, j] = 0
-    
-    # For each QTN, check if it's highly correlated with any previous QTN
-    for i in range(n_qtns):
-        # If QTN i is highly correlated with any QTN j < i, remove QTN i
+        if not keep_mask[i]:
+            continue
         for j in range(i):
-            if keep_mask[j] and high_corr_mask[i, j]:  # j is kept and correlated with i
-                keep_mask[i] = False  # Remove i (keep the earlier one)
-                if verbose:
-                    print(f"Removing QTN {selected_qtns[i]} (corr={correlation_matrix[i,j]:.3f} with {selected_qtns[j]})")
+            if keep_mask[j] and same_chrom[i, j] and abs_corr[i, j] > correlation_threshold:
+                keep_mask[i] = False
+                if verbose or debug:
+                    print(f"Removing QTN {selected_qtns[i]} (chr={chrom_sel[i] if within_chrom_only and map_data is not None else 'NA'}) "
+                          f"due to high LD with {selected_qtns[j]} (chr={chrom_sel[j] if within_chrom_only and map_data is not None else 'NA'}): "
+                          f"r={correlation_matrix[i, j]:.4f}, |r|={abs_corr[i, j]:.4f}")
                 break
-    
+
     # Step 5: Return filtered QTNs
     filtered_qtns = [selected_qtns[i] for i in range(n_qtns) if keep_mask[i]]
     

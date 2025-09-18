@@ -24,7 +24,9 @@ def MVP_Report(results: Union[AssociationResults, Dict],
                colors: Optional[List[str]] = None,
                point_size: float = 12.0,
                verbose: bool = True,
-               save_plots: bool = True) -> Dict:
+               save_plots: bool = True,
+               true_qtns: Optional[List[str]] = None,
+               multi_panel: bool = False) -> Dict:
     """Generate comprehensive GWAS visualization report
 
     Creates Manhattan plots, Q-Q plots, and summary statistics for GWAS results.
@@ -42,6 +44,8 @@ def MVP_Report(results: Union[AssociationResults, Dict],
         point_size: Size of points in plots
         verbose: Print progress information
         save_plots: Save plots to files
+        true_qtns: List of SNP names that are known true QTNs to highlight
+        multi_panel: Create multi-panel Manhattan plot with all methods
 
     Returns:
         Dictionary with plot objects and summary statistics
@@ -64,7 +68,104 @@ def MVP_Report(results: Union[AssociationResults, Dict],
     else:
         raise ValueError("Results must be AssociationResults object or dictionary")
 
-    # Generate plots for each result set
+    # Handle multi-panel Manhattan plot
+    if multi_panel and "manhattan" in plot_types and isinstance(results, dict) and len(results_dict) > 1:
+        if verbose:
+            print("Creating multi-panel Manhattan plot...")
+        
+        multi_panel_fig = create_multi_panel_manhattan(
+            results_dict=results_dict,
+            map_data=map_data,
+            threshold=threshold,
+            true_qtns=true_qtns,
+            figsize=(12, 4 * len(results_dict)),
+            colors=colors,
+            point_size=point_size
+        )
+        report['plots']['multi_panel_manhattan'] = multi_panel_fig
+        
+        if save_plots:
+            filename = f"{output_prefix}_multi_panel_manhattan.png"
+            multi_panel_fig.savefig(filename, dpi=dpi, bbox_inches='tight')
+            report['files_created'].append(filename)
+        
+        # For multi-panel mode, skip individual method plotting for Manhattan plots
+        # but still process other plot types and summary stats
+        for method_name, result_obj in results_dict.items():
+            # Extract data for summary statistics
+            if hasattr(result_obj, 'to_numpy'):
+                results_array = result_obj.to_numpy()
+                effects = results_array[:, 0]
+                se = results_array[:, 1]
+                pvalues = results_array[:, 2]
+            else:
+                continue
+            
+            # Filter out invalid p-values
+            valid_mask = ~np.isnan(pvalues) & (pvalues > 0) & (pvalues <= 1)
+            valid_pvalues = pvalues[valid_mask]
+            valid_effects = effects[valid_mask]
+            
+            if len(valid_pvalues) == 0:
+                continue
+            
+            # Generate non-Manhattan plots
+            method_plots = {}
+            
+            if "qq" in plot_types:
+                if verbose:
+                    print(f"Creating Q-Q plot for {method_name}...")
+                qq_fig = create_qq_plot(
+                    pvalues=valid_pvalues,
+                    title=f"Q-Q Plot - {method_name}",
+                    figsize=(6, 6)
+                )
+                method_plots['qq'] = qq_fig
+                
+                if save_plots:
+                    filename = f"{output_prefix}_{method_name}_qq.png"
+                    qq_fig.savefig(filename, dpi=dpi, bbox_inches='tight')
+                    report['files_created'].append(filename)
+            
+            if "density" in plot_types:
+                if verbose:
+                    print(f"Creating density plot for {method_name}...")
+                density_fig = create_pvalue_density_plot(
+                    pvalues=valid_pvalues,
+                    title=f"P-value Distribution - {method_name}",
+                    figsize=(8, 4)
+                )
+                method_plots['density'] = density_fig
+                
+                if save_plots:
+                    filename = f"{output_prefix}_{method_name}_density.png"
+                    density_fig.savefig(filename, dpi=dpi, bbox_inches='tight')
+                    report['files_created'].append(filename)
+            
+            report['plots'][method_name] = method_plots
+            
+            # Calculate summary statistics
+            method_summary = calculate_gwas_summary(
+                pvalues=valid_pvalues,
+                effects=valid_effects,
+                threshold=threshold,
+                suggestive_threshold=suggestive_threshold
+            )
+            report['summary'][method_name] = method_summary
+            
+            if verbose:
+                print(f"Summary for {method_name}:")
+                print(f"  Total markers: {method_summary['n_markers']}")
+                print(f"  Significant hits: {method_summary['n_significant']}")
+                print(f"  Suggestive hits: {method_summary['n_suggestive']}")
+                print(f"  Minimum p-value: {method_summary['min_pvalue']:.2e}")
+        
+        if verbose:
+            print(f"Multi-panel report complete. Created {len(report['files_created'])} plot files.")
+        
+        return report
+
+    # Generate plots for each result set (non multi-panel mode)
     for method_name, result_obj in results_dict.items():
         if verbose:
             print(f"Processing results for method: {method_name}")
@@ -102,7 +203,8 @@ def MVP_Report(results: Union[AssociationResults, Dict],
                 title="",  # Remove title
                 figsize=figsize,
                 colors=colors,
-                point_size=point_size
+                point_size=point_size,
+                true_qtns=true_qtns
             )
             method_plots['manhattan'] = manhattan_fig
 
@@ -174,7 +276,8 @@ def create_manhattan_plot(pvalues: np.ndarray,
                          title: str = "Manhattan Plot",
                          figsize: Tuple[int, int] = (12, 6),
                          colors: Optional[List[str]] = None,
-                         point_size: float = 10.0) -> plt.Figure:
+                         point_size: float = 10.0,
+                         true_qtns: Optional[List[str]] = None) -> plt.Figure:
     """Create Manhattan plot for GWAS results
 
     Args:
@@ -186,6 +289,7 @@ def create_manhattan_plot(pvalues: np.ndarray,
         figsize: Figure size
         colors: Custom chromosome colors
         point_size: Point size
+        true_qtns: List of SNP names that are known true QTNs to highlight
 
     Returns:
         matplotlib Figure object
@@ -206,7 +310,8 @@ def create_manhattan_plot(pvalues: np.ndarray,
             # Create Manhattan plot with chromosomal positions
             plot_manhattan_with_positions(
                 ax, chromosomes, positions, log_pvalues,
-                colors=colors, point_size=point_size
+                colors=colors, point_size=point_size, 
+                map_data=map_data, true_qtns=true_qtns
             )
         except Exception as e:
             warnings.warn(f"Could not use map data for positioning: {e}")
@@ -237,7 +342,8 @@ def create_manhattan_plot(pvalues: np.ndarray,
 
 def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.ndarray,
                                  log_pvalues: np.ndarray, colors: Optional[List[str]] = None,
-                                 point_size: float = 3.0):
+                                 point_size: float = 3.0, map_data: Optional[GenotypeMap] = None,
+                                 true_qtns: Optional[List[str]] = None):
     """Plot Manhattan plot with actual chromosomal positions"""
 
     unique_chromosomes = np.unique(chromosomes)
@@ -286,6 +392,30 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
         tick_labels.append(str(chrom))
 
         current_pos += chrom_length  # No gap between chromosomes
+
+    # Highlight true QTNs if provided
+    if true_qtns is not None and map_data is not None:
+        try:
+            map_df = map_data.to_dataframe()
+            snp_names = map_df['SNP'].values[:len(log_pvalues)]
+            
+            # Find true QTNs in the data
+            qtn_mask = np.isin(snp_names, true_qtns)
+            if np.any(qtn_mask):
+                qtn_positions = cumulative_pos[qtn_mask]
+                qtn_log_pvals = log_pvalues[qtn_mask]
+                
+                # Plot QTNs with larger red triangles
+                ax.scatter(qtn_positions, qtn_log_pvals, 
+                          marker='^', s=point_size*3, c='red', 
+                          alpha=0.9, edgecolors='black', linewidth=0.5,
+                          zorder=10, label='True QTNs')
+                
+                # Add legend if QTNs are shown
+                ax.legend(loc='upper right', fontsize=8)
+                
+        except Exception as e:
+            warnings.warn(f"Could not highlight true QTNs: {e}")
 
     # Set x-axis ticks
     ax.set_xticks(tick_positions)
@@ -457,3 +587,100 @@ def calculate_gwas_summary(pvalues: np.ndarray,
         'mean_effect': np.mean(valid_effects),
         'effect_range': (np.min(valid_effects), np.max(valid_effects))
     }
+
+
+def create_multi_panel_manhattan(results_dict: Dict,
+                                map_data: Optional[GenotypeMap] = None,
+                                threshold: float = 5e-8,
+                                true_qtns: Optional[List[str]] = None,
+                                figsize: Tuple[int, int] = (12, 12),
+                                colors: Optional[List[str]] = None,
+                                point_size: float = 8.0) -> plt.Figure:
+    """Create multi-panel Manhattan plot showing results from multiple GWAS methods
+    
+    Args:
+        results_dict: Dictionary with method names as keys and AssociationResults as values
+        map_data: Genetic map information for positioning markers
+        threshold: Genome-wide significance threshold
+        true_qtns: List of SNP names that are known true QTNs to highlight
+        figsize: Figure size (width, height)
+        colors: Custom colors for chromosomes
+        point_size: Size of points in plots
+        
+    Returns:
+        matplotlib Figure object
+    """
+    
+    n_methods = len(results_dict)
+    fig, axes = plt.subplots(n_methods, 1, figsize=figsize, sharex=True)
+    
+    # Ensure axes is always a list
+    if n_methods == 1:
+        axes = [axes]
+    
+    method_names = list(results_dict.keys())
+    
+    for i, (method_name, result_obj) in enumerate(results_dict.items()):
+        ax = axes[i]
+        
+        # Extract data
+        if hasattr(result_obj, 'to_numpy'):
+            results_array = result_obj.to_numpy()
+            effects = results_array[:, 0]
+            se = results_array[:, 1] 
+            pvalues = results_array[:, 2]
+        else:
+            continue
+        
+        # Filter out invalid p-values
+        valid_mask = ~np.isnan(pvalues) & (pvalues > 0) & (pvalues <= 1)
+        valid_pvalues = pvalues[valid_mask]
+        
+        if len(valid_pvalues) == 0:
+            ax.text(0.5, 0.5, f'No valid p-values for {method_name}',
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_ylabel(f'{method_name}\n-log₁₀(P)', fontsize=10)
+            continue
+        
+        # Convert p-values to -log10 scale
+        log_pvalues = -np.log10(valid_pvalues)
+        
+        if map_data is not None and hasattr(map_data, 'to_dataframe'):
+            try:
+                map_df = map_data.to_dataframe()
+                chromosomes = map_df['CHROM'].values[:len(pvalues)][valid_mask]
+                positions = map_df['POS'].values[:len(pvalues)][valid_mask]
+                
+                # Create Manhattan plot with chromosomal positions
+                plot_manhattan_with_positions(
+                    ax, chromosomes, positions, log_pvalues,
+                    colors=colors, point_size=point_size,
+                    map_data=map_data, true_qtns=true_qtns
+                )
+            except Exception as e:
+                warnings.warn(f"Could not use map data for {method_name}: {e}")
+                # Fallback to sequential plotting
+                plot_manhattan_sequential(ax, log_pvalues, point_size=point_size)
+        else:
+            # Sequential plotting without chromosomal information
+            plot_manhattan_sequential(ax, log_pvalues, point_size=point_size)
+        
+        # Add significance threshold
+        if threshold > 0:
+            threshold_line = -np.log10(threshold)
+            ax.axhline(y=threshold_line, color='red', linestyle='--', 
+                      alpha=0.8, linewidth=1.5)
+        
+        # Set y-label with method name
+        ax.set_ylabel(f'{method_name}\n-log₁₀(P)', fontsize=10)
+        
+        # Only show x-axis label on bottom plot
+        if i == n_methods - 1:
+            ax.set_xlabel('Chromosome', fontsize=12)
+        
+        # Add method name as title for top plot only
+        if i == 0 and true_qtns is not None:
+            ax.set_title('GWAS Results with True QTNs Highlighted', fontsize=12, pad=10)
+    
+    plt.tight_layout()
+    return fig

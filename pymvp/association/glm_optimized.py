@@ -733,7 +733,10 @@ def MVP_GLM_optimized(phe: np.ndarray,
                      CV: Optional[np.ndarray] = None,
                      maxLine: int = 5000,
                      cpu: int = 1,
-                     verbose: bool = True) -> AssociationResults:
+                     verbose: bool = True,
+                     impute_missing: bool = True,
+                     major_alleles: Optional[np.ndarray] = None,
+                     missing_fill_value: float = 1.0) -> AssociationResults:
     """Drop-in replacement for MVP_GLM with performance optimizations
     
     This function maintains the exact same interface as the original MVP_GLM
@@ -750,17 +753,16 @@ def MVP_GLM_optimized(phe: np.ndarray,
     Returns:
         AssociationResults object containing Effect, SE, and P-value for each marker
     """
-    # Phase 1 optimization: More aggressive batch sizes for better vectorization
-    # Aim for 50-100 markers per batch for optimal memory/compute tradeoff
-    batch_size = max(50, min(maxLine, 100))  # Phase 1: smaller batches for true vectorization
-    
-    return MVP_GLM_ultra(
+    from .glm_fwl_qr import MVP_GLM_ultrafast
+
+    return MVP_GLM_ultrafast(
         phe=phe,
         geno=geno,
         CV=CV,
-        batch_size=batch_size,
+        maxLine=maxLine,
         cpu=cpu,
-        verbose=verbose
+        verbose=verbose,
+        missing_fill_value=missing_fill_value,
     )
 
 # Backwards compatibility alias

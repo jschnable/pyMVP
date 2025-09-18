@@ -257,6 +257,8 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 map_data=geno_map,
                 CV=pcs,
                 maxLoop=max_iterations,
+                p_threshold=0.05,  # rMVP default
+                QTN_threshold=0.01,  # rMVP default, will be adjusted to max(0.05, 0.01) = 0.05 by rMVP logic
                 verbose=False
             )
             results['FarmCPU'] = farmcpu_results
@@ -383,7 +385,9 @@ def generate_plots(results: Dict[str, AssociationResults],
                   output_dir: str,
                   trait_label: Optional[str] = None,
                   plot_manhattan: bool = True,
-                  plot_qq: bool = True) -> None:
+                  plot_qq: bool = True,
+                  true_qtns: Optional[List[str]] = None,
+                  multi_panel: bool = False) -> None:
     """Generate Manhattan and Q-Q plots for each method for a single trait"""
     
     output_path = Path(output_dir)
@@ -396,26 +400,63 @@ def generate_plots(results: Dict[str, AssociationResults],
         print_step("Plot generation", step_start)
         return
 
-    for method, result in results.items():
+    # Generate multi-panel Manhattan plot if requested
+    if multi_panel and plot_manhattan and len(results) > 1:
         try:
-            # Generate plots using MVP_Report
-            plot_types = []
-            if plot_manhattan:
-                plot_types.append("manhattan")
-            if plot_qq:
-                plot_types.append("qq")
-            plot_results = MVP_Report(
-                results=result,
+            print("   Creating multi-panel Manhattan plot...")
+            multi_panel_results = MVP_Report(
+                results=results,
                 map_data=geno_map,
-                output_prefix=str(output_path / f"GWAS_{trait_label}_{method}" if trait_label else output_path / f"GWAS_{method}"),
-                plot_types=plot_types,
+                output_prefix=str(output_path / f"GWAS_{trait_label}_multi_panel" if trait_label else output_path / f"GWAS_multi_panel"),
+                plot_types=["manhattan"],
                 verbose=False,
-                save_plots=True
+                save_plots=True,
+                true_qtns=true_qtns,
+                multi_panel=True
             )
-            print(f"   Generated plots for {method}")
-            
+            print("   Generated multi-panel Manhattan plot")
         except Exception as e:
-            print(f"   Could not generate plots for {method}: {e}")
+            print(f"   Could not generate multi-panel plot: {e}")
+    else:
+        # Generate individual plots for each method (only if not doing multi-panel)
+        for method, result in results.items():
+            try:
+                # Generate plots using MVP_Report
+                plot_types = []
+                if plot_manhattan:
+                    plot_types.append("manhattan")
+                if plot_qq:
+                    plot_types.append("qq")
+                plot_results = MVP_Report(
+                    results=result,
+                    map_data=geno_map,
+                    output_prefix=str(output_path / f"GWAS_{trait_label}_{method}" if trait_label else output_path / f"GWAS_{method}"),
+                    plot_types=plot_types,
+                    verbose=False,
+                    save_plots=True,
+                    true_qtns=true_qtns
+                )
+                print(f"   Generated plots for {method}")
+                
+            except Exception as e:
+                print(f"   Could not generate plots for {method}: {e}")
+    
+    # Always generate Q-Q plots individually since they don't have multi-panel support
+    if plot_qq:
+        for method, result in results.items():
+            try:
+                qq_results = MVP_Report(
+                    results=result,
+                    map_data=geno_map,
+                    output_prefix=str(output_path / f"GWAS_{trait_label}_{method}" if trait_label else output_path / f"GWAS_{method}"),
+                    plot_types=["qq"],
+                    verbose=False,
+                    save_plots=True
+                )
+                print(f"   Generated Q-Q plot for {method}")
+                
+            except Exception as e:
+                print(f"   Could not generate Q-Q plot for {method}: {e}")
     
     print_step("Plot generation", step_start)
 
@@ -489,12 +530,33 @@ def main():
                        help="Max allowed missingness per marker (fraction 0..1]")
     parser.add_argument("--min-maf", dest="min_maf", type=float, default=0.0,
                        help="Minimum minor allele frequency per marker (0..0.5]")
+    # Visualization options
+    parser.add_argument("--true-qtns", dest="true_qtns", default=None,
+                       help="File with true QTN names (one per line) or comma-separated list to highlight in plots")
+    parser.add_argument("--multi-panel", dest="multi_panel", action='store_true',
+                       help="Create multi-panel Manhattan plot showing all methods in one figure")
     
     args = parser.parse_args()
     
     # Parse methods and traits
     methods = [m.strip().upper() for m in args.methods.split(',')]
     trait_columns = [t.strip() for t in args.traits.split(',')] if args.traits else None
+    
+    # Parse true QTNs
+    true_qtns = None
+    if args.true_qtns:
+        if Path(args.true_qtns).exists():
+            # Read from file
+            try:
+                with open(args.true_qtns, 'r') as f:
+                    true_qtns = [line.strip() for line in f if line.strip()]
+                print(f"Loaded {len(true_qtns)} true QTNs from file: {args.true_qtns}")
+            except Exception as e:
+                print(f"Warning: Could not read true QTNs file: {e}")
+        else:
+            # Parse as comma-separated list
+            true_qtns = [qtn.strip() for qtn in args.true_qtns.split(',') if qtn.strip()]
+            print(f"Parsed {len(true_qtns)} true QTNs from command line")
     
     # Validate methods
     valid_methods = ['GLM', 'MLM', 'FARMCPU']
@@ -642,6 +704,8 @@ def main():
                 trait_label=trait_label,
                 plot_manhattan=('manhattan' in args.outputs),
                 plot_qq=('qq' in args.outputs),
+                true_qtns=true_qtns,
+                multi_panel=args.multi_panel,
             )
 
         # Write aggregated summary across traits/methods

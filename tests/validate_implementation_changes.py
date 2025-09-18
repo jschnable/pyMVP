@@ -38,6 +38,8 @@ import json
 import warnings
 import sys
 import time
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from scipy.stats import pearsonr, spearmanr
@@ -49,8 +51,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import pyMVP modules
 from pymvp.data.loaders import load_phenotype_file, load_genotype_file, load_map_file
 from pymvp.association.glm import MVP_GLM
-from pymvp.association.mlm import MVP_MLM  
+from pymvp.association.mlm import MVP_MLM
 from pymvp.association.farmcpu import MVP_FarmCPU
+from pymvp.matrix.pca import MVP_PCA_genotype, MVP_PCA_kinship
+from pymvp.matrix.kinship import MVP_K_VanRaden
 from pymvp.utils.data_types import AssociationResults
 
 # Suppress warnings for cleaner output
@@ -102,7 +106,7 @@ class ValidationConfig:
 
 class ValidationDataset:
     """Manages validation dataset loading and QTN information"""
-    
+
     def __init__(self, config: ValidationConfig):
         self.config = config
         self.phenotype_data = None
@@ -110,6 +114,7 @@ class ValidationDataset:
         self.genetic_map = None
         self.true_qtns = None
         self.dataset_summary = None
+        self.principal_components = None  # Computed PCs for FarmCPU
         
     def load_dataset(self) -> bool:
         """Load validation dataset from files"""
@@ -143,10 +148,13 @@ class ValidationDataset:
                 
             print(f"✓ Dataset loaded successfully:")
             print(f"  - {self.phenotype_data.shape[0]} individuals")
-            print(f"  - {n_markers} markers") 
+            print(f"  - {n_markers} markers")
             print(f"  - {len(self.true_qtns)} true QTNs")
             print(f"  - Missing data rate: {self.dataset_summary.get('missing_data_rate', 'unknown'):.3f}")
-            
+
+            # Compute principal components for FarmCPU
+            self._compute_principal_components()
+
             return True
             
         except Exception as e:
@@ -194,6 +202,43 @@ class ValidationDataset:
             
         return qtn_indices, selected_null_indices
 
+    def _compute_principal_components(self) -> None:
+        """Compute principal components for FarmCPU using rMVP-compatible method"""
+        try:
+            print("Computing principal components (3 PCs) using rMVP-compatible method...")
+
+            # Use rMVP approach: kinship matrix -> eigendecomposition
+            # This matches rMVP's MVP.PCA function which does:
+            # 1. Compute VanRaden kinship matrix
+            # 2. Eigendecomposition of kinship matrix
+
+            print("  Step 1: Computing VanRaden kinship matrix...")
+            kinship_matrix = MVP_K_VanRaden(
+                M=self.genotype_data,
+                maxLine=1000,
+                verbose=False
+            )
+
+            print("  Step 2: Eigendecomposition for principal components...")
+            self.principal_components = MVP_PCA_kinship(
+                K=kinship_matrix,
+                pcs_keep=3,  # rMVP standard: 3 PCs
+                verbose=False
+            )
+
+            print(f"✓ Principal components computed: {self.principal_components.shape}")
+            print(f"  - Using rMVP-compatible kinship-based PCA method")
+            print(f"  - 3 PCs for population structure control")
+
+        except Exception as e:
+            print(f"ERROR computing principal components: {e}")
+            print("Proceeding without PCs (may affect FarmCPU comparison accuracy)")
+            self.principal_components = None
+
+    def get_principal_components(self) -> Optional[np.ndarray]:
+        """Get computed principal components for use in GWAS methods"""
+        return self.principal_components
+
 
 class ImplementationValidator:
     """Core validation logic for comparing implementations"""
@@ -202,6 +247,11 @@ class ImplementationValidator:
         self.config = config
         self.dataset = dataset
         self.results_log = []
+        self._rmvp_farmcpu_results: Optional[AssociationResults] = None
+        self._rmvp_farmcpu_time: Optional[float] = None
+        self._rmvp_farmcpu_covariates: Optional[np.ndarray] = None
+        self._rmvp_glm_reference: Optional[AssociationResults] = None
+        self._rmvp_mlm_reference: Optional[AssociationResults] = None
         
     def validate_glm_implementation(self, new_glm_function, implementation_name: str) -> Dict[str, Any]:
         """
@@ -342,34 +392,58 @@ class ImplementationValidator:
         print(f"VALIDATING FarmCPU IMPLEMENTATION: {implementation_name}")
         print(f"{'='*60}")
         
-        # Run original FarmCPU
-        print("Running original FarmCPU implementation...")
-        start_time = time.time()
-        original_results = MVP_FarmCPU(
-            self.dataset.phenotype_data,
-            self.dataset.genotype_data,
-            self.dataset.genetic_map,
-            maxLine=500,  # Smaller batch for faster validation
-            maxLoop=3,  # Fewer iterations for speed
-            verbose=False
-        )
-        original_time = time.time() - start_time
-        print(f"  Original FarmCPU completed in {original_time:.2f}s")
-        
-        # Run new FarmCPU implementation
+        # Reference: rMVP FarmCPU results
+        print("Running rMVP FarmCPU reference implementation...")
+        try:
+            reference_results, reference_time, used_cache = self._get_rmvp_farmcpu_results()
+            if used_cache:
+                print("  Using cached rMVP FarmCPU reference results.")
+            else:
+                print(f"  rMVP FarmCPU completed in {reference_time:.2f}s")
+        except Exception as e:
+            error_result = {
+                'method': 'FarmCPU',
+                'implementation': implementation_name,
+                'status': 'FAILED',
+                'error': f"Failed to obtain rMVP reference: {e}",
+                'validation_passed': str(False)
+            }
+            print(f"  ERROR: Unable to generate rMVP reference results: {e}")
+            return error_result
+
+        # Run new FarmCPU implementation (pyMVP) with PCs
         print(f"Running {implementation_name} implementation...")
+        pcs = self._rmvp_farmcpu_covariates
+        if pcs is None:
+            pcs = self.dataset.get_principal_components()
+
+        if pcs is not None:
+            print(f"  Using {pcs.shape[1]} principal components for population structure control")
+        else:
+            print("  WARNING: No principal components available - results may not be comparable to rMVP")
+
         start_time = time.time()
         try:
             new_results = new_farmcpu_function(
                 self.dataset.phenotype_data,
                 self.dataset.genotype_data,
                 self.dataset.genetic_map,
+                CV=pcs,  # Include principal components for fair comparison
                 maxLine=500,
                 maxLoop=3,
                 verbose=False
             )
             new_time = time.time() - start_time
-            print(f"  {implementation_name} completed in {new_time:.2f}s ({original_time/new_time:.2f}x speedup)")
+            if reference_time and reference_time > 0:
+                speedup = reference_time / new_time
+            else:
+                speedup = None
+
+            print(f"  {implementation_name} completed in {new_time:.2f}s", end="")
+            if speedup is not None and np.isfinite(speedup):
+                print(f" ({speedup:.2f}x speedup vs. rMVP)")
+            else:
+                print()
             
         except Exception as e:
             error_result = {
@@ -383,10 +457,12 @@ class ImplementationValidator:
             return error_result
         
         # Perform detailed validation
-        validation_results = self._compare_results(original_results, new_results, "FarmCPU", implementation_name)
-        validation_results['original_time'] = original_time
+        validation_results = self._compare_results(reference_results, new_results, "FarmCPU", implementation_name)
+        validation_results['reference_time'] = reference_time
         validation_results['new_time'] = new_time
-        validation_results['speedup'] = original_time / new_time
+        validation_results['speedup'] = (reference_time / new_time
+                                         if reference_time and reference_time > 0 else None)
+        validation_results['reference'] = 'rMVP'
         
         return validation_results
     
@@ -519,6 +595,94 @@ class ImplementationValidator:
         
         self.results_log.append(results)
         return results
+
+    def _get_rmvp_farmcpu_results(self) -> Tuple[AssociationResults, float, bool]:
+        """Return rMVP FarmCPU reference results for the current dataset.
+
+        Returns a tuple of (AssociationResults, runtime_seconds, used_cache).
+        """
+
+        if self._rmvp_farmcpu_results is not None and self._rmvp_farmcpu_time is not None:
+            return self._rmvp_farmcpu_results, self._rmvp_farmcpu_time, True
+
+        script_path = Path(__file__).parent.parent / "simple_test" / "rMVP_analysis_correct.R"
+        if not script_path.exists():
+            raise FileNotFoundError(f"rMVP reference script not found: {script_path}")
+
+        with tempfile.TemporaryDirectory(prefix="rmvp_reference_") as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            output_csv = tmpdir_path / "rmvp_farmcpu_results.csv"
+            pc_path = tmpdir_path / "rmvp_pc.csv"
+            glm_path = tmpdir_path / "rmvp_glm.csv"
+            mlm_path = tmpdir_path / "rmvp_mlm.csv"
+            cmd = [
+                "Rscript",
+                str(script_path),
+                str(self.config.validation_dataset_dir),
+                str(output_csv),
+                str(tmpdir_path)
+            ]
+
+            start_time = time.time()
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            elapsed = time.time() - start_time
+
+            if proc.returncode != 0:
+                stderr = proc.stderr.strip()
+                stdout = proc.stdout.strip()
+                message = stderr if stderr else stdout
+                raise RuntimeError(f"rMVP FarmCPU reference run failed: {message}")
+
+            if not output_csv.exists():
+                raise FileNotFoundError(f"Expected rMVP output not produced: {output_csv}")
+
+            rmvp_df = pd.read_csv(output_csv)
+
+            if pc_path.exists():
+                pc_table = pd.read_csv(pc_path)
+                if pc_table.shape[1] >= 4:
+                    pc_matrix = pc_table.iloc[:, 1:4].to_numpy(dtype=float)
+                    self._rmvp_farmcpu_covariates = pc_matrix
+                else:
+                    print("Warning: rMVP PC file does not contain at least 3 PCs; skipping covariate capture")
+                    self._rmvp_farmcpu_covariates = None
+            else:
+                print("Warning: rMVP PC file not found; FarmCPU covariates unavailable")
+                self._rmvp_farmcpu_covariates = None
+
+            if glm_path.exists():
+                glm_df = pd.read_csv(glm_path)
+                effects = glm_df['Effect'].to_numpy(dtype=float)
+                se = glm_df['SE'].to_numpy(dtype=float)
+                pvalues = glm_df['P'].to_numpy(dtype=float)
+                self._rmvp_glm_reference = AssociationResults(effects, se, pvalues, snp_map=self.dataset.genetic_map)
+
+            if mlm_path.exists():
+                mlm_df = pd.read_csv(mlm_path)
+                effects = mlm_df['Effect'].to_numpy(dtype=float)
+                se = mlm_df['SE'].to_numpy(dtype=float)
+                pvalues = mlm_df['P'].to_numpy(dtype=float)
+                self._rmvp_mlm_reference = AssociationResults(effects, se, pvalues, snp_map=self.dataset.genetic_map)
+
+        if 'SNP' not in rmvp_df.columns:
+            raise ValueError("rMVP output must include an 'SNP' column")
+
+        rmvp_df = rmvp_df.set_index('SNP')
+        map_ids = self.dataset.genetic_map.snp_ids.values
+        if not np.all(np.isin(map_ids, rmvp_df.index.values)):
+            missing = [s for s in map_ids if s not in rmvp_df.index]
+            raise ValueError(f"rMVP output missing SNPs: {missing[:5]}")
+
+        rmvp_df = rmvp_df.loc[map_ids]
+        effects = rmvp_df['Effect'].to_numpy(dtype=float)
+        se = rmvp_df['SE'].to_numpy(dtype=float)
+        pvalues = rmvp_df['P'].to_numpy(dtype=float)
+
+        reference_results = AssociationResults(effects, se, pvalues, snp_map=self.dataset.genetic_map)
+        self._rmvp_farmcpu_results = reference_results
+        self._rmvp_farmcpu_time = elapsed
+
+        return reference_results, elapsed, False
     
     def _generate_simple_kinship_matrix(self) -> np.ndarray:
         """Generate a simple kinship matrix for MLM validation"""
@@ -652,7 +816,42 @@ def example_usage():
     except ImportError as e:
         print(f"Could not test optimized MLM: {e}")
         mlm_results = None
-    
+
+    # Compare pyMVP FarmCPU directly against rMVP reference
+    try:
+        print(f"\n" + "="*60)
+        print("TESTING pyMVP FarmCPU AGAINST rMVP")
+        print(f"="*60)
+        print("Validating FarmCPU outputs against rMVP reference results...")
+
+        farmcpu_baseline_results = validator.validate_farmcpu_implementation(
+            MVP_FarmCPU,
+            "pyMVP FarmCPU"
+        )
+
+        if farmcpu_baseline_results['validation_passed'] == 'True':
+            print(f"\n✅ {farmcpu_baseline_results['implementation']} PASSED validation!")
+            ref_time = farmcpu_baseline_results.get('reference_time')
+            new_time = farmcpu_baseline_results.get('new_time')
+            speedup = farmcpu_baseline_results.get('speedup')
+            if ref_time is not None:
+                print(f"   rMVP runtime: {ref_time:.2f}s")
+            if new_time is not None:
+                print(f"   pyMVP runtime: {new_time:.2f}s")
+            if speedup is not None and np.isfinite(speedup):
+                print(f"   Speedup vs. rMVP: {speedup:.2f}x")
+            print(f"   Effect correlation: {farmcpu_baseline_results['correlations']['effects']:.6f}")
+            print(f"   Log p-value correlation: {farmcpu_baseline_results['correlations']['log_pvalues']:.6f}")
+            print(f"   True positive rate: {farmcpu_baseline_results['detection_rates']['original_tpr']:.3f} → {farmcpu_baseline_results['detection_rates']['new_tpr']:.3f}")
+        else:
+            print(f"\n❌ {farmcpu_baseline_results['implementation']} FAILED validation!")
+            if 'error' in farmcpu_baseline_results:
+                print(f"   Error: {farmcpu_baseline_results['error']}")
+
+    except Exception as e:
+        print(f"Could not validate pyMVP FarmCPU against rMVP: {e}")
+        farmcpu_baseline_results = None
+
     # Test FarmCPU with optimized GLM to ensure no regression
     if glm_results is not None and glm_results['validation_passed'] == 'True':
         try:
@@ -671,7 +870,15 @@ def example_usage():
             
             if farmcpu_results['validation_passed'] == 'True':
                 print(f"\n✅ FarmCPU with Optimized GLM PASSED validation!")
-                print(f"   Speedup: {farmcpu_results['speedup']:.2f}x")
+                ref_time = farmcpu_results.get('reference_time')
+                new_time = farmcpu_results.get('new_time')
+                speedup = farmcpu_results.get('speedup')
+                if ref_time is not None:
+                    print(f"   rMVP runtime: {ref_time:.2f}s")
+                if new_time is not None:
+                    print(f"   pyMVP runtime: {new_time:.2f}s")
+                if speedup is not None and np.isfinite(speedup):
+                    print(f"   Speedup vs. rMVP: {speedup:.2f}x")
                 print(f"   Effect correlation: {farmcpu_results['correlations']['effects']:.6f}")
                 print(f"   Log p-value correlation: {farmcpu_results['correlations']['log_pvalues']:.6f}")
                 print(f"   ✅ Safe to replace GLM implementation!")
