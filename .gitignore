@@ -1,3 +1,6 @@
+tmp_rmvp/
+tests/validation_report*
+
 # Python
 __pycache__/
 *.py[cod]

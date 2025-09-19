@@ -200,7 +200,7 @@ By default the per-run significance threshold matches the Bonferroni-corrected a
 Per trait (label sanitized and uniquified):
 
 - `GWAS_[TraitLabel]_all_results.csv` (if `all_results` selected):
-  - Columns: `SNP`, `CHROM`, `POS`, `MAF`, and for each p-value based method: `[Method]_Effect`, `[Method]_SE`, `[Method]_Pvalue`, `[Method]_Pvalue_Bonf`.
+  - Columns: `SNP`, `CHROM`, `POS`, `MAF`, and for each p-value based method: `[Method]_Effect`, `[Method]_SE`, `[Method]_Pvalue`, `[Method]_Passed_Bonferroni` (`yes`/`no`).
   - FarmCPU-resampling adds `[FarmCPUResampling]_RMIP` (always) and `[FarmCPUResampling]_ClusterMembers` when clustering is enabled.
 - `GWAS_[TraitLabel]_significant_SNPs_p[threshold].csv` (if `significant` selected):
   - Rows passing the chosen significance threshold; includes map columns, per-method stats, and a `Method` column.
@@ -210,7 +210,7 @@ Per trait (label sanitized and uniquified):
 Aggregate:
 
 - `GWAS_summary_by_trait_method.csv`: One row per trait × method with summary stats:
-  - P-value methods: `n_significant`, `min_pvalue`, `threshold_used`, `alpha`, `n_tests_used`, `n_bonf_significant`.
+  - P-value methods: `n_significant` (markers passing Bonferroni), `min_pvalue`, `threshold_used`, `alpha`, `n_tests_used`.
   - FarmCPU-resampling: `n_identified`, `max_rmip`, `mean_rmip`, `cluster_mode`, `total_runs`.
 
 Notes:

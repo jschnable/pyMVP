@@ -379,6 +379,12 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
     
     standard_results: Dict[str, AssociationResults] = {}
     resampling_results: Dict[str, FarmCPUResamplingResults] = {}
+    effective_tests = int(n_eff) if (n_eff and n_eff > 0) else genotype_matrix.n_markers
+    if significance_threshold is not None:
+        global_threshold = float(significance_threshold)
+    else:
+        global_threshold = bonferroni_alpha / max(effective_tests, 1)
+
     for method, result in results.items():
         if isinstance(result, FarmCPUResamplingResults):
             resampling_results[method] = result
@@ -408,43 +414,25 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
         all_results_df[f'{method}_SE'] = result.se
         all_results_df[f'{method}_Pvalue'] = result.pvalues
         
-        # Determine threshold and correction behavior
-        n_tests_true = len(result.pvalues)
-        if significance_threshold is not None:
-            # Fixed threshold overrides alpha and n_eff
-            n_tests_used = n_tests_true
-            used_thresh = float(significance_threshold)
-        else:
-            # Bonferroni with alpha and either true number of tests or n_eff if provided
-            n_tests_used = int(n_eff) if (n_eff and n_eff > 0) else n_tests_true
-            used_thresh = bonferroni_alpha / max(n_tests_used, 1)
+        passed_mask = result.pvalues <= global_threshold
+        passed_column = np.where(passed_mask, 'yes', 'no')
+        all_results_df[f'{method}_Passed_Bonferroni'] = passed_column
 
-        # Compute Bonferroni-corrected p-values with chosen n_tests
-        corrected = np.minimum(result.pvalues * n_tests_used, 1.0)
-        all_results_df[f'{method}_Pvalue_Bonf'] = corrected
-
-        # Find significant SNPs based on used threshold (uncorrected p-value compared to used_thresh)
-        sig_mask = result.pvalues < used_thresh
-        n_significant = np.sum(sig_mask)
+        n_significant = int(passed_mask.sum())
         
         summary_stats[method] = {
             'n_significant': n_significant,
             'min_pvalue': np.min(result.pvalues),
-            'threshold_used': used_thresh,
+            'threshold_used': global_threshold,
             'alpha': bonferroni_alpha,
-            'n_tests_used': n_tests_used,
-            'n_bonf_significant': np.sum(result.pvalues < (bonferroni_alpha / max(n_tests_true, 1)))
+            'n_tests_used': effective_tests,
         }
         
-        print(f"   {method}: {n_significant} significant SNPs (p < {used_thresh:.2e})")
-        if significance_threshold is None:
-            print(f"       Bonferroni: alpha={bonferroni_alpha}, n_tests_used={n_tests_used} => threshold {used_thresh:.2e}")
-        else:
-            print(f"       Fixed threshold (overrides alpha/n_eff): {used_thresh:.2e}")
-        print(f"       {summary_stats[method]['n_bonf_significant']} SNPs pass Bonferroni correction")
+        print(f"   {method}: {n_significant} SNPs pass multiple-testing threshold (p ≤ {global_threshold:.2e})")
+        print(f"       Bonferroni parameters: alpha={bonferroni_alpha}, n_tests_used={effective_tests}")
         
         if n_significant > 0:
-            sig_snps = all_results_df[sig_mask].copy()
+            sig_snps = all_results_df[passed_mask].copy()
             sig_snps['Method'] = method
             significant_snps.append(sig_snps)
     
@@ -491,9 +479,11 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
         sig_df = pd.concat(significant_snps, ignore_index=True)
         sig_results_file = output_path / f"GWAS{suffix}_significant_SNPs_p{significance_threshold}.csv"
         sig_df.to_csv(sig_results_file, index=False)
+        sig_results_file = output_path / f"GWAS{suffix}_significant_SNPs_p{global_threshold:.2e}.csv"
+        sig_df.to_csv(sig_results_file, index=False)
         print(f"   Saved significant SNPs to: {sig_results_file}")
     else:
-        print(f"   No significant SNPs found at threshold p < {significance_threshold}")
+        print(f"   No SNPs passed multiple-testing threshold (p ≤ {global_threshold:.2e})")
     
     print_step("Results analysis", step_start)
     
@@ -510,7 +500,8 @@ def generate_plots(results: Dict[str, AssociationResults],
                   plot_manhattan: bool = True,
                   plot_qq: bool = True,
                   true_qtns: Optional[List[str]] = None,
-                  multi_panel: bool = False) -> None:
+                  multi_panel: bool = False,
+                  significance_threshold: float = 5e-8) -> None:
     """Generate Manhattan and Q-Q plots for each method for a single trait"""
     
     output_path = Path(output_dir)
@@ -532,6 +523,7 @@ def generate_plots(results: Dict[str, AssociationResults],
                 map_data=geno_map,
                 output_prefix=str(output_path / f"GWAS_{trait_label}_multi_panel" if trait_label else output_path / f"GWAS_multi_panel"),
                 plot_types=["manhattan"],
+                threshold=significance_threshold,
                 verbose=False,
                 save_plots=True,
                 true_qtns=true_qtns,
@@ -555,6 +547,7 @@ def generate_plots(results: Dict[str, AssociationResults],
                     map_data=geno_map,
                     output_prefix=str(output_path / f"GWAS_{trait_label}_{method}" if trait_label else output_path / f"GWAS_{method}"),
                     plot_types=plot_types,
+                    threshold=significance_threshold,
                     verbose=False,
                     save_plots=True,
                     true_qtns=true_qtns
@@ -575,6 +568,7 @@ def generate_plots(results: Dict[str, AssociationResults],
                     map_data=geno_map,
                     output_prefix=str(output_path / f"GWAS_{trait_label}_{method}" if trait_label else output_path / f"GWAS_{method}"),
                     plot_types=["qq"],
+                    threshold=significance_threshold,
                     verbose=False,
                     save_plots=True
                 )
@@ -841,7 +835,7 @@ def main():
                 matched_data['genotype_matrix'],
                 data['geno_map'],
                 args.output,
-                args.significance,
+                base_significance,
                 trait_label=trait_label,
                 save_all_results=('all_marker_pvalues' in args.outputs),
                 save_significant=('significant_marker_pvalues' in args.outputs),
@@ -868,6 +862,7 @@ def main():
                 plot_qq=('qq' in args.outputs),
                 true_qtns=true_qtns,
                 multi_panel=args.multi_panel,
+                significance_threshold=base_significance,
             )
 
         # Write aggregated summary across traits/methods
