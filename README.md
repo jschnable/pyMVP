@@ -90,7 +90,7 @@ Minimal example (CSV/TSV numeric genotypes):
 ```bash
 python scripts/run_GWAS.py \
   --phenotype data/phenotype.csv \
-  --genotype data/genotype_numeric.csv \
+  --genotype data/geno.vcf.gz \
   --output results
 ```
 
