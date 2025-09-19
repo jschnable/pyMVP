@@ -789,11 +789,28 @@ def select_qtns_static_binning_rmvp(pvalues: np.ndarray,
     - Collect bin representatives, sort by p, filter by p < qtn_p_threshold, take top_k
     """
     map_df = map_data.to_dataframe()
-    chrom = map_df['CHROM'].to_numpy()
-    pos = map_df['POS'].to_numpy()
+    chrom_raw = map_df['CHROM'].to_numpy()
+    pos_raw = map_df['POS'].to_numpy()
+
+    if np.issubdtype(chrom_raw.dtype, np.number):
+        chrom_numeric = chrom_raw.astype(np.int64, copy=False)
+    else:
+        chrom_numeric = np.empty(len(chrom_raw), dtype=np.int64)
+        chrom_lookup: Dict[str, int] = {}
+        next_code = 1
+        for idx, value in enumerate(chrom_raw.astype(str)):
+            code = chrom_lookup.get(value)
+            if code is None:
+                code = next_code
+                chrom_lookup[value] = code
+                next_code += 1
+            chrom_numeric[idx] = code
+
+    pos_numeric = pos_raw.astype(np.int64, copy=False)
+
     # rMVP uses fixed MaxBP = 1e10 and ID = POS + CHR*MaxBP
     MaxBP = 10_000_000_000
-    ids = pos.astype(np.int64) + chrom.astype(np.int64) * MaxBP
+    ids = pos_numeric + chrom_numeric * MaxBP
     bin_ids = (ids // bin_size).astype(np.int64)
 
     n = len(pvalues)
