@@ -808,11 +808,48 @@ def main():
         for trait_name, trait_label in zip(raw_labels, final_labels):
             print()
             print(f"-- Trait: {trait_name} (label: {trait_label}) --")
+
+            trait_numeric = pd.to_numeric(phe_df[trait_name], errors="coerce")
+            trait_values = trait_numeric.to_numpy()
+            valid_mask = np.isfinite(trait_values)
+            n_valid = int(valid_mask.sum())
+            if n_valid == 0:
+                print(f"   ❌ Trait '{trait_name}' has no non-missing values after matching — skipping")
+                continue
+
+            n_dropped = int(len(valid_mask) - n_valid)
+            if n_dropped > 0:
+                print(f"   Removing {n_dropped} individuals with missing {trait_name} measurements")
+
+            trait_pheno_df = phe_df.loc[valid_mask, ['ID', trait_name]].copy()
+            trait_pheno_df[trait_name] = trait_values[valid_mask]
+
+            if n_dropped == 0:
+                trait_genotype_matrix = matched_data['genotype_matrix']
+            else:
+                geno_subset = matched_data['genotype_matrix'][valid_mask, :]
+                trait_genotype_matrix = GenotypeMatrix(geno_subset)
+
+            pcs_full = population_structure['pcs']
+            trait_pcs = pcs_full[valid_mask, :] if pcs_full is not None else None
+            trait_population_structure = {}
+            if trait_pcs is not None:
+                trait_population_structure['pcs'] = trait_pcs
+
+            if 'kinship' in population_structure:
+                kinship_full = population_structure['kinship']
+                kinship_subset = kinship_full[np.ix_(valid_mask, valid_mask)]
+                trait_population_structure['kinship'] = kinship_subset
+
+            if 'pcs' not in trait_population_structure:
+                # Keep interface consistent if PCA was skipped (n_pcs=0).
+                trait_population_structure['pcs'] = np.zeros((n_valid, 0))
+
             gwas_results = run_gwas_analysis(
-                phe_df,
-                matched_data['genotype_matrix'],
+                trait_pheno_df,
+                trait_genotype_matrix,
                 data['geno_map'],
-                population_structure,
+                trait_population_structure,
                 trait_name=trait_name,
                 methods=methods,
                 max_iterations=args.max_iterations,
@@ -832,7 +869,7 @@ def main():
 
             analysis_results = analyze_results_and_save(
                 gwas_results,
-                matched_data['genotype_matrix'],
+                trait_genotype_matrix,
                 data['geno_map'],
                 args.output,
                 base_significance,
