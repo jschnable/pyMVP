@@ -89,6 +89,13 @@ def load_and_validate_data(phenotype_file: str,
             genotype_file, file_format=genotype_format, **loader_kwargs
         )
         print(f"   Loaded {genotype_matrix.n_individuals} individuals x {genotype_matrix.n_markers} markers")
+        if genotype_format == 'vcf':
+            chrom_labels = geno_map.to_dataframe()['CHROM'].astype(str).unique()
+            non_numeric_chroms = [label for label in chrom_labels if not label.isdigit()]
+            if non_numeric_chroms:
+                print("   Note: htslib may print [W::vcf_parse] messages when ##contig lines are missing.")
+                print("         These warnings do not affect pyMVP results.")
+                print("         Set HTS_LOG_LEVEL=error to hide them if you prefer a quiet log.")
     except Exception as e:
         raise ValueError(f"Error loading genotype file: {e}")
     
