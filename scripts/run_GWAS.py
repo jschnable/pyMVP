@@ -403,6 +403,8 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
     })
     base_df['MAF'] = maf
     
+    suffix = f"_{trait_label}" if trait_label else ""
+
     # Add results from each method
     all_results_df = base_df.copy()
     significant_snps = []
@@ -468,7 +470,6 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
         print(f"   {method}: {res_summary['n_identified']} markers/clusters with RMIP > 0 (runs={res_result.total_runs})")
 
     # Save all results
-    suffix = f"_{trait_label}" if trait_label else ""
     if save_all_results:
         all_results_file = output_path / f"GWAS{suffix}_all_results.csv"
         all_results_df.to_csv(all_results_file, index=False)
