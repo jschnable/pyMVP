@@ -64,10 +64,12 @@ def MVP_Report(results: Union[AssociationResults, Dict],
     # Handle different input types
     if isinstance(results, AssociationResults):
         results_dict = {'GWAS': results}
+    elif isinstance(results, FarmCPUResamplingResults):
+        results_dict = {'FarmCPUResampling': results}
     elif isinstance(results, dict):
         results_dict = results
     else:
-        raise ValueError("Results must be AssociationResults object or dictionary")
+        raise ValueError("Results must be AssociationResults, FarmCPUResamplingResults, or dictionary")
 
     contains_resampling = any(
         isinstance(result_obj, FarmCPUResamplingResults)
