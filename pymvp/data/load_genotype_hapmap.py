@@ -4,7 +4,7 @@ HapMap (.hmp or .hmp.txt) loader: builds (geno_matrix, individual_ids, geno_map)
 
 Spec highlights:
 - Tab-delimited text, fixed 11 metadata columns, samples start at column 12
-- Header columns (exact names): rs#, alleles, chrom, pos, strand, assembly#, center, protLSID, assayLSID, panelLSID, QCcode, <sample...>
+- Header columns: rs#, alleles, chrom, pos, strand, assembly#, center, protLSID, assayLSID, panelLSID, QCcode, <sample...> (# characters are optional)
 - Genotypes: single IUPAC character per cell: A,C,G,T (hom), M,R,W,S,Y,K (hets), N (missing). Lowercase allowed.
 - Alleles field is REF/ALT, e.g., A/C. Use the right allele (ALT) to define dosage: REF=0, HET=1, ALT=2.
 
@@ -52,8 +52,15 @@ def _parse_header(line: str) -> List[str]:
     cols = [c.strip() for c in line.rstrip('\n').split('\t')]
     if len(cols) < 12:
         raise ValueError('HapMap header must have at least 12 columns (11 metadata + >=1 sample)')
-    # Validate first 11 headers (exact match, case-sensitive)
-    if cols[:11] != _HAPMAP_HEADER:
+    # Validate first 11 headers with optional # characters and panelLSID/panel variation
+    normalized_cols = [col.rstrip('#') for col in cols[:11]]
+    normalized_expected = [col.rstrip('#') for col in _HAPMAP_HEADER]
+
+    # Handle the panelLSID/panel variation at position 9
+    if len(normalized_cols) > 9 and normalized_cols[9] == 'panel':
+        normalized_cols[9] = 'panelLSID'
+
+    if normalized_cols != normalized_expected:
         raise ValueError('Invalid HapMap header columns. Expected first 11 columns: ' + ','.join(_HAPMAP_HEADER))
     return cols
 
@@ -62,8 +69,26 @@ def _code_cell(geno_char: str, ref: str, alt: str) -> int:
     if not geno_char:
         return MISSING
     g = geno_char.strip().upper()
-    if g in ('N', '-', '?'):
+    if g in ('N', '-', '?', 'NN'):
         return MISSING
+
+    # Handle diploid format (e.g., "AA", "CC", "AC")
+    if len(g) == 2:
+        allele1, allele2 = g[0], g[1]
+        # Count occurrences of ref and alt alleles
+        ref_count = (allele1 == ref) + (allele2 == ref)
+        alt_count = (allele1 == alt) + (allele2 == alt)
+
+        if ref_count == 2:
+            return 0  # Homozygous reference
+        elif alt_count == 2:
+            return 2  # Homozygous alternate
+        elif ref_count == 1 and alt_count == 1:
+            return 1  # Heterozygous
+        else:
+            return MISSING  # Contains alleles not in ref/alt
+
+    # Handle single character format (original IUPAC)
     # Allowed direct homozygote calls
     if g == ref:
         return 0
