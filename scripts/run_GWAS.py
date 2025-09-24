@@ -36,6 +36,7 @@ from pymvp.association.farmcpu_resampling import (
 from pymvp.association.glm import MVP_GLM
 from pymvp.association.mlm import MVP_MLM
 from pymvp.association.farmcpu import MVP_FarmCPU
+from pymvp.association.blink import MVP_BLINK
 from pymvp.matrix.pca import MVP_PCA
 from pymvp.matrix.kinship import MVP_K_VanRaden
 from pymvp.visualization.manhattan import MVP_Report
@@ -191,9 +192,10 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                      geno_map,
                      population_structure: Dict[str, Any],
                      trait_name: str,
-                     methods: List[str] = ['GLM', 'MLM', 'FARMCPU'],
+                     methods: List[str] = ['GLM', 'MLM', 'FARMCPU', 'BLINK'],
                      max_iterations: int = 10,
                      farmcpu_resampling_params: Optional[Dict[str, Any]] = None,
+                     blink_params: Optional[Dict[str, Any]] = None,
                      default_significance: Optional[float] = None
                      ) -> Dict[str, Union[AssociationResults, FarmCPUResamplingResults]]:
     """Run GWAS analysis using specified methods for a single trait.
@@ -252,6 +254,8 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
             "the QTN threshold cannot enter later FarmCPU iterations."
         )
     
+    blink_params = blink_params or {}
+
     # GLM Analysis
     if 'GLM' in methods:
         step_start = time.time()
@@ -329,6 +333,36 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
             
         except Exception as e:
             print(f"   FarmCPU analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # BLINK Analysis
+    if 'BLINK' in methods:
+        step_start = time.time()
+        print_step("Running BLINK analysis")
+
+        try:
+            blink_results = MVP_BLINK(
+                phe=phe_array,
+                geno=genotype_matrix,
+                map_data=geno_map,
+                CV=pcs,
+                maxLoop=max_iterations,
+                ld_threshold=blink_params.get('ld_threshold', 0.7),
+                maf_threshold=blink_params.get('maf_threshold', 0.0),
+                bic_method=blink_params.get('bic_method', 'naive'),
+                method_sub=blink_params.get('method_sub', 'reward'),
+                p_threshold=blink_params.get('p_threshold', None),
+                verbose=False,
+            )
+            results['BLINK'] = blink_results
+
+            lambda_gc = genomic_inflation_factor(blink_results.pvalues)
+            print(f"   BLINK lambda (genomic inflation): {lambda_gc:.3f}")
+            print_step("BLINK analysis", step_start)
+
+        except Exception as e:
+            print(f"   BLINK analysis failed: {e}")
             import traceback
             traceback.print_exc()
 
@@ -622,8 +656,8 @@ def main():
     parser.add_argument("--format", "-f", default=None, 
                        choices=['csv', 'tsv', 'numeric', 'vcf', 'plink', 'hapmap'],
                        help="Genotype file format (auto-detect if not specified)")
-    parser.add_argument("--methods", default="GLM,MLM,FarmCPU",
-                       help="GWAS methods to run (comma-separated: GLM,MLM,FarmCPU,FarmCPUResampling)")
+    parser.add_argument("--methods", default="GLM,MLM,FarmCPU,BLINK",
+                       help="GWAS methods to run (comma-separated: GLM,MLM,FarmCPU,BLINK,FarmCPUResampling)")
     parser.add_argument("--n-pcs", type=int, default=3,
                        help="Number of principal components to use")
     parser.add_argument("--significance", type=float, default=None,
@@ -646,6 +680,18 @@ def main():
                        help="Per-run p-value threshold for FarmCPU resampling (defaults to Bonferroni alpha / n_tests)")
     parser.add_argument("--farmcpu-resampling-seed", type=int, default=None,
                        help="Random seed for FarmCPU resampling phenotype masking")
+    parser.add_argument("--blink-ld-threshold", type=float, default=0.7,
+                       help="LD r^2 threshold for BLINK pseudo-QTN pruning")
+    parser.add_argument("--blink-bic-method", default="naive",
+                       choices=['naive','even','lg','ln','fixed'],
+                       help="BLINK BIC scanning strategy")
+    parser.add_argument("--blink-method-sub", default="reward",
+                       choices=['reward','penalty','mean','median','onsite'],
+                       help="BLINK pseudo-QTN substitution rule for report tables")
+    parser.add_argument("--blink-maf-threshold", type=float, default=0.0,
+                       help="Minor allele frequency filter applied before BLINK")
+    parser.add_argument("--blink-p-threshold", type=float, default=None,
+                       help="Optional BLINK iteration-2 p-value threshold override")
     parser.add_argument("--traits", default=None,
                        help="Comma-separated list of trait column names (auto-detect if not specified)")
     # Output selection
@@ -706,7 +752,7 @@ def main():
             print(f"Parsed {len(true_qtns)} true QTNs from command line")
     
     # Validate methods
-    valid_methods = ['GLM', 'MLM', 'FARMCPU', 'FARMCPU_RESAMPLING']
+    valid_methods = ['GLM', 'MLM', 'FARMCPU', 'BLINK', 'FARMCPU_RESAMPLING']
     for method in methods:
         if method not in valid_methods:
             raise ValueError(f"Invalid method: {method}. Valid methods: {valid_methods}")
@@ -738,6 +784,14 @@ def main():
             'cluster_markers': args.farmcpu_resampling_cluster,
             'ld_threshold': args.farmcpu_resampling_ld_threshold,
             'random_seed': args.farmcpu_resampling_seed,
+        }
+
+        blink_params = {
+            'ld_threshold': args.blink_ld_threshold,
+            'bic_method': args.blink_bic_method,
+            'method_sub': args.blink_method_sub,
+            'maf_threshold': args.blink_maf_threshold,
+            'p_threshold': args.blink_p_threshold,
         }
 
         # Step 1: Load and validate data
@@ -862,6 +916,7 @@ def main():
                 methods=methods,
                 max_iterations=args.max_iterations,
                 farmcpu_resampling_params=(resampling_params if 'FARMCPU_RESAMPLING' in methods else None),
+                blink_params=blink_params,
                 default_significance=base_significance
             )
             if not gwas_results:

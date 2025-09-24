@@ -12,6 +12,7 @@ from ..utils.data_types import Phenotype, GenotypeMatrix, GenotypeMap, KinshipMa
 from ..association.glm import MVP_GLM
 from ..association.mlm import MVP_MLM
 from ..association.farmcpu import MVP_FarmCPU
+from ..association.blink import MVP_BLINK
 from ..association.farmcpu_resampling import MVP_FarmCPUResampling
 from ..matrix.kinship import MVP_K_VanRaden
 from ..matrix.pca import MVP_PCA
@@ -44,7 +45,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
         map_data: Genetic map data (file path, DataFrame, or GenotypeMap object)
         K: Kinship matrix (optional, calculated if not provided for MLM/FarmCPU)
         CV: Covariate matrix (optional)
-        method: GWAS methods to run ["GLM", "MLM", "FarmCPU"]
+        method: GWAS methods to run ["GLM", "MLM", "FarmCPU", "BLINK", "FarmCPUResampling"]
         ncpus: Number of CPU cores to use
         vc_method: Variance component method for MLM ["BRENT", "EMMA", "HE"]
         maxLine: Batch size for marker processing
@@ -200,6 +201,16 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
             key: kwargs[key] for key in farmcpu_extra_keys if key in kwargs
         }
 
+        blink_extra_keys = [
+            'maxLoop', 'converge', 'ld_threshold', 'maf_threshold',
+            'bic_method', 'method_sub', 'p_threshold', 'qtn_threshold',
+            'cut_off', 'fdr_cut'
+        ]
+        blink_kwargs = {key: kwargs[key] for key in blink_extra_keys if key in kwargs}
+        blink_prior = kwargs.get('Prior', kwargs.get('prior'))
+        if blink_prior is not None:
+            blink_kwargs['Prior'] = blink_prior
+
         # Phase 3: Association Analysis
         if verbose:
             print(f"\n[Phase 3] Running association analysis...")
@@ -299,6 +310,36 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
             
             if verbose:
                 print(f"FarmCPU analysis complete ({farmcpu_time:.2f}s)")
+                print(f"  Significant markers (p < {threshold}): {n_sig}")
+
+        # Run BLINK
+        if "BLINK" in method:
+            if verbose:
+                print("\nRunning BLINK analysis...")
+
+            blink_start = time.time()
+            blink_results = MVP_BLINK(
+                phe=phenotype_array,
+                geno=genotype,
+                map_data=genetic_map,
+                CV=CV,
+                maxLine=maxLine,
+                cpu=ncpus,
+                verbose=verbose,
+                **blink_kwargs,
+            )
+            blink_time = time.time() - blink_start
+
+            analysis_results['results']['BLINK'] = blink_results
+            analysis_results['summary']['methods_run'].append('BLINK')
+            analysis_results['summary']['runtime']['BLINK'] = blink_time
+
+            blink_pvals = blink_results.to_numpy()[:, 2]
+            n_sig = np.sum(blink_pvals < threshold)
+            analysis_results['summary']['significant_markers']['BLINK'] = int(n_sig)
+
+            if verbose:
+                print(f"BLINK analysis complete ({blink_time:.2f}s)")
                 print(f"  Significant markers (p < {threshold}): {n_sig}")
 
         # Run FarmCPU Resampling

@@ -83,7 +83,7 @@ pip install -e .[all]    # All optional loaders
 
 ## Quickstart (run_GWAS.py)
 
-The `scripts/run_GWAS.py` CLI runs the full pipeline: loading, QC, PCA/kinship, association (GLM/MLM/FarmCPU/FarmCPUResampling), saving results, and optional plots.
+The `scripts/run_GWAS.py` CLI runs the full pipeline: loading, QC, PCA/kinship, association (GLM/MLM/FarmCPU/BLINK/FarmCPUResampling), saving results, and optional plots.
 
 Minimal example (CSV/TSV numeric genotypes):
 
@@ -99,6 +99,10 @@ VCF/BCF (auto-detected):
 ```bash
 python scripts/run_GWAS.py -p data/phe.csv -g data/geno.vcf.gz --methods GLM,MLM --max-missing 0.2 --min-maf 0.01
 # For .bcf or faster VCF: pip install .[vcf]
+
+# Run BLINK alongside GLM/MLM and tighten LD pruning
+python scripts/run_GWAS.py -p data/phe.csv -g data/geno.vcf.gz --methods GLM,BLINK \\
+  --blink-ld-threshold 0.6 --blink-bic-method even
 ```
 
 PLINK .bed (requires bed-reader):

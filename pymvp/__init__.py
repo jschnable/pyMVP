@@ -27,6 +27,7 @@ from .matrix.pca import MVP_PCA
 from .association.glm import MVP_GLM
 from .association.mlm import MVP_MLM
 from .association.farmcpu import MVP_FarmCPU
+from .association.blink import MVP_BLINK
 from .association.farmcpu_resampling import MVP_FarmCPUResampling
 from .visualization.manhattan import MVP_Report
 
@@ -39,6 +40,7 @@ __all__ = [
     'MVP_GLM',
     'MVP_MLM',
     'MVP_FarmCPU',
+    'MVP_BLINK',
     'MVP_FarmCPUResampling',
     'MVP_Report'
 ]

@@ -469,55 +469,33 @@ def MVP_FarmCPU(phe: np.ndarray,
 
 
 def _get_covariate_statistics(phe: np.ndarray, covariates: np.ndarray, verbose: bool = False):
-    """
-    Get covariate p-values, effects, and standard errors by fitting a linear model
-    
-    This replicates rMVP's approach to extract fixed effect statistics for pseudo-QTNs
-    """
+    """Replicate GAPIT/FarmCPU fixed effect estimation for pseudo-QTNs."""
     from scipy import stats
-    
-    # Extract trait values
+
+    if covariates is None or covariates.size == 0:
+        return np.array([]), np.array([]), np.array([])
+
     trait_values = phe[:, 1].astype(np.float64)
-    
-    # Set up design matrix with intercept and covariates
-    X = np.column_stack([np.ones(len(trait_values)), covariates])
-    
+    X = np.column_stack([np.ones(trait_values.shape[0]), covariates])
+
     try:
         XtX = X.T @ X
-        XtX_inv = np.linalg.pinv(XtX, rcond=1e-10)
-        Xt_y = X.T @ trait_values
-        beta = XtX_inv @ Xt_y
-
-        y_pred = X @ beta
-        residuals = trait_values - y_pred
-        rss = float(np.sum(residuals ** 2))
-
-        df_residual = len(trait_values) - X.shape[1]
-        if df_residual <= 0:
-            return (np.ones(covariates.shape[1]), np.zeros(covariates.shape[1]), np.ones(covariates.shape[1]))
-
-        sigma2 = rss / df_residual
-        var_beta = sigma2 * np.diag(XtX_inv)
-        se_beta = np.sqrt(np.maximum(var_beta, 0.0))
-
-        covariate_effects = beta[1:]
-        covariate_se = se_beta[1:]
-
-        covariate_pvals = np.ones_like(covariate_effects)
-        valid = covariate_se > 0
-        if np.any(valid):
-            t_stats = np.zeros_like(covariate_effects)
-            t_stats[valid] = covariate_effects[valid] / covariate_se[valid]
-            covariate_pvals[valid] = 2 * stats.t.sf(np.abs(t_stats[valid]), df_residual)
-
-        return covariate_pvals, covariate_effects, covariate_se
-
+        XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
+        beta = XtX_inv @ (X.T @ trait_values)
+        residuals = trait_values - X @ beta
+        df = trait_values.shape[0] - X.shape[1]
+        if df <= 0:
+            raise np.linalg.LinAlgError
+        ve = float(residuals @ residuals) / df
+        se = np.sqrt(np.maximum(np.diag(XtX_inv) * ve, 1e-30))
+        t_stats = np.divide(beta, se, out=np.zeros_like(beta), where=se > 0)
+        p_vals = 2 * stats.t.sf(np.abs(t_stats), df)
+        return p_vals[1:], beta[1:], se[1:]
     except np.linalg.LinAlgError:
         if verbose:
             print("Warning: Failed to compute covariate statistics due to singular matrix")
-    
-    # Fallback: return neutral values
-    n_covariates = covariates.shape[1]
+        n_covariates = covariates.shape[1]
+        return (np.ones(n_covariates), np.zeros(n_covariates), np.ones(n_covariates))
     return (np.ones(n_covariates), 
             np.zeros(n_covariates), 
             np.ones(n_covariates))
@@ -850,95 +828,133 @@ def remove_qtns_by_ld(selected_qtns: List[int],
                      map_data: Optional[GenotypeMap] = None,
                      within_chrom_only: bool = False,
                      verbose: bool = False,
-                     debug: bool = False) -> List[int]:
-    """Remove correlated QTNs using LD-based filtering (matches R FarmCPU.Remove)
-    
-    Based on R implementation lines 1021-1121 in FarmCPU.Remove:
-    1. Calculate correlation matrix on subset of individuals (max 100,000)
-    2. Use first N individuals, not random sampling
-    3. Remove correlated QTNs using lower triangular masking
-    4. Preserve QTNs in order of significance
-    
-    Args:
-        selected_qtns: List of QTN indices to filter
-        genotype_matrix: Genotype data (individuals × markers)
-        correlation_threshold: Correlation threshold for removal (default 0.7)
-        max_individuals: Maximum individuals to use for correlation calculation
-        verbose: Print progress
-    
-    Returns:
-        Filtered list of QTN indices
+                     debug: bool = False,
+                     ld_max: Optional[int] = 50,
+                     block_size: int = 1000) -> List[int]:
+    """Remove correlated QTNs using GAPIT/BLINK block-based LD pruning.
+
+    This mirrors the behaviour of ``Blink.LDRemove`` / ``Blink.LDRemoveBlock`` by
+    processing significant SNPs in fixed-size blocks (default 1,000) and
+    iteratively pruning SNPs whose pairwise correlation exceeds the supplied
+    threshold. Optional ``ld_max`` limits the number of retained QTNs, matching
+    GAPIT's ``LD.num`` parameter (default 50).
     """
-    
+
     if len(selected_qtns) <= 1:
-        return selected_qtns  # Nothing to filter
-    
+        return selected_qtns
+
     if verbose:
         scope = "within-chromosome" if within_chrom_only else "genome-wide"
         print(f"LD filtering: {len(selected_qtns)} QTNs, threshold={correlation_threshold} ({scope})")
-    
-    # Step 1: Extract genotype data for selected QTNs
+
+    # Step 1: Extract genotypes for the candidate QTNs
     if isinstance(genotype_matrix, GenotypeMatrix):
-        # Extract QTN genotypes (imputed) in a single call
-        qtn_genotypes = genotype_matrix.get_columns_imputed(selected_qtns)
+        qtn_genotypes = genotype_matrix.get_columns_imputed(selected_qtns).astype(np.float64, copy=True)
         n_individuals = genotype_matrix.n_individuals
     else:
-        qtn_genotypes = genotype_matrix[:, selected_qtns]
+        qtn_genotypes = np.asarray(genotype_matrix[:, selected_qtns], dtype=np.float64)
         n_individuals = genotype_matrix.shape[0]
-    
-    # Step 2: Subset individuals for correlation calculation (R: use first N, not random)
+
+    # Step 2: Use the first ``max_individuals`` individuals (GAPIT behaviour)
     sampled_individuals = min(n_individuals, max_individuals)
-    qtn_subset = qtn_genotypes[:sampled_individuals, :]  # Use first N individuals
-    
-    if verbose:
-        print(f"Using {sampled_individuals} individuals for LD calculation")
-    
-    # Step 3: Calculate correlation matrix
-    try:
-        # Handle missing values by excluding them pairwise
-        correlation_matrix = np.corrcoef(qtn_subset.T)  # marker-by-marker correlation
-        
-        # Handle NaN correlations (e.g., from markers with no variation)
-        correlation_matrix = np.nan_to_num(correlation_matrix, nan=0.0)
-        
-    except Exception as e:
-        if verbose:
-            warnings.warn(f"Correlation calculation failed: {e}")
-        return selected_qtns  # Return original list if correlation fails
-    
-    # Step 4: Apply LD filtering with exact precedence (keep earlier by p-value order)
-    n_qtns = len(selected_qtns)
-    keep_mask = np.ones(n_qtns, dtype=bool)
+    qtn_subset = qtn_genotypes[:sampled_individuals, :]
 
-    # Consider only within-chromosome pairs if requested
+    # Treat missing calls (-9) as NaN so correlations are punished
+    missing_mask = (qtn_subset == -9)
+    if missing_mask.any():
+        qtn_subset = qtn_subset.copy()
+        qtn_subset[missing_mask] = np.nan
+
+    # Drop zero-variance SNPs prior to LD pruning
+    std_dev = np.nanstd(qtn_subset, axis=0)
+    variance_mask = std_dev > 1e-12
+    candidate_array = np.asarray(selected_qtns, dtype=int)[variance_mask]
+    qtn_subset = qtn_subset[:, variance_mask]
+
+    if candidate_array.size <= 1:
+        return candidate_array.tolist()
+
+    if verbose and candidate_array.size != len(selected_qtns):
+        dropped = len(selected_qtns) - candidate_array.size
+        print(f"LD filtering: dropped {dropped} zero-variance QTNs before correlation")
+
+    # Pre-compute chromosome equality mask if required
+    same_chrom_matrix: Optional[np.ndarray]
     if within_chrom_only and map_data is not None:
-        map_df = map_data.to_dataframe()
-        chrom_vec = map_df['CHROM'].to_numpy()
-        chrom_sel = chrom_vec[np.array(selected_qtns, dtype=int)]
-        same_chrom = (chrom_sel[:, None] == chrom_sel[None, :])
+        chrom_vec = map_data.to_dataframe()['CHROM'].to_numpy()
+        chrom_sel = chrom_vec[candidate_array]
+        same_chrom_matrix = chrom_sel[:, None] == chrom_sel[None, :]
     else:
-        same_chrom = np.ones((n_qtns, n_qtns), dtype=bool)
+        same_chrom_matrix = None
 
-    # Use absolute correlation as in rMVP's Remove step
-    abs_corr = np.abs(correlation_matrix)
+    block_size = max(1, min(block_size, candidate_array.size))
+    truncated = False
+    retained_indices: List[int] = []
+    retained_positions: List[int] = []
 
-    # Iterate in order, drop later ones when highly correlated with any kept earlier one on same chromosome
-    for i in range(n_qtns):
+    for start in range(0, candidate_array.size, block_size):
+        end = min(start + block_size, candidate_array.size)
+        block_data = qtn_subset[:, start:end]
+        block_indices = candidate_array[start:end]
+        same_block = (
+            same_chrom_matrix[start:end, start:end] if same_chrom_matrix is not None else None
+        )
+        keep_mask = _ld_remove_block(block_data, correlation_threshold, same_block)
+        retained_indices.extend(int(idx) for idx, keep in zip(block_indices, keep_mask) if keep)
+        retained_positions.extend(start + i for i, keep in enumerate(keep_mask) if keep)
+
+        if ld_max is not None and ld_max > 0 and len(retained_indices) >= ld_max:
+            retained_indices = retained_indices[:ld_max]
+            retained_positions = retained_positions[:ld_max]
+            truncated = True
+            if verbose:
+                print(f"LD filtering truncated after reaching ld_max={ld_max}")
+            break
+
+    # If we processed multiple blocks without truncation, run a final LD pass on retained SNPs
+    if not truncated and candidate_array.size > block_size and len(retained_indices) > 1:
+        unique_positions = sorted(set(retained_positions))
+        reduced_data = qtn_subset[:, unique_positions]
+        same_reduced = (
+            same_chrom_matrix[np.ix_(unique_positions, unique_positions)]
+            if same_chrom_matrix is not None else None
+        )
+        keep_mask = _ld_remove_block(reduced_data, correlation_threshold, same_reduced)
+        retained_indices = [int(candidate_array[unique_positions[i]]) for i, keep in enumerate(keep_mask) if keep]
+
+    if ld_max is not None and ld_max > 0 and len(retained_indices) > ld_max:
+        retained_indices = retained_indices[:ld_max]
+
+    if verbose:
+        print(f"LD filtering complete: {len(retained_indices)}/{len(selected_qtns)} QTNs retained")
+
+    return retained_indices
+
+
+def _ld_remove_block(gd_block: np.ndarray,
+                     correlation_threshold: float,
+                     same_chrom: Optional[np.ndarray]) -> np.ndarray:
+    """Replicate Blink.LDRemoveBlock for a single matrix chunk."""
+
+    n_markers = gd_block.shape[1]
+    if n_markers == 0:
+        return np.zeros(0, dtype=bool)
+
+    masked = np.ma.masked_invalid(gd_block)
+    corr = np.ma.corrcoef(masked, rowvar=False).filled(np.nan)
+    corr = np.where(np.isnan(corr), 1.0, corr)
+
+    keep_mask = np.ones(n_markers, dtype=bool)
+    for i in range(n_markers):
         if not keep_mask[i]:
             continue
         for j in range(i):
-            if keep_mask[j] and same_chrom[i, j] and abs_corr[i, j] > correlation_threshold:
+            if not keep_mask[j]:
+                continue
+            if same_chrom is not None and not same_chrom[i, j]:
+                continue
+            if abs(corr[i, j]) > correlation_threshold:
                 keep_mask[i] = False
-                if verbose or debug:
-                    print(f"Removing QTN {selected_qtns[i]} (chr={chrom_sel[i] if within_chrom_only and map_data is not None else 'NA'}) "
-                          f"due to high LD with {selected_qtns[j]} (chr={chrom_sel[j] if within_chrom_only and map_data is not None else 'NA'}): "
-                          f"r={correlation_matrix[i, j]:.4f}, |r|={abs_corr[i, j]:.4f}")
                 break
 
-    # Step 5: Return filtered QTNs
-    filtered_qtns = [selected_qtns[i] for i in range(n_qtns) if keep_mask[i]]
-    
-    if verbose:
-        print(f"LD filtering complete: {len(filtered_qtns)}/{len(selected_qtns)} QTNs retained")
-    
-    return filtered_qtns
+    return keep_mask
