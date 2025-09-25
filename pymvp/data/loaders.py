@@ -77,6 +77,33 @@ def detect_file_format(filepath: Union[str, Path]) -> str:
     except:
         return 'unknown'
 
+
+def _detect_numeric_separator(filepath: Union[str, Path]) -> str:
+    """Heuristically determine the delimiter for numeric genotype matrices."""
+    filepath = Path(filepath)
+    try:
+        with filepath.open('r') as handle:
+            # Inspect up to the first 10 non-empty header lines to decide.
+            for _ in range(10):
+                line = handle.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                comma_count = line.count(',')
+                tab_count = line.count('\t')
+                if tab_count or comma_count:
+                    # Prefer the character that appears more frequently.
+                    return '\t' if tab_count >= comma_count else ','
+    except OSError:
+        pass
+
+    # Default to comma if the structure was ambiguous; this avoids collapsing
+    # every marker into a single column when a comma-separated file is treated
+    # as tab-delimited.
+    return ','
+
 def load_phenotype_file(filepath: Union[str, Path], 
                        trait_columns: Optional[List[str]] = None,
                        id_column: str = 'ID') -> pd.DataFrame:
@@ -254,7 +281,13 @@ def load_genotype_file(filepath: Union[str, Path],
 
     if file_format in ['csv', 'tsv', 'numeric']:
         # Load as CSV/TSV with numeric genotypes
-        separator = ',' if file_format == 'csv' else '\t'
+        if file_format == 'csv':
+            separator = ','
+        elif file_format == 'tsv':
+            separator = '\t'
+        else:
+            separator = _detect_numeric_separator(filepath)
+
         # Use fast, consistent parsing and avoid mixed-type inference
         df = pd.read_csv(filepath, sep=separator, low_memory=False)
 
