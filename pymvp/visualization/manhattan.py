@@ -10,6 +10,7 @@ from matplotlib.colors import ListedColormap
 import seaborn as sns
 from typing import Optional, Union, Dict, List, Tuple
 import warnings
+import re
 
 from ..utils.data_types import AssociationResults, GenotypeMap
 from ..association.farmcpu_resampling import FarmCPUResamplingResults
@@ -205,9 +206,8 @@ def MVP_Report(results: Union[AssociationResults, Dict],
                     print(f"Creating RMIP Manhattan plot for {method_name}...")
 
                 rmip_fig = create_rmip_manhattan_plot(
-                    chromosomes=result_obj.chromosomes,
-                    positions=result_obj.positions,
-                    rmip_values=rmip_values,
+                    result=result_obj,
+                    map_data=map_data,
                     title=f"FarmCPU Resampling - RMIP ({method_name})",
                     figsize=figsize,
                     colors=colors,
@@ -409,39 +409,81 @@ def create_manhattan_plot(pvalues: np.ndarray,
     return fig
 
 
-def create_rmip_manhattan_plot(chromosomes: np.ndarray,
-                               positions: np.ndarray,
-                               rmip_values: np.ndarray,
-                               title: str,
+def create_rmip_manhattan_plot(result: FarmCPUResamplingResults,
+                               map_data: Optional[GenotypeMap] = None,
+                               title: str = "",
                                figsize: Tuple[int, int] = (12, 6),
                                colors: Optional[List[str]] = None,
                                point_size: float = 10.0) -> plt.Figure:
-    """Create Manhattan-style plot using RMIP values on the y-axis."""
+    """Create Manhattan-style plot using RMIP values on the y-axis.
+
+    When map information is available we expand the RMIP vector so that
+    chromosomes with zero-RMIP markers are still rendered, avoiding the
+    impression that they were omitted from the analysis. Identified markers
+    are highlighted with a secondary overlay.
+    """
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    if len(rmip_values) == 0:
+    if result.total_runs == 0:
         ax.set_xlabel('Chromosome', fontsize=12)
         ax.set_ylabel('RMIP', fontsize=12)
-        if title and title.strip():
-            ax.set_title(title)
-        ax.text(0.5, 0.5, 'No markers identified', transform=ax.transAxes,
-                ha='center', va='center', fontsize=12)
+        ax.text(0.5, 0.5, 'No FarmCPU resampling runs recorded',
+                transform=ax.transAxes, ha='center', va='center', fontsize=12)
         plt.tight_layout()
         return fig
 
+    highlight_mask: Optional[np.ndarray]
+
     try:
+        if map_data is not None:
+            map_df = map_data.to_dataframe()
+            chromosomes = map_df['CHROM'].to_numpy()
+            positions = map_df['POS'].to_numpy(dtype=np.float64)
+
+            n_markers = len(map_df)
+            rmip_values = np.zeros(n_markers, dtype=np.float64)
+            scale = 1.0 / float(result.total_runs)
+            for marker_index, count in result.per_marker_counts.items():
+                idx = int(marker_index)
+                if 0 <= idx < n_markers:
+                    rmip_values[idx] = float(count) * scale
+
+            highlight_mask = rmip_values > 0
+        else:
+            chromosomes = result.chromosomes
+            positions = result.positions
+            rmip_values = result.rmip_values
+            highlight_mask = np.ones_like(rmip_values, dtype=bool)
+
+        if rmip_values.size == 0:
+            ax.set_xlabel('Chromosome', fontsize=12)
+            ax.set_ylabel('RMIP', fontsize=12)
+            if title and title.strip():
+                ax.set_title(title)
+            ax.text(0.5, 0.5, 'No markers identified', transform=ax.transAxes,
+                    ha='center', va='center', fontsize=12)
+            plt.tight_layout()
+            return fig
+
         plot_manhattan_with_positions(
             ax,
             np.asarray(chromosomes),
             np.asarray(positions, dtype=np.float64),
             np.asarray(rmip_values, dtype=np.float64),
             colors=colors,
-            point_size=point_size
+            point_size=point_size,
+            highlight_mask=highlight_mask,
+            highlight_kwargs={'s': point_size * 1.6,
+                              'facecolors': 'none',
+                              'edgecolors': 'black',
+                              'linewidths': 0.5,
+                              'zorder': 9}
         )
     except Exception as exc:
         warnings.warn(f"Falling back to sequential RMIP plotting: {exc}")
-        plot_manhattan_sequential(ax, np.asarray(rmip_values, dtype=np.float64), point_size=point_size)
+        rmip_values = np.asarray(result.rmip_values, dtype=np.float64)
+        plot_manhattan_sequential(ax, rmip_values, point_size=point_size)
 
     ax.set_xlabel('Chromosome', fontsize=12)
     ax.set_ylabel('RMIP', fontsize=12)
@@ -453,14 +495,32 @@ def create_rmip_manhattan_plot(chromosomes: np.ndarray,
     return fig
 
 
+def _natural_sort_key(value) -> List[Union[int, str]]:
+    """Return a key for natural sorting of chromosome labels."""
+
+    text = str(value).strip()
+    if not text:
+        return [""]
+    parts = re.split(r'(\d+)', text)
+    key: List[Union[int, str]] = []
+    for part in parts:
+        if part.isdigit():
+            key.append(int(part))
+        else:
+            key.append(part.lower())
+    return key
+
+
 def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.ndarray,
                                  log_pvalues: np.ndarray, colors: Optional[List[str]] = None,
                                  point_size: float = 3.0, map_data: Optional[GenotypeMap] = None,
-                                 true_qtns: Optional[List[str]] = None):
+                                 true_qtns: Optional[List[str]] = None,
+                                 highlight_mask: Optional[np.ndarray] = None,
+                                 highlight_kwargs: Optional[Dict] = None):
     """Plot Manhattan plot with actual chromosomal positions"""
 
     unique_chromosomes = np.unique(chromosomes)
-    unique_chromosomes = sorted(unique_chromosomes, key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x)))
+    unique_chromosomes = sorted(unique_chromosomes, key=_natural_sort_key)
 
     # Default colors
     if colors is None:
@@ -472,13 +532,23 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
     tick_labels = []
 
     current_pos = 0
+    highlight_kwargs = highlight_kwargs or {}
+    if highlight_mask is not None and highlight_mask.shape != log_pvalues.shape:
+        raise ValueError("highlight_mask must match the shape of the plotted values")
+
     for i, chrom in enumerate(unique_chromosomes):
         chrom_mask = chromosomes == chrom
-        chrom_positions = positions[chrom_mask]
-        chrom_log_pvals = log_pvalues[chrom_mask]
-
-        if len(chrom_positions) == 0:
+        if not np.any(chrom_mask):
             continue
+
+        chrom_indices = np.where(chrom_mask)[0]
+        chrom_positions = positions[chrom_indices]
+        chrom_log_pvals = log_pvalues[chrom_indices]
+
+        order = np.argsort(chrom_positions, kind='mergesort')
+        chrom_positions = chrom_positions[order]
+        chrom_log_pvals = chrom_log_pvals[order]
+        indices_ordered = chrom_indices[order]
 
         # Normalize positions within chromosome
         min_pos = np.min(chrom_positions)
@@ -493,12 +563,25 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
 
         # Add to cumulative position (no gaps)
         plot_positions = current_pos + norm_positions
-        cumulative_pos[chrom_mask] = plot_positions
+        cumulative_pos[indices_ordered] = plot_positions
 
         # Plot points for this chromosome
         color = colors[i % len(colors)]
         ax.scatter(plot_positions, chrom_log_pvals,
                   c=color, s=point_size, alpha=0.8, edgecolors='none')
+
+        if highlight_mask is not None:
+            chrom_highlight = highlight_mask[indices_ordered]
+            if np.any(chrom_highlight):
+                highlight_positions = plot_positions[chrom_highlight]
+                highlight_values = chrom_log_pvals[chrom_highlight]
+                ax.scatter(highlight_positions,
+                           highlight_values,
+                           s=highlight_kwargs.get('s', point_size * 1.5),
+                           facecolors=highlight_kwargs.get('facecolors', 'none'),
+                           edgecolors=highlight_kwargs.get('edgecolors', 'black'),
+                           linewidths=highlight_kwargs.get('linewidths', 0.5),
+                           zorder=highlight_kwargs.get('zorder', 9))
 
         # Add tick for chromosome center
         tick_positions.append(current_pos + chrom_length / 2)

@@ -104,10 +104,28 @@ def load_and_validate_data(phenotype_file: str,
     if map_file:
         print_step("Loading genetic map")
         try:
-            geno_map = load_map_file(map_file)
-            print(f"   Loaded map for {geno_map.n_markers} markers")
+            supplied_map = load_map_file(map_file)
+            print(f"   Loaded map for {supplied_map.n_markers} markers")
+
+            if supplied_map.n_markers != geno_map.n_markers:
+                raise ValueError(
+                    "Map marker count ({}) does not match genotype marker count ({})."
+                    .format(supplied_map.n_markers, geno_map.n_markers)
+                )
+
+            # If SNP columns exist, ensure they line up with genotype ordering.
+            supplied_df = supplied_map.to_dataframe()
+            existing_df = geno_map.to_dataframe()
+            if 'SNP' in supplied_df.columns and 'SNP' in existing_df.columns:
+                mismatches = (supplied_df['SNP'].to_numpy() != existing_df['SNP'].to_numpy()).sum()
+                if mismatches:
+                    raise ValueError(
+                        f"Map SNP names do not match genotype ordering (found {mismatches} differences)."
+                    )
+
+            geno_map = supplied_map
         except Exception as e:
-            print(f"   Warning: Could not load map file: {e}")
+            raise ValueError(f"Error loading map file: {e}")
     
     print_step("Data loading", step_start)
     
@@ -164,13 +182,17 @@ def calculate_population_structure(genotype_matrix: GenotypeMatrix,
     step_start = time.time()
     print_step(f"Calculating {n_pcs} principal components")
     
-    try:
-        pcs = MVP_PCA(M=genotype_matrix, pcs_keep=n_pcs, verbose=False)
-        results['pcs'] = pcs
-        print(f"   Calculated {n_pcs} PCs explaining population structure")
-        print_step("PCA calculation", step_start)
-    except Exception as e:
-        raise ValueError(f"Error calculating PCs: {e}")
+    if n_pcs > 0:
+        try:
+            pcs = MVP_PCA(M=genotype_matrix, pcs_keep=n_pcs, verbose=False)
+            results['pcs'] = pcs
+            print(f"   Calculated {n_pcs} PCs explaining population structure")
+            print_step("PCA calculation", step_start)
+        except Exception as e:
+            raise ValueError(f"Error calculating PCs: {e}")
+    else:
+        results['pcs'] = np.zeros((genotype_matrix.n_individuals, 0))
+        print("   Skipping PCA (n_pcs=0)")
     
     # Calculate kinship matrix if needed
     if calculate_kinship:
@@ -517,13 +539,16 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
         print(f"   Saved all results to: {all_results_file}")
     
     # Save significant SNPs if any found
-    if save_significant and significant_snps:
-        sig_df = pd.concat(significant_snps, ignore_index=True)
-        sig_results_file = output_path / f"GWAS{suffix}_significant_SNPs_p{significance_threshold}.csv"
-        sig_df.to_csv(sig_results_file, index=False)
-        sig_results_file = output_path / f"GWAS{suffix}_significant_SNPs_p{global_threshold:.2e}.csv"
-        sig_df.to_csv(sig_results_file, index=False)
-        print(f"   Saved significant SNPs to: {sig_results_file}")
+    if significant_snps:
+        if save_significant:
+            sig_df = pd.concat(significant_snps, ignore_index=True)
+            sig_results_file = output_path / f"GWAS{suffix}_significant_SNPs_p{significance_threshold}.csv"
+            sig_df.to_csv(sig_results_file, index=False)
+            sig_results_file = output_path / f"GWAS{suffix}_significant_SNPs_p{global_threshold:.2e}.csv"
+            sig_df.to_csv(sig_results_file, index=False)
+            print(f"   Saved significant SNPs to: {sig_results_file}")
+        else:
+            print("   Significant SNPs detected (skipped writing per user output settings)")
     else:
         print(f"   No SNPs passed multiple-testing threshold (p ≤ {global_threshold:.2e})")
     
