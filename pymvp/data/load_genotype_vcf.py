@@ -4,7 +4,8 @@ VCF loader for GWAS: builds (geno_matrix, individual_ids, geno_map).
 
 Key features:
 - Streaming parsing of VCF text (supports .vcf and .vcf.gz)
-- Diploid-only, biallelic by default; optional multi-allelic splitting
+- Supports arbitrary ploidy by counting ALT alleles in each GT field
+- Optional multi-allelic splitting into per-ALT pseudo-biallelic markers
 - GT-based coding with DS fallback; missing as -9 (int8)
 - Optional basic QC filters: monomorphic, missingness, MAF
 
@@ -74,40 +75,46 @@ def _split_gt_tokens(gt):
 
 
 def _code_dosage_biallelic(gt_tokens):
-    # gt_tokens like ['0','1'] etc.; returns 0/1/2 or MISSING
-    if not gt_tokens or len(gt_tokens) != 2:
-        return MISSING
-    a, b = gt_tokens[0], gt_tokens[1]
-    if a == '.' or b == '.':
-        return MISSING
-    # Non-diploid or non-integer
-    try:
-        ia, ib = int(a), int(b)
-    except ValueError:
-        return MISSING
-    # Only permit alleles 0/1 for biallelic
-    if ia not in (0, 1) or ib not in (0, 1):
-        return MISSING
-    return ia + ib
+    # gt_tokens like ['0','1', ...]; returns (dosage, ploidy)
+    if not gt_tokens:
+        return MISSING, 0
+    alt_count = 0
+    ploidy = 0
+    for token in gt_tokens:
+        if token == '.':
+            return MISSING, 0
+        try:
+            allele = int(token)
+        except ValueError:
+            return MISSING, 0
+        if allele not in (0, 1):
+            return MISSING, 0
+        ploidy += 1
+        if allele == 1:
+            alt_count += 1
+    return alt_count, ploidy
 
 
 def _code_dosage_split(gt_tokens, alt_index):
     # alt_index is the 1-based index of ALT for the split
-    if not gt_tokens or len(gt_tokens) != 2:
-        return MISSING
-    a, b = gt_tokens[0], gt_tokens[1]
-    if a == '.' or b == '.':
-        return MISSING
-    try:
-        ia, ib = int(a), int(b)
-    except ValueError:
-        return MISSING
-    # Only 0 and alt_index allowed; any other ALT makes sample missing in this split
-    allowed = (0, alt_index)
-    if ia not in allowed or ib not in allowed:
-        return MISSING
-    # Count copies of alt_index
-    return (1 if ia == alt_index else 0) + (1 if ib == alt_index else 0)
+    if not gt_tokens:
+        return MISSING, 0
+    allowed = {0, alt_index}
+    alt_count = 0
+    ploidy = 0
+    for token in gt_tokens:
+        if token == '.':
+            return MISSING, 0
+        try:
+            allele = int(token)
+        except ValueError:
+            return MISSING, 0
+        if allele not in allowed:
+            return MISSING, 0
+        ploidy += 1
+        if allele == alt_index:
+            alt_count += 1
+    return alt_count, ploidy
 
 
 def _ds_to_int(ds_val):
@@ -115,12 +122,11 @@ def _ds_to_int(ds_val):
         x = float(ds_val)
     except Exception:
         return MISSING
-    # Round to nearest int and clip to [0,2]
+    if np.isnan(x):
+        return MISSING
     xi = int(round(x))
     if xi < 0:
-        xi = 0
-    elif xi > 2:
-        xi = 2
+        return MISSING
     return xi
 
 
@@ -170,7 +176,7 @@ def load_genotype_vcf(
     map_rows = []  # dict rows
 
     # Helper to finalize a candidate variant column with QC
-    def consider_variant(col, chrom, pos, vid, ref, alt):
+    def consider_variant(col, chrom, pos, vid, ref, alt, ploidy):
         nonlocal columns, map_rows
         col = np.asarray(col, dtype=np.int16)  # temp safe range
         # If requested, restrict to SNPs
@@ -193,7 +199,8 @@ def load_genotype_vcf(
         # MAF filter
         if min_maf > 0.0:
             mean_dos = float(np.mean(col[valid]))
-            maf = min(mean_dos / 2.0, 1.0 - (mean_dos / 2.0))
+            denom = max(ploidy, 1)
+            maf = min(mean_dos / denom, 1.0 - (mean_dos / denom))
             if maf < min_maf:
                 return
         # Finalize dtype
@@ -216,7 +223,7 @@ def load_genotype_vcf(
         if n == 0:
             raise ValueError('VCF contains no sample columns')
 
-        def consider_variant(col, chrom, pos, vid, ref, alt):
+        def consider_variant(col, chrom, pos, vid, ref, alt, ploidy):
             nonlocal columns, map_rows
             col = np.asarray(col, dtype=np.int16)
             if not include_indels and (len(ref) != 1 or len(alt) != 1):
@@ -233,7 +240,8 @@ def load_genotype_vcf(
                 return
             if min_maf > 0.0:
                 mean_dos = float(np.mean(col[valid]))
-                maf = min(mean_dos / 2.0, 1.0 - (mean_dos / 2.0))
+                denom = max(ploidy, 1)
+                maf = min(mean_dos / denom, 1.0 - (mean_dos / denom))
                 if maf < min_maf:
                     return
             columns.append(col.astype(np.int8, copy=False))
@@ -268,50 +276,63 @@ def load_genotype_vcf(
 
             if len(alts) == 1:
                 col = np.full(n, MISSING, dtype=np.int16)
+                variant_ploidy = 0
                 for i, g in enumerate(genos):
-                    # cyvcf2 uses -1 for missing
-                    if g is None or len(g) < 2:
-                        # attempt DS fallback
+                    if g is None:
                         if ds is not None:
                             col[i] = _ds_to_int(ds[i])
                         continue
-                    a, b = g[0], g[1]
-                    if a == -1 or b == -1:
+                    alleles = g[:-1] if len(g) > 2 else g[:2]
+                    if not alleles:
                         if ds is not None:
                             col[i] = _ds_to_int(ds[i])
                         continue
-                    # Only accept 0/1 alleles
-                    if (a in (0, 1)) and (b in (0, 1)):
-                        col[i] = a + b
-                    else:
-                        # multi-allelic allele present but site says 1 alt; treat as missing
+                    if any(a == -1 for a in alleles):
                         if ds is not None:
                             col[i] = _ds_to_int(ds[i])
-                consider_variant(col, chrom, pos, vid, ref, alts[0])
+                        continue
+                    if any(a not in (0, 1) for a in alleles):
+                        if ds is not None:
+                            col[i] = _ds_to_int(ds[i])
+                        continue
+                    alt_count = sum(1 for a in alleles if a == 1)
+                    col[i] = alt_count
+                    variant_ploidy = max(variant_ploidy, len(alleles))
+                if variant_ploidy == 0:
+                    variant_ploidy = 2
+                consider_variant(col, chrom, pos, vid, ref, alts[0], variant_ploidy)
             else:
                 if not split_multiallelic:
                     continue
                 # Build a column per ALT, recoding non-focal ALTs as missing
                 for ai, alt_base in enumerate(alts, start=1):
                     col = np.full(n, MISSING, dtype=np.int16)
+                    variant_ploidy = 0
                     for i, g in enumerate(genos):
-                        if g is None or len(g) < 2:
+                        if g is None:
                             if ds is not None:
                                 col[i] = _ds_to_int(ds[i])
                             continue
-                        a, b = g[0], g[1]
-                        if a == -1 or b == -1:
+                        alleles = g[:-1] if len(g) > 2 else g[:2]
+                        if not alleles:
                             if ds is not None:
                                 col[i] = _ds_to_int(ds[i])
                             continue
-                        allowed = (0, ai)
-                        if a in allowed and b in allowed:
-                            col[i] = (1 if a == ai else 0) + (1 if b == ai else 0)
-                        else:
-                            # non-focal ALT present -> missing (optionally DS)
+                        if any(a == -1 for a in alleles):
                             if ds is not None:
                                 col[i] = _ds_to_int(ds[i])
-                    consider_variant(col, chrom, pos, vid, ref, alt_base)
+                            continue
+                        allowed = {0, ai}
+                        if any(a not in allowed for a in alleles):
+                            if ds is not None:
+                                col[i] = _ds_to_int(ds[i])
+                            continue
+                        alt_count = sum(1 for a in alleles if a == ai)
+                        col[i] = alt_count
+                        variant_ploidy = max(variant_ploidy, len(alleles))
+                    if variant_ploidy == 0:
+                        variant_ploidy = 2
+                    consider_variant(col, chrom, pos, vid, ref, alt_base, variant_ploidy)
     else:
         # Built-in text parser
         # Guard: .bcf is binary and not supported by builtin parser
@@ -353,6 +374,7 @@ def load_genotype_vcf(
                 # Helper: build column(s) for this site
                 def build_columns_for_alt(alt_index, alt_base):
                     col = np.full(len(individual_ids), MISSING, dtype=np.int16)
+                    variant_ploidy = 0
                     # For each sample, parse its field
                     for si, field in enumerate(sample_fields):
                         if not field:
@@ -363,30 +385,37 @@ def load_genotype_vcf(
                             gt = toks[key_to_idx['GT']]
                         gt_tokens = _split_gt_tokens(gt) if gt is not None else None
                         if gt_tokens is not None:
-                            # If multi-allelic split, only allow 0 and alt_index
                             if len(alt_alleles) > 1:
-                                col[si] = _code_dosage_split(gt_tokens, alt_index)
+                                dosage, ploidy = _code_dosage_split(gt_tokens, alt_index)
                             else:
-                                col[si] = _code_dosage_biallelic(gt_tokens)
+                                dosage, ploidy = _code_dosage_biallelic(gt_tokens)
+                            if dosage != MISSING:
+                                col[si] = dosage
+                                variant_ploidy = max(variant_ploidy, ploidy)
+                            elif 'DS' in key_to_idx and key_to_idx['DS'] < len(toks):
+                                col[si] = _ds_to_int(toks[key_to_idx['DS']])
                         else:
-                            # Fallback to DS if available
                             if 'DS' in key_to_idx and key_to_idx['DS'] < len(toks):
                                 col[si] = _ds_to_int(toks[key_to_idx['DS']])
                             else:
                                 # Keep missing
                                 pass
-                    return col
+                    return col, variant_ploidy
 
                 if len(alt_alleles) == 1:
-                    col = build_columns_for_alt(1, alt_alleles[0])
-                    consider_variant(col, chrom, pos, vid, ref, alt_alleles[0])
+                    col, ploidy = build_columns_for_alt(1, alt_alleles[0])
+                    if ploidy == 0:
+                        ploidy = 2
+                    consider_variant(col, chrom, pos, vid, ref, alt_alleles[0], ploidy)
                 else:
                     if not split_multiallelic:
                         # Skip multi-allelic sites entirely in non-split mode
                         continue
                     for ai, alt_base in enumerate(alt_alleles, start=1):
-                        col = build_columns_for_alt(ai, alt_base)
-                        consider_variant(col, chrom, pos, vid, ref, alt_base)
+                        col, ploidy = build_columns_for_alt(ai, alt_base)
+                        if ploidy == 0:
+                            ploidy = 2
+                        consider_variant(col, chrom, pos, vid, ref, alt_base, ploidy)
         finally:
             try:
                 fh.close()

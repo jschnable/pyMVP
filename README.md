@@ -133,11 +133,20 @@ python scripts/run_GWAS.py -p data/phe_multi.csv -g data/geno.vcf.gz --outputs a
 
 pyMVP supports loading genotype data in:
 
-* .vcf (either uncompressed or gzipped.
-* .bcf format 
-* plink's .bed format (requires matching .bim and .fam files)
-* HapMap format. 
-* Simple csv/tsv files with the first column holding sample IDs and the remaining columns showing marker data encoded as ref/het/alt = 0/1/2 and missing = -9
+* VCF/BCF (`.vcf`, `.vcf.gz`, `.vcf.bgz`, `.bcf`). The loader counts ALT alleles in each
+  `GT` field, so polyploid calls like `0/1/1/1` are preserved without lossy clipping.
+* PLINK `.bed` (requires matching `.bim`/`.fam`).
+* HapMap `.hmp`/`.hmp.txt`.
+* Numeric CSV/TSV matrices (first column sample IDs, remaining columns genotype
+  dosages, missing encoded as `-9`).
+
+For polyploid datasets encoded in numeric CSV/TSV form, store dosages as integers in the
+range `0..P` (e.g. `0..4` for tetraploid, `0..6` for hexaploid) rather than fractional
+values. The new `--max-genotype-dosage` flag controls how allele frequencies and MAF
+filters are computed; set it to the maximum expected dosage (defaults to `2` for diploids).
+When loading VCF/BCF files the loader infers ploidy from each genotype automatically, but
+`--max-genotype-dosage` still governs how summary tables and cross-method comparisons
+normalise MAF values.
 
 If multiple genotype records are listed with the same sample ID, only genetic marker data the **first occurrence in the file is used**.
 
