@@ -164,22 +164,45 @@ class GenotypeMatrix:
         """Get batch of markers for efficient processing"""
         return self._data[:, marker_start:marker_end]
     
-    def calculate_allele_frequencies(self, batch_size: int = 1000) -> np.ndarray:
-        """Calculate allele frequencies for all markers"""
+    def calculate_allele_frequencies(
+        self,
+        batch_size: int = 1000,
+        max_dosage: float = 2.0,
+    ) -> np.ndarray:
+        """Calculate allele frequencies for all markers.
+
+        Args:
+            batch_size: Number of markers to process per batch.
+            max_dosage: Maximum genotype dosage used when normalising to an
+                allele frequency (default 2.0 for diploids).
+        """
         n_markers = self.n_markers
         frequencies = np.zeros(n_markers)
-        
+
         for start in range(0, n_markers, batch_size):
             end = min(start + batch_size, n_markers)
             batch = self.get_batch(start, end)
-            # Frequency of alt allele = mean(genotype) / 2
-            frequencies[start:end] = np.mean(batch, axis=0) / 2.0
-            
+            # Frequency of alt allele = mean(genotype) / max_dosage
+            frequencies[start:end] = np.mean(batch, axis=0) / max(max_dosage, 1e-12)
+
         return frequencies
-    
-    def calculate_maf(self, batch_size: int = 1000) -> np.ndarray:
-        """Calculate minor allele frequencies"""
-        frequencies = self.calculate_allele_frequencies(batch_size)
+
+    def calculate_maf(
+        self,
+        batch_size: int = 1000,
+        max_dosage: float = 2.0,
+    ) -> np.ndarray:
+        """Calculate minor allele frequencies.
+
+        Args:
+            batch_size: Number of markers to process per batch.
+            max_dosage: Maximum genotype dosage used when normalising to an
+                allele frequency (default 2.0 for diploids).
+        """
+        frequencies = self.calculate_allele_frequencies(
+            batch_size=batch_size,
+            max_dosage=max_dosage,
+        )
         return np.minimum(frequencies, 1 - frequencies)
     
     def _precompute_major_alleles(self, batch_size: int = 1000):

@@ -51,12 +51,19 @@ def fdr_correction(pvalues: np.ndarray, alpha: float = 0.05, method: str = 'bh')
     
     return rejected, corrected_pvalues
 
-def calculate_maf_from_genotypes(genotypes: np.ndarray, missing_value: int = -9) -> np.ndarray:
+def calculate_maf_from_genotypes(
+    genotypes: np.ndarray,
+    *,
+    missing_value: int = -9,
+    max_dosage: float = 2.0,
+) -> np.ndarray:
     """Calculate minor allele frequencies from genotype matrix
     
     Args:
         genotypes: Genotype matrix (individuals × markers)
         missing_value: Value representing missing data
+        max_dosage: Maximum genotype dosage used when converting genotype means
+            into allele frequencies (default 2.0 for diploids)
         
     Returns:
         Array of minor allele frequencies for each marker
@@ -74,8 +81,8 @@ def calculate_maf_from_genotypes(genotypes: np.ndarray, missing_value: int = -9)
             maf[i] = 0.0
             continue
             
-        # Calculate allele frequency (assuming 0,1,2 coding)
-        allele_freq = np.mean(valid_genotypes) / 2.0
+        # Calculate allele frequency relative to the declared maximum dosage
+        allele_freq = np.mean(valid_genotypes) / max(max_dosage, 1e-12)
         # MAF is minimum of freq and 1-freq
         maf[i] = min(allele_freq, 1.0 - allele_freq)
     

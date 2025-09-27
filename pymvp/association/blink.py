@@ -59,6 +59,7 @@ def MVP_BLINK(
     fdr_cut: bool = False,
     maxLine: int = 5000,
     cpu: int = 1,
+    max_genotype_dosage: float = 2.0,
     verbose: bool = True,
 ) -> AssociationResults:
     """Run BLINK GWAS analysis.
@@ -81,6 +82,8 @@ def MVP_BLINK(
         fdr_cut: If True, use FDR-based cutoff for iteration 2 (matches GAPIT Blink)
         maxLine: Batch size for MVP_GLM streaming
         cpu: Number of CPU cores (forwarded to MVP_GLM)
+        max_genotype_dosage: Maximum genotype dosage used when computing allele
+            frequencies/MAF (default 2.0 for diploids)
         verbose: Print progress information
 
     Returns:
@@ -103,7 +106,11 @@ def MVP_BLINK(
     cv_matrix = _prepare_covariates(CV, n_individuals)
     map_df = map_data.to_dataframe().reset_index(drop=True)
 
-    maf_mask, maf_values = _compute_maf_mask(genotype_array, maf_threshold)
+    maf_mask, maf_values = _compute_maf_mask(
+        genotype_array,
+        maf_threshold,
+        max_genotype_dosage,
+    )
     filtered_indices = np.where(maf_mask)[0]
     if len(filtered_indices) == 0:
         raise ValueError("All markers were removed by the MAF threshold")
@@ -113,6 +120,7 @@ def MVP_BLINK(
         major_alleles[filtered_indices] if major_alleles is not None else None
     )
     map_filtered = map_df.loc[filtered_indices].reset_index(drop=True)
+    chrom_values, pos_values = _precompute_map_coordinates(map_filtered)
     map_filtered_map = GenotypeMap(map_filtered)
 
     # Apply a gentle warning when markers were trimmed for transparency
@@ -173,6 +181,8 @@ def MVP_BLINK(
                 previous_qtns=prev_selected,
                 genotype=geno_filtered,
                 map_df=map_filtered,
+                chrom_values=chrom_values,
+                pos_values=pos_values,
                 map_data=map_filtered_map,
                 ld_threshold=ld_threshold,
                 bic_method=bic_method,
@@ -438,6 +448,30 @@ def _ensure_numpy_genotype(
     return genotype_array, major_alleles
 
 
+def _precompute_map_coordinates(map_df: "pd.DataFrame") -> Tuple[np.ndarray, np.ndarray]:
+    """Precompute chromosome/position arrays for fast candidate ordering."""
+
+    import pandas as pd  # noqa: F401 - preserved for type checking parity
+
+    chrom_series = map_df["CHROM"]
+    if np.issubdtype(chrom_series.dtype, np.number):
+        chrom_values = chrom_series.to_numpy(dtype=float, copy=False)
+    else:
+        chrom_as_str = chrom_series.astype(str)
+        chrom_order = sorted(chrom_as_str.unique(), key=lambda val: (len(val), val))
+        chrom_lookup = {val: float(idx) for idx, val in enumerate(chrom_order)}
+        chrom_values = chrom_as_str.map(chrom_lookup).to_numpy(dtype=float)
+
+    if "POS" in map_df.columns:
+        pos_values = map_df["POS"].to_numpy(dtype=float, copy=False)
+    elif "Position" in map_df.columns:
+        pos_values = map_df["Position"].to_numpy(dtype=float, copy=False)
+    else:
+        pos_values = np.arange(map_df.shape[0], dtype=float)
+
+    return chrom_values, pos_values
+
+
 def _prepare_covariates(CV: Optional[np.ndarray], n_individuals: int) -> Optional[np.ndarray]:
     if CV is None:
         return None
@@ -449,12 +483,22 @@ def _prepare_covariates(CV: Optional[np.ndarray], n_individuals: int) -> Optiona
     return cv_array.astype(np.float64, copy=False)
 
 
-def _compute_maf_mask(genotype: np.ndarray, maf_threshold: float) -> Tuple[np.ndarray, np.ndarray]:
+def _compute_maf_mask(
+    genotype: np.ndarray,
+    maf_threshold: float,
+    max_genotype_dosage: float,
+) -> Tuple[np.ndarray, np.ndarray]:
     if maf_threshold <= 0.0:
-        maf = calculate_maf_from_genotypes(genotype)
+        maf = calculate_maf_from_genotypes(
+            genotype,
+            max_dosage=max_genotype_dosage,
+        )
         mask = np.ones_like(maf, dtype=bool)
         return mask, maf
-    maf = calculate_maf_from_genotypes(genotype)
+    maf = calculate_maf_from_genotypes(
+        genotype,
+        max_dosage=max_genotype_dosage,
+    )
     mask = maf >= maf_threshold
     return mask, maf
 
@@ -533,6 +577,8 @@ def _select_and_refine_qtns(
     previous_qtns: Sequence[int],
     genotype: np.ndarray,
     map_df: "pd.DataFrame",
+    chrom_values: np.ndarray,
+    pos_values: np.ndarray,
     map_data: GenotypeMap,
     ld_threshold: float,
     bic_method: str,
@@ -577,10 +623,7 @@ def _select_and_refine_qtns(
     keep_mask = pvals_finite < threshold_val
     initial_candidates = candidate_indices[keep_mask]
 
-
-    initial_candidates = initial_candidates.tolist()
-
-    if not initial_candidates:
+    if initial_candidates.size == 0:
         return [], {
             "n_candidates": 0,
             "n_after_ld": 0,
@@ -588,26 +631,11 @@ def _select_and_refine_qtns(
             "min_pvalue": float(np.nanmin(pvalues)) if np.any(finite_mask) else float('nan'),
         }
 
-    chrom_series = map_df["CHROM"]
-    if np.issubdtype(chrom_series.dtype, np.number):
-        chrom_values = chrom_series.to_numpy(dtype=float)
-    else:
-        chrom_order = sorted(chrom_series.astype(str).unique(), key=lambda val: (len(val), val))
-        chrom_lookup = {val: float(idx) for idx, val in enumerate(chrom_order)}
-        chrom_values = chrom_series.astype(str).map(chrom_lookup).to_numpy(dtype=float)
-
-    if "POS" in map_df.columns:
-        pos_values = map_df["POS"].to_numpy(dtype=float)
-    elif "Position" in map_df.columns:
-        pos_values = map_df["Position"].to_numpy(dtype=float)
-    else:
-        pos_values = np.arange(map_df.shape[0], dtype=float)
-
-    candidate_records = []
-    for idx in initial_candidates:
-        candidate_records.append((pvalues[idx], chrom_values[idx], pos_values[idx], idx))
-    candidate_records.sort(key=lambda rec: (rec[0], rec[1], rec[2]))
-    ordered_candidates = [rec[3] for rec in candidate_records]
+    pvals_subset = pvalues[initial_candidates]
+    chrom_subset = chrom_values[initial_candidates]
+    pos_subset = pos_values[initial_candidates]
+    order = np.lexsort((pos_subset, chrom_subset, pvals_subset))
+    ordered_candidates = initial_candidates[order].tolist()
 
     # Delegate LD pruning to FarmCPU's validated Blink-style LD removal
     ld_pruned = remove_qtns_by_ld(
@@ -947,7 +975,6 @@ def _bic_positions(m: int, method: str) -> List[int]:
         return list(range(1, m + 1))
     warnings.warn(f"Unknown BIC method '{method}', defaulting to naive")
     return list(range(1, m + 1))
-
 
 def _build_design_matrix(
     trait_values: np.ndarray,

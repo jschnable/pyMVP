@@ -218,7 +218,8 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                      max_iterations: int = 10,
                      farmcpu_resampling_params: Optional[Dict[str, Any]] = None,
                      blink_params: Optional[Dict[str, Any]] = None,
-                     default_significance: Optional[float] = None
+                     default_significance: Optional[float] = None,
+                     max_genotype_dosage: float = 2.0
                      ) -> Dict[str, Union[AssociationResults, FarmCPUResamplingResults]]:
     """Run GWAS analysis using specified methods for a single trait.
 
@@ -231,6 +232,8 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
         methods: Methods to execute (upper-case identifiers).
         max_iterations: Maximum FarmCPU iterations.
         farmcpu_resampling_params: Optional overrides for resampling configuration.
+        max_genotype_dosage: Maximum genotype dosage used when computing allele
+            frequencies/MAF (default 2.0 for diploids).
     """
     
     results = {}
@@ -277,6 +280,7 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
         )
     
     blink_params = blink_params or {}
+    blink_params.setdefault('max_genotype_dosage', max_genotype_dosage)
 
     # GLM Analysis
     if 'GLM' in methods:
@@ -375,6 +379,7 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 bic_method=blink_params.get('bic_method', 'naive'),
                 method_sub=blink_params.get('method_sub', 'reward'),
                 p_threshold=blink_params.get('p_threshold', None),
+                max_genotype_dosage=blink_params.get('max_genotype_dosage', max_genotype_dosage),
                 verbose=False,
             )
             results['BLINK'] = blink_results
@@ -431,7 +436,8 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
                            save_all_results: bool = True,
                            save_significant: bool = True,
                            bonferroni_alpha: float = 0.05,
-                           n_eff: Optional[int] = None) -> Dict[str, Any]:
+                           n_eff: Optional[int] = None,
+                           max_genotype_dosage: float = 2.0) -> Dict[str, Any]:
     """Analyze results and conditionally save output files for a single trait"""
     
     output_path = Path(output_dir)
@@ -456,7 +462,10 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
 
     # Calculate MAF for all markers
     genotype_data = genotype_matrix._data if hasattr(genotype_matrix, '_data') else genotype_matrix
-    maf = calculate_maf_from_genotypes(genotype_data)
+    maf = calculate_maf_from_genotypes(
+        genotype_data,
+        max_dosage=max_genotype_dosage,
+    )
     
     # Prepare base results dataframe
     base_df = geno_map.to_dataframe() if hasattr(geno_map, 'to_dataframe') else pd.DataFrame({
@@ -691,6 +700,8 @@ def main():
                        help="Base alpha for Bonferroni (default: 0.05)")
     parser.add_argument("--n-eff", type=int, default=None,
                        help="Effective number of markers to use for Bonferroni denominator (optional)")
+    parser.add_argument("--max-genotype-dosage", type=float, default=2.0,
+                       help="Maximum genotype dosage used to normalise allele frequencies (e.g. 2 for diploids, 4 for tetraploids)")
     parser.add_argument("--max-iterations", type=int, default=10,
                        help="Maximum iterations for FarmCPU")
     parser.add_argument("--farmcpu-resampling-runs", type=int, default=100,
@@ -817,6 +828,7 @@ def main():
             'method_sub': args.blink_method_sub,
             'maf_threshold': args.blink_maf_threshold,
             'p_threshold': args.blink_p_threshold,
+            'max_genotype_dosage': args.max_genotype_dosage,
         }
 
         # Step 1: Load and validate data
@@ -942,7 +954,8 @@ def main():
                 max_iterations=args.max_iterations,
                 farmcpu_resampling_params=(resampling_params if 'FARMCPU_RESAMPLING' in methods else None),
                 blink_params=blink_params,
-                default_significance=base_significance
+                default_significance=base_significance,
+                max_genotype_dosage=args.max_genotype_dosage,
             )
             if not gwas_results:
                 print(f"   ❌ No GWAS results for trait '{trait_name}' — skipping saving/plots")
@@ -966,6 +979,7 @@ def main():
                 save_significant=('significant_marker_pvalues' in args.outputs),
                 bonferroni_alpha=args.alpha,
                 n_eff=args.n_eff,
+                max_genotype_dosage=args.max_genotype_dosage,
             )
             for method, stats in analysis_results['summary_stats'].items():
                 summary_rows.append({

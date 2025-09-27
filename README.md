@@ -181,6 +181,9 @@ You can customize which phenotypes are analyzed using the `--traits` parameter w
 - `--format, -f`: Force genotype format (`csv`, `tsv`, `numeric`, `vcf`, `plink`, `hapmap`). Autodetects by default.
 - VCF/BCF: `--no-split-multiallelic`, `--snps-only`.
 - All formats: `--drop-monomorphic`, `--max-missing`, `--min-maf`.
+- `--max-genotype-dosage`: Normalise allele frequencies using this maximum
+  dosage (2 for diploids, 4 for tetraploids, etc.); affects reported MAF values
+  and BLINK's MAF filtering.
 
 **FarmCPU:**
 - `--max-iterations`: Maximum iterations (default: 10).
