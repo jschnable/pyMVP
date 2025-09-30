@@ -115,7 +115,10 @@ class GenotypeMatrix:
                  dtype: np.dtype = np.int8,
                  precompute_alleles: bool = True):
         
-        if isinstance(data, np.ndarray):
+        if isinstance(data, np.memmap):
+            self._data = data
+            self._is_memmap = True
+        elif isinstance(data, np.ndarray):
             self._data = data
             self._is_memmap = False
         elif isinstance(data, (str, Path)):
@@ -217,35 +220,41 @@ class GenotypeMatrix:
         for start in range(0, n_markers, batch_size):
             end = min(start + batch_size, n_markers)
             batch = self.get_batch(start, end)
-            
-            # For each marker in batch, find major allele
-            for i, marker_idx in enumerate(range(start, end)):
-                marker = batch[:, i]
-                
-                # Handle missing data (-9 values) - exactly like rMVP
-                missing_mask = (marker == -9) | np.isnan(marker)
-                
-                if np.sum(missing_mask) == len(marker):
-                    # All samples are missing - use 0 as default (major allele)
-                    self._major_alleles[marker_idx] = 0
-                    continue
-                
-                if np.sum(missing_mask) > 0:
-                    # Some samples have missing data
-                    non_missing_values = marker[~missing_mask]
-                    if len(non_missing_values) == 0:
-                        self._major_alleles[marker_idx] = 0
-                        continue
-                    
-                    # Find major allele (most common genotype) - exactly like rMVP
-                    unique_vals, counts = np.unique(non_missing_values, return_counts=True)
-                    major_allele_idx = np.argmax(counts)
-                    self._major_alleles[marker_idx] = unique_vals[major_allele_idx]
-                else:
-                    # No missing data - still compute for consistency
-                    unique_vals, counts = np.unique(marker, return_counts=True)
-                    major_allele_idx = np.argmax(counts)
-                    self._major_alleles[marker_idx] = unique_vals[major_allele_idx]
+
+            if batch.size == 0:
+                continue
+
+            # Missing mask aligns with rMVP sentinel handling
+            missing_mask = (batch == -9) | np.isnan(batch)
+            non_missing_counts = (~missing_mask).sum(axis=0)
+            completely_missing = non_missing_counts == 0
+
+            if np.all(completely_missing):
+                # All markers in this block are entirely missing
+                self._major_alleles[start:end] = 0
+                continue
+
+            valid_values = batch[~missing_mask]
+            if valid_values.size == 0:
+                self._major_alleles[start:end] = 0
+                continue
+
+            unique_vals = np.unique(valid_values)
+            if unique_vals.size == 0:
+                self._major_alleles[start:end] = 0
+                continue
+
+            unique_vals = unique_vals.astype(self._data.dtype, copy=False)
+            counts = np.zeros((unique_vals.size, end - start), dtype=np.int32)
+            for idx, val in enumerate(unique_vals):
+                counts[idx, :] = np.sum(batch == val, axis=0)
+
+            major_indices = np.argmax(counts, axis=0)
+            major_vals = unique_vals[major_indices]
+            if np.any(completely_missing):
+                major_vals = major_vals.astype(self._data.dtype, copy=False)
+                major_vals[completely_missing] = 0
+            self._major_alleles[start:end] = major_vals
     
     def get_marker_imputed(self, marker_idx: int, *, fill_value: Optional[float] = None) -> np.ndarray:
         """Get genotypes for a specific marker with optional missing-data imputation."""

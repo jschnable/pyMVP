@@ -7,8 +7,11 @@ import numpy as np
 from pathlib import Path
 from typing import Union, Tuple, Optional, Dict, List
 import warnings
+import time
+import sys
 
 from ..utils.data_types import GenotypeMatrix, GenotypeMap
+from ..utils.memmap_utils import load_full_from_metadata
 try:
     # Local VCF loader (fast cyvcf2 with builtin fallback)
     from .load_genotype_vcf import load_genotype_vcf as _load_genotype_vcf
@@ -24,6 +27,13 @@ try:
     from .load_genotype_plink import load_genotype_plink as _load_genotype_plink
 except Exception:
     _load_genotype_plink = None
+
+NON_BINARY_FORMATS = {
+    'vcf', 'csv', 'tsv', 'numeric', 'hapmap'
+}
+
+LOAD_TIME_WARNING_THRESHOLD = 300.0  # seconds (5 minutes)
+
 
 def detect_file_format(filepath: Union[str, Path]) -> str:
     """Detect file format based on extension and content
@@ -53,7 +63,14 @@ def detect_file_format(filepath: Union[str, Path]) -> str:
         return 'tsv'
     elif filepath.suffix.lower() == '.csv':
         return 'csv'
-    
+    elif filepath.suffix.lower() == '.npz':
+        try:
+            with np.load(filepath, allow_pickle=True) as meta:
+                if 'memmap_file' in meta:
+                    return 'memmap'
+        except Exception:
+            return 'unknown'
+
     # Try to detect by content / neighboring files
     try:
         # Check for PLINK triad if a bare prefix is given
@@ -208,6 +225,129 @@ def load_phenotype_file(filepath: Union[str, Path],
 
     return df
 
+def load_covariate_file(filepath: Union[str, Path],
+                        covariate_columns: Optional[List[str]] = None,
+                        id_column: str = 'ID') -> pd.DataFrame:
+    """Load covariate file and ensure numeric covariate columns."""
+    filepath = Path(filepath)
+    file_format = detect_file_format(filepath)
+
+    na_values = [
+        '', 'NA', 'NaN', 'nan', 'NAN', 'na', 'N/A', 'n/a', 'Null', 'NULL',
+        '.', '-', '--'
+    ]
+    read_kwargs = dict(na_values=na_values, keep_default_na=True)
+
+    if file_format == 'csv':
+        cov_df = pd.read_csv(filepath, **read_kwargs)
+    elif file_format == 'tsv':
+        cov_df = pd.read_csv(filepath, sep='	', **read_kwargs)
+    else:
+        try:
+            cov_df = pd.read_csv(filepath, **read_kwargs)
+        except Exception:
+            cov_df = pd.read_csv(filepath, sep='	', **read_kwargs)
+
+    if id_column not in cov_df.columns:
+        possible_id_cols = [
+            'ID', 'id', 'IID',
+            'sample', 'Sample',
+            'Taxa', 'taxa',
+            'Genotype', 'genotype',
+            'Accession', 'accession',
+        ]
+        present_candidates = [c for c in cov_df.columns if c in possible_id_cols]
+        if present_candidates:
+            if len(present_candidates) > 1:
+                warnings.warn(
+                    "Multiple potential ID columns found: {}. Selecting leftmost '{}' as ID.".format(
+                        present_candidates, present_candidates[0]
+                    )
+                )
+            cov_df = cov_df.rename(columns={present_candidates[0]: 'ID'})
+        else:
+            first_col = cov_df.columns[0]
+            warnings.warn(
+                "No recognized ID column found; using first column '{}' as ID.".format(first_col)
+            )
+            cov_df = cov_df.rename(columns={first_col: 'ID'})
+    else:
+        if id_column != 'ID':
+            cov_df = cov_df.rename(columns={id_column: 'ID'})
+
+    cov_df['ID'] = cov_df['ID'].astype(str)
+
+    available_covariates = [c for c in cov_df.columns if c != 'ID']
+    if covariate_columns is not None:
+        requested = [c for c in covariate_columns if c not in ('ID', id_column)]
+        missing = [c for c in requested if c not in cov_df.columns]
+        if missing:
+            raise ValueError(
+                "Requested covariate columns missing from file '{}': {}".format(
+                    filepath, missing
+                )
+            )
+        selected_cols = [c for c in covariate_columns if c in cov_df.columns and c not in ('ID', id_column)]
+    else:
+        selected_cols = available_covariates
+
+    if not selected_cols:
+        raise ValueError(
+            "No covariate columns found in file '{}'. Provide at least one numeric covariate column.".format(
+                filepath
+            )
+        )
+
+    covariate_data = cov_df[['ID'] + selected_cols].copy()
+    dropped_for_nan: List[str] = []
+
+    for col in list(selected_cols):
+        series = covariate_data[col]
+        converted = pd.to_numeric(series, errors='coerce')
+        invalid_mask = series.notna() & converted.isna()
+        if invalid_mask.any():
+            invalid_examples = sorted(series[invalid_mask].astype(str).unique()[:5])
+            example_str = ', '.join(invalid_examples)
+            raise ValueError(
+                "Covariate column '{}' contains non-numeric values (e.g. {}).".format(
+                    col, example_str
+                )
+            )
+        covariate_data[col] = converted
+        if converted.notna().sum() == 0:
+            dropped_for_nan.append(col)
+
+    if dropped_for_nan:
+        warnings.warn(
+            "Dropping covariate columns with no numeric values after conversion: {}".format(
+                dropped_for_nan
+            )
+        )
+        covariate_data = covariate_data.drop(columns=dropped_for_nan)
+
+    covariate_columns_present = [c for c in covariate_data.columns if c != 'ID']
+    if not covariate_columns_present:
+        raise ValueError(
+            "No usable covariate columns remained after processing file '{}'.".format(
+                filepath
+            )
+        )
+
+    if covariate_data['ID'].duplicated().any():
+        n_dups = int(covariate_data['ID'].duplicated().sum())
+        agg_cols = {col: 'mean' for col in covariate_columns_present}
+        covariate_data = covariate_data.groupby('ID', as_index=False).agg(agg_cols)
+        warnings.warn(
+            f"Detected {n_dups} duplicated covariate records by ID; deduplicated by computing per-ID mean of covariate columns (missing values ignored)."
+        )
+    else:
+        covariate_data = covariate_data.reset_index(drop=True)
+
+    covariate_columns_present = [c for c in covariate_data.columns if c != 'ID']
+    covariate_data = covariate_data[['ID'] + covariate_columns_present]
+
+    return covariate_data
+
 
 def _deduplicate_genotype_samples(individual_ids: List[str], geno_np: np.ndarray) -> Tuple[List[str], np.ndarray]:
     """Deduplicate genotype sample IDs by retaining the first occurrence per ID.
@@ -243,10 +383,32 @@ def load_genotype_file(filepath: Union[str, Path],
         Tuple of (GenotypeMatrix, individual_ids, GenotypeMap)
     """
     filepath = Path(filepath)
-    
+    precompute_alleles = kwargs.pop('precompute_alleles', True)
+    load_start = time.time()
+
     if file_format is None:
         file_format = detect_file_format(filepath)
-    
+
+    def _maybe_warn(elapsed_seconds: float) -> None:
+        if file_format in NON_BINARY_FORMATS and elapsed_seconds >= LOAD_TIME_WARNING_THRESHOLD:
+            print(
+                f"Warning: Loading genotype file '{filepath}' took {elapsed_seconds / 60:.1f} minutes. "
+                "Consider caching it with `pymvp-cache-genotype` for faster future runs.",
+                file=sys.stderr,
+            )
+
+    if file_format == 'memmap':
+        genotype, individual_ids, geno_map = load_full_from_metadata(
+            filepath,
+            precompute_alleles=precompute_alleles,
+        )
+        if geno_map is None:
+            raise ValueError("Metadata file does not contain genotype map information")
+        individual_ids = list(individual_ids)
+        elapsed = time.time() - load_start
+        _maybe_warn(elapsed)
+        return genotype, individual_ids, geno_map
+
     if file_format == 'vcf':
         if _load_genotype_vcf is None:
             raise ImportError("VCF loading requires 'load_genotype_vcf' module."
@@ -254,8 +416,10 @@ def load_genotype_file(filepath: Union[str, Path],
         geno_np, individual_ids, geno_map_df = _load_genotype_vcf(str(filepath), **kwargs)
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-        geno_matrix = GenotypeMatrix(geno_np)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
         geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
+        elapsed = time.time() - load_start
+        _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
     
     if file_format == 'plink':
@@ -265,8 +429,10 @@ def load_genotype_file(filepath: Union[str, Path],
         geno_np, individual_ids, geno_map_df = _load_genotype_plink(str(filepath), **kwargs)
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-        geno_matrix = GenotypeMatrix(geno_np)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
         geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
+        elapsed = time.time() - load_start
+        _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
 
     if file_format == 'hapmap':
@@ -275,8 +441,10 @@ def load_genotype_file(filepath: Union[str, Path],
         geno_np, individual_ids, geno_map_df = _load_genotype_hapmap(str(filepath), **kwargs)
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-        geno_matrix = GenotypeMatrix(geno_np)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
         geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
+        elapsed = time.time() - load_start
+        _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
 
     if file_format in ['csv', 'tsv', 'numeric']:
@@ -314,7 +482,7 @@ def load_genotype_file(filepath: Union[str, Path],
         individual_ids, genotype_matrix = _deduplicate_genotype_samples(individual_ids, genotype_matrix)
 
         # Create GenotypeMatrix
-        geno_matrix = GenotypeMatrix(genotype_matrix)
+        geno_matrix = GenotypeMatrix(genotype_matrix, precompute_alleles=precompute_alleles)
 
         # Create basic GenotypeMap (assumes no map file provided)
         map_data = pd.DataFrame({
@@ -324,6 +492,8 @@ def load_genotype_file(filepath: Union[str, Path],
         })
         geno_map = GenotypeMap(map_data)
 
+        elapsed = time.time() - load_start
+        _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
     
     else:
@@ -410,47 +580,91 @@ def load_map_file(filepath: Union[str, Path]) -> GenotypeMap:
     
     return GenotypeMap(df)
 
-def match_individuals(phenotype_df: pd.DataFrame, 
-                     individual_ids: List[str]) -> Tuple[pd.DataFrame, List[str], Dict]:
-    """Match individuals between phenotype and genotype data
-    
-    Args:
-        phenotype_df: DataFrame with phenotype data (must have 'ID' column)
-        individual_ids: List of individual IDs from genotype data
-        
-    Returns:
-        Tuple of (matched_phenotype_df, matched_individual_indices, summary_stats)
-    """
-    phe_ids = set(phenotype_df['ID'].astype(str))
-    geno_ids = set(individual_ids)
-    
-    # Find common individuals
+
+def match_individuals(phenotype_df: pd.DataFrame,
+                     individual_ids: List[str],
+                     covariate_df: Optional[pd.DataFrame] = None
+                     ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], List[int], Dict]:
+    """Match individuals across phenotype, genotype, and optional covariates."""
+    phenotype_df = phenotype_df.copy()
+    if 'ID' not in phenotype_df.columns:
+        raise ValueError("Phenotype dataframe must contain an 'ID' column.")
+    phenotype_df['ID'] = phenotype_df['ID'].astype(str)
+
+    phe_ids = set(phenotype_df['ID'])
+    genotype_ids = [str(ind_id) for ind_id in individual_ids]
+    geno_ids = set(genotype_ids)
+
     common_ids = phe_ids & geno_ids
-    
-    # Create summary statistics
-    summary = {
+
+    summary: Dict[str, int] = {
         'n_phenotype_original': len(phe_ids),
         'n_genotype_original': len(geno_ids),
         'n_common': len(common_ids),
         'n_phenotype_dropped': len(phe_ids - common_ids),
-        'n_genotype_dropped': len(geno_ids - common_ids)
+        'n_genotype_dropped': len(geno_ids - common_ids),
     }
-    
+
     if len(common_ids) == 0:
         raise ValueError("No common individuals found between phenotype and genotype data")
-    
-    # Filter phenotype data to common individuals
-    matched_phenotype = phenotype_df[
-        phenotype_df['ID'].astype(str).isin(common_ids)
-    ].copy()
-    
-    # Get indices of matched individuals in genotype data
-    matched_indices = [i for i, id_val in enumerate(individual_ids) 
-                      if str(id_val) in common_ids]
-    
-    # Sort both by ID to ensure matching order
-    matched_phenotype = matched_phenotype.sort_values('ID')
-    sorted_geno_ids = [individual_ids[i] for i in matched_indices]
-    sorted_indices = sorted(matched_indices, key=lambda i: str(individual_ids[i]))
-    
-    return matched_phenotype, sorted_indices, summary
+
+    matched_phenotype = phenotype_df[phenotype_df['ID'].isin(common_ids)].copy()
+    matched_phenotype = matched_phenotype.sort_values('ID').reset_index(drop=True)
+    sorted_ids = matched_phenotype['ID'].tolist()
+
+    id_to_index: Dict[str, int] = {}
+    for idx, raw_id in enumerate(genotype_ids):
+        if raw_id not in id_to_index:
+            id_to_index[raw_id] = idx
+
+    try:
+        matched_indices = [id_to_index[sid] for sid in sorted_ids]
+    except KeyError as exc:
+        missing_id = exc.args[0]
+        raise RuntimeError(
+            f"Internal inconsistency while aligning genotype indices; ID '{missing_id}' was expected but not found."
+        ) from None
+
+    matched_covariate: Optional[pd.DataFrame] = None
+    if covariate_df is not None:
+        if 'ID' not in covariate_df.columns:
+            raise ValueError("Covariate dataframe must contain an 'ID' column.")
+
+        covariate_df = covariate_df.copy()
+        covariate_df['ID'] = covariate_df['ID'].astype(str)
+        cov_ids = set(covariate_df['ID'])
+
+        summary['n_covariate_provided'] = len(cov_ids)
+
+        missing_covariate_ids = sorted(common_ids - cov_ids)
+        if missing_covariate_ids:
+            preview = ', '.join(missing_covariate_ids[:5])
+            if len(missing_covariate_ids) > 5:
+                preview += ', ...'
+            raise ValueError(
+                "Covariate file is missing {} individuals required after phenotype/genotype matching: {}".format(
+                    len(missing_covariate_ids), preview
+                )
+            )
+
+        unused_covariate_ids = cov_ids - common_ids
+        summary['n_covariate_unused'] = len(unused_covariate_ids)
+
+        if covariate_df['ID'].duplicated().any():
+            n_dups = int(covariate_df['ID'].duplicated().sum())
+            agg_cols = {col: 'mean' for col in covariate_df.columns if col != 'ID'}
+            covariate_df = covariate_df.groupby('ID', as_index=False).agg(agg_cols)
+            warnings.warn(
+                f"Detected {n_dups} duplicated covariate records by ID; deduplicated by computing per-ID mean of covariate columns (missing values ignored)."
+            )
+
+        matched_covariate = covariate_df.set_index('ID').loc[sorted_ids].reset_index()
+        cov_cols = [c for c in matched_covariate.columns if c != 'ID']
+        matched_covariate = matched_covariate[['ID'] + cov_cols]
+        summary['n_covariate_matched'] = len(sorted_ids)
+    else:
+        summary['n_covariate_provided'] = 0
+        summary['n_covariate_unused'] = 0
+        summary['n_covariate_matched'] = 0
+
+    return matched_phenotype, matched_covariate, matched_indices, summary

@@ -150,18 +150,79 @@ normalise MAF values.
 
 If multiple genotype records are listed with the same sample ID, only genetic marker data the **first occurrence in the file is used**.
 
+#### Accelerating Large Genotype Files with Caching
+
+For very large genotype files (VCF, HapMap, CSV/TSV), initial loading can take several minutes. pyMVP provides a caching mechanism to convert these text-based formats into fast-loading binary files that dramatically speed up repeated analyses.
+
+**Creating a cache:**
+
+```bash
+pymvp-cache-genotype -i path/to/genotype.vcf -o cache/maize_chr1
+```
+
+This command converts your genotype file into a binary `.memmap` plus sidecar metadata files:
+
+* `cache/maize_chr1.memmap`: Contiguous int8 genotype matrix.
+* `cache/maize_chr1.pymvp_cache.npz`: Metadata with shape/dtype information.
+* `cache/maize_chr1.samples.txt`: Sample IDs captured during load.
+* `cache/maize_chr1.map.csv`: SNP map (when the source provides one).
+
+**Using cached genotypes:**
+
+Once cached, point any pyMVP script directly at the metadata file:
+
+```bash
+python scripts/run_GWAS.py -p data/phe.csv -g cache/maize_chr1.pymvp_cache.npz
+```
+
+pyMVP will detect the cache and memory-map the genotype matrix instantly, bypassing text parsing entirely.
+
+**Cache options:**
+
+* `--format`: Explicitly specify input format if auto-detection fails.
+* `--dtype`: Storage dtype (default: `int8`; use wider types for polyploids if needed).
+* `--batch-size`: Number of markers to copy per chunk during cache creation.
+* `--load-option KEY=VALUE`: Pass additional options to the loader (repeatable).
+* `--precompute-alleles`: Pre-calculate major alleles during caching (default: off).
+
+**Performance tip:** When loading text-format genotypes that take over 5 minutes, pyMVP will emit a warning suggesting you cache the file. Cached genotypes typically load in under a second regardless of file size.
+
 ### Phenotype Data
 
-pyMVP expects phenotype data to be provided as a csv or tsv with one column giving sample IDs and one or more columns containing numeric phenotypes. 
+pyMVP expects phenotype data to be provided as a csv or tsv with one column giving sample IDs and one or more columns containing numeric phenotypes.
 
-* pyMVP will first attempt to detect the ID column by looking for the names ID, id, IID, sample, Sample, Taxa, taxa, Genotype, genotype, Accession or accession. 
-* * If none of these labels are present it will assume the left-most column represents sample IDs. 
+* pyMVP will first attempt to detect the ID column by looking for the names ID, id, IID, sample, Sample, Taxa, taxa, Genotype, genotype, Accession or accession.
+* * If none of these labels are present it will assume the left-most column represents sample IDs.
 * * If two or more of these labels are present the left-most column with a matching name will be used.
 * All other columns are assumed to be phenotypes. Phenotypes are coerced to numeric, and all missing or non-numeric values are treated as NA.
 
 You can customize which phenotypes are analyzed using the `--traits` parameter which allows you to provide a  comma-separated list of trait names. If `--traits` is not used all numeric traits present in the phenotype file are analyzed.
 
 **Duplicate Sample IDs**: If multiple phenotype rows have the same individual ID, they are merged by computing the mean across rows for each trait column (missing values ignored). For example, if a phenotype file for height includes ID "Sample001" for 3 rows [1.2, 1.5, NaN], the final height value used for GWAS will be 1.35.
+
+### Covariate Data
+
+In addition to principal components (PCs) computed from genotype data, pyMVP supports user-supplied covariates (e.g., sex, treatment, environmental factors). Covariates are incorporated into GLM, MLM, FarmCPU, and BLINK models to control for additional sources of variation beyond population structure.
+
+**File format:** Provide a CSV or TSV file with one ID column and one or more numeric covariate columns. ID column detection follows the same rules as phenotype files (searches for common ID headers like `ID`, `IID`, `taxa`, etc., or defaults to the leftmost column).
+
+**Usage:**
+
+```bash
+python scripts/run_GWAS.py -p data/phe.csv -g data/geno.vcf.gz \
+  --covariates data/covariates.csv \
+  --covariate-columns age,sex,treatment
+```
+
+**CLI Parameters:**
+
+- `--covariates`: Path to covariate file (CSV/TSV).
+- `--covariate-columns`: Comma-separated list of column names to use as covariates. If omitted, all numeric columns (except the ID column) are used.
+- `--covariate-id-column`: Explicitly specify which column contains sample IDs (optional; auto-detected by default).
+
+**Per-trait alignment:** For each trait, pyMVP aligns phenotypes, covariates, genotypes, and PCs by sample ID. Only individuals with valid (non-missing) trait values are retained. Missing covariates are mean-imputed after alignment. The combined covariate + PC matrix is used as the design matrix for all association methods.
+
+**Duplicate Sample IDs:** If the covariate file contains multiple rows with the same sample ID, they are merged by computing the per-ID mean for each covariate (missing values ignored), and a warning is emitted.
 
 ## CLI Parameters
 
@@ -177,6 +238,12 @@ You can customize which phenotypes are analyzed using the `--traits` parameter w
 - `--n-pcs`: Number of principal components (default: 3).
 - `--traits`: Comma-separated list of trait names; by default, all numeric traits present in the phenotype file are analyzed.
 - `--outputs`: Choose any of `all_marker_pvalues`, `significant_marker_pvalues`, `manhattan`, `qq`.
+
+**Covariate options:**
+
+- `--covariates`: Path to covariate file (CSV/TSV with ID column and numeric covariates).
+- `--covariate-columns`: Comma-separated list of covariate column names to include. If not specified, all numeric columns (except the ID column) are used.
+- `--covariate-id-column`: Explicitly specify which column contains sample IDs (optional; auto-detected by default).
 
 **Significance control:**
 
@@ -256,7 +323,27 @@ pyMVP exactly duplicates the p-values assigned to genetic markers by rMVP when u
 
 ![docs/images/all_methods_comparison_compact.png](docs/images/farmcpu_comparison_plots.png)
 
-**Note** In these same 10 simulated datasets, the pyMVP BLINK implementation achieves an LD-adjusted power of 0.176 (an 11% increase over the average the power of the pyMVP FarmCPU implementation) and a LD-adjusted false discovery rate of 0.02 (a 89% decrease relative to the average false discovery rate of the pyMVP FarmCPU implementation). 
+**Note** In these same 10 simulated datasets, the pyMVP BLINK implementation achieves an LD-adjusted power of 0.176 (an 11% increase over the average the power of the pyMVP FarmCPU implementation) and a LD-adjusted false discovery rate of 0.02 (a 89% decrease relative to the average false discovery rate of the pyMVP FarmCPU implementation).
+
+## Dataset Generation
+
+pyMVP includes a comprehensive dataset generation tool for creating realistic simulated GWAS datasets with known causal variants. The generator supports configurable population structure, linkage disequilibrium patterns, MAF spectra, MAF-effect coupling, heritability control, and study designs (outbred/inbred).
+
+**Script location**: `scripts/generate_performance_dataset.py`
+
+Generate a test dataset:
+
+```bash
+python scripts/generate_performance_dataset.py \
+  --n-samples 1000 \
+  --n-snps 50000 \
+  --n-qtns 50 \
+  --output-dir test_dataset
+```
+
+Use simulated datasets to benchmark GWAS methods, validate power/FDR, test population structure correction, or evaluate method performance across heritability ranges.
+
+**Full documentation**: See [docs/generate_performance_dataset.md](docs/generate_performance_dataset.md) for detailed parameter descriptions, usage examples, built-in assumptions, and troubleshooting guidance.
 
 ## License
 

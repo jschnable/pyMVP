@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pymvp
 from pymvp.data.loaders import (
-    load_phenotype_file, load_genotype_file, load_map_file, 
-    match_individuals, detect_file_format
+    load_phenotype_file, load_genotype_file, load_map_file,
+    load_covariate_file, match_individuals, detect_file_format
 )
 from pymvp.utils.stats import (
     bonferroni_correction, calculate_maf_from_genotypes, 
@@ -56,34 +56,38 @@ def print_step(step_name: str, start_time: Optional[float] = None):
     else:
         print(f"{step_name}...")
 
-def load_and_validate_data(phenotype_file: str, 
+
+def load_and_validate_data(phenotype_file: str,
                           genotype_file: str,
                           map_file: Optional[str] = None,
                           genotype_format: Optional[str] = None,
                           trait_columns: Optional[List[str]] = None,
+                          covariate_file: Optional[str] = None,
+                          covariate_columns: Optional[List[str]] = None,
+                          covariate_id_column: str = 'ID',
                           loader_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Load and validate input data files"""
-    
+    """Load and validate input data files."""
+
     step_start = time.time()
     print_step("Loading phenotype data")
-    
-    # Load phenotype data
+
     try:
         phenotype_df = load_phenotype_file(phenotype_file, trait_columns=trait_columns)
-        print(f"   Loaded {len(phenotype_df)} individuals with {len(phenotype_df.columns)-1} traits")
+        print(f"   Loaded {len(phenotype_df)} individuals with {len(phenotype_df.columns) - 1} traits")
     except Exception as e:
         raise ValueError(f"Error loading phenotype file: {e}")
-    
+
     print_step("Loading genotype data")
-    
-    # Detect genotype format if not specified
+
     if genotype_format is None:
         genotype_format = detect_file_format(genotype_file)
         print(f"   Detected genotype format: {genotype_format}")
         if genotype_format == 'unknown':
-            raise ValueError("Could not detect genotype format. Supported: csv/tsv, vcf (vcf, vcf.gz, vcf.bgz, bcf), plink (.bed+.bim+.fam), hapmap (.hmp, .hmp.txt)")
-    
-    # Load genotype data
+            raise ValueError(
+                "Could not detect genotype format. Supported: csv/tsv, vcf (vcf, vcf.gz, vcf.bgz, bcf), "
+                "plink (.bed+.bim+.fam), hapmap (.hmp, .hmp.txt)"
+            )
+
     try:
         loader_kwargs = loader_kwargs or {}
         genotype_matrix, individual_ids, geno_map = load_genotype_file(
@@ -99,8 +103,26 @@ def load_and_validate_data(phenotype_file: str,
                 print("         Set HTS_LOG_LEVEL=error to hide them if you prefer a quiet log.")
     except Exception as e:
         raise ValueError(f"Error loading genotype file: {e}")
-    
-    # Load map file if provided
+
+    covariate_df: Optional[pd.DataFrame] = None
+    covariate_names: List[str] = []
+    if covariate_file:
+        print_step("Loading covariate data")
+        try:
+            covariate_df = load_covariate_file(
+                covariate_file,
+                covariate_columns=covariate_columns,
+                id_column=covariate_id_column,
+            )
+            covariate_names = [c for c in covariate_df.columns if c != 'ID']
+            print(
+                "   Loaded {} individuals with {} covariate columns".format(
+                    len(covariate_df), len(covariate_names)
+                )
+            )
+        except Exception as e:
+            raise ValueError(f"Error loading covariate file: {e}")
+
     if map_file:
         print_step("Loading genetic map")
         try:
@@ -109,15 +131,17 @@ def load_and_validate_data(phenotype_file: str,
 
             if supplied_map.n_markers != geno_map.n_markers:
                 raise ValueError(
-                    "Map marker count ({}) does not match genotype marker count ({})."
-                    .format(supplied_map.n_markers, geno_map.n_markers)
+                    "Map marker count ({}) does not match genotype marker count ({}).".format(
+                        supplied_map.n_markers, geno_map.n_markers
+                    )
                 )
 
-            # If SNP columns exist, ensure they line up with genotype ordering.
             supplied_df = supplied_map.to_dataframe()
             existing_df = geno_map.to_dataframe()
             if 'SNP' in supplied_df.columns and 'SNP' in existing_df.columns:
-                mismatches = (supplied_df['SNP'].to_numpy() != existing_df['SNP'].to_numpy()).sum()
+                mismatches = (
+                    supplied_df['SNP'].to_numpy() != existing_df['SNP'].to_numpy()
+                ).sum()
                 if mismatches:
                     raise ValueError(
                         f"Map SNP names do not match genotype ordering (found {mismatches} differences)."
@@ -126,49 +150,68 @@ def load_and_validate_data(phenotype_file: str,
             geno_map = supplied_map
         except Exception as e:
             raise ValueError(f"Error loading map file: {e}")
-    
+
     print_step("Data loading", step_start)
-    
+
     return {
         'phenotype_df': phenotype_df,
         'genotype_matrix': genotype_matrix,
         'individual_ids': individual_ids,
-        'geno_map': geno_map
+        'geno_map': geno_map,
+        'covariate_df': covariate_df,
+        'covariate_names': covariate_names,
     }
+
 
 def match_and_filter_individuals(phenotype_df: pd.DataFrame,
                                genotype_matrix: GenotypeMatrix,
-                               individual_ids: List[str]) -> Dict[str, Any]:
-    """Match individuals between phenotype and genotype data"""
-    
+                               individual_ids: List[str],
+                               covariate_df: Optional[pd.DataFrame] = None,
+                               covariate_names: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Match individuals between phenotype, genotype, and optional covariates."""
+
     step_start = time.time()
     print_step("Matching individuals between phenotype and genotype data")
-    
-    # Match individuals
-    matched_phenotype, matched_indices, summary = match_individuals(
-        phenotype_df, individual_ids
+
+    matched_phenotype, matched_covariate, matched_indices, summary = match_individuals(
+        phenotype_df,
+        individual_ids,
+        covariate_df=covariate_df,
     )
-    
-    # Filter genotype matrix to matched individuals
+
     matched_genotype_data = genotype_matrix[matched_indices, :]
     matched_genotype_matrix = GenotypeMatrix(matched_genotype_data)
-    
-    # Print summary
+
     print(f"   Original phenotype individuals: {summary['n_phenotype_original']}")
     print(f"   Original genotype individuals: {summary['n_genotype_original']}")
     print(f"   Common individuals: {summary['n_common']}")
-    
+
     if summary['n_phenotype_dropped'] > 0:
         print(f"   Dropped from phenotype: {summary['n_phenotype_dropped']}")
     if summary['n_genotype_dropped'] > 0:
         print(f"   Dropped from genotype: {summary['n_genotype_dropped']}")
-    
+
+    matched_covariate_names: List[str] = []
+    if matched_covariate is not None:
+        matched_covariate_names = [c for c in matched_covariate.columns if c != 'ID']
+        if covariate_names and len(covariate_names) == len(matched_covariate_names):
+            matched_covariate_names = covariate_names
+
+        print(f"   Covariate individuals provided: {summary['n_covariate_provided']}")
+        print(f"   Covariate individuals matched: {summary['n_covariate_matched']}")
+        if summary['n_covariate_unused'] > 0:
+            print(f"   Covariate rows unused (not in genotype ∩ phenotype): {summary['n_covariate_unused']}")
+    else:
+        print("   No external covariate file supplied")
+
     print_step("Individual matching", step_start)
-    
+
     return {
         'phenotype_df': matched_phenotype,
         'genotype_matrix': matched_genotype_matrix,
-        'summary': summary
+        'covariate_df': matched_covariate,
+        'covariate_names': matched_covariate_names,
+        'summary': summary,
     }
 
 def calculate_population_structure(genotype_matrix: GenotypeMatrix,
@@ -186,12 +229,14 @@ def calculate_population_structure(genotype_matrix: GenotypeMatrix,
         try:
             pcs = MVP_PCA(M=genotype_matrix, pcs_keep=n_pcs, verbose=False)
             results['pcs'] = pcs
+            results['pc_names'] = [f'PC{i + 1}' for i in range(pcs.shape[1])]
             print(f"   Calculated {n_pcs} PCs explaining population structure")
             print_step("PCA calculation", step_start)
         except Exception as e:
             raise ValueError(f"Error calculating PCs: {e}")
     else:
         results['pcs'] = np.zeros((genotype_matrix.n_individuals, 0))
+        results['pc_names'] = []
         print("   Skipping PCA (n_pcs=0)")
     
     # Calculate kinship matrix if needed
@@ -209,6 +254,7 @@ def calculate_population_structure(genotype_matrix: GenotypeMatrix,
     
     return results
 
+
 def run_gwas_analysis(phenotype_df: pd.DataFrame,
                      genotype_matrix: GenotypeMatrix,
                      geno_map,
@@ -221,31 +267,52 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                      default_significance: Optional[float] = None,
                      max_genotype_dosage: float = 2.0
                      ) -> Dict[str, Union[AssociationResults, FarmCPUResamplingResults]]:
-    """Run GWAS analysis using specified methods for a single trait.
+    """Run GWAS analysis using specified methods for a single trait."""
 
-    Args:
-        phenotype_df: Phenotype dataframe containing ID and trait columns.
-        genotype_matrix: Genotype matrix aligned to phenotype individuals.
-        geno_map: Genetic map with marker metadata.
-        population_structure: Dictionary containing PCs and optional kinship.
-        trait_name: Name of trait column to analyze.
-        methods: Methods to execute (upper-case identifiers).
-        max_iterations: Maximum FarmCPU iterations.
-        farmcpu_resampling_params: Optional overrides for resampling configuration.
-        max_genotype_dosage: Maximum genotype dosage used when computing allele
-            frequencies/MAF (default 2.0 for diploids).
-    """
-    
-    results = {}
+    results: Dict[str, Union[AssociationResults, FarmCPUResamplingResults]] = {}
 
-    # Prepare data for the specified trait
     if trait_name not in phenotype_df.columns:
         raise ValueError(f"Trait '{trait_name}' not found in phenotype data")
+
     phe_array = phenotype_df[['ID', trait_name]].values
-    pcs = population_structure['pcs']
+
+    covariate_matrix = population_structure.get('covariate_matrix')
+    covariate_names = population_structure.get('covariate_names', [])
+
+    if covariate_matrix is None:
+        covariate_matrix = population_structure.get('pcs')
+        if not covariate_names:
+            covariate_names = population_structure.get('pc_names', [])
+
+    if covariate_matrix is None:
+        covariate_matrix = np.zeros((phe_array.shape[0], 0))
+
+    covariate_matrix = np.asarray(covariate_matrix, dtype=float)
+    if covariate_matrix.ndim == 1:
+        covariate_matrix = covariate_matrix.reshape(-1, 1)
+
+    if covariate_matrix.shape[0] != phe_array.shape[0]:
+        raise ValueError(
+            "Covariate matrix row count ({}) does not match phenotype rows ({})".format(
+                covariate_matrix.shape[0], phe_array.shape[0]
+            )
+        )
+
+    if covariate_matrix.shape[1] != len(covariate_names):
+        covariate_names = [f'Covariate{i + 1}' for i in range(covariate_matrix.shape[1])]
 
     print(f"Running GWAS for trait: {trait_name}")
-    print(f"Using {pcs.shape[1]} principal components as covariates")
+    n_covariates = covariate_matrix.shape[1]
+    if n_covariates:
+        print(f"Using {n_covariates} covariate columns (user-provided + PCs)")
+        if covariate_names:
+            preview_count = min(8, n_covariates)
+            preview = ', '.join(covariate_names[:preview_count])
+            if n_covariates > preview_count:
+                preview += ', ...'
+            print(f"   Covariates: {preview}")
+    else:
+        print("No covariate columns supplied (models use intercept only)")
 
     default_resampling_params = {
         'runs': 100,
@@ -264,7 +331,6 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
     if significance_override is not None:
         default_resampling_params['significance_threshold'] = significance_override
     if default_resampling_params['significance_threshold'] is None:
-        # Fallback if neither default nor override supplied
         default_resampling_params['significance_threshold'] = 5e-8
 
     resampling_significance = default_resampling_params['significance_threshold']
@@ -278,63 +344,60 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
             f"QTN threshold ({resampling_qtn_threshold:.3g}). Markers above "
             "the QTN threshold cannot enter later FarmCPU iterations."
         )
-    
+
     blink_params = blink_params or {}
     blink_params.setdefault('max_genotype_dosage', max_genotype_dosage)
 
-    # GLM Analysis
+    covariate_matrix_for_models = covariate_matrix
+
     if 'GLM' in methods:
         step_start = time.time()
         print_step("Running GLM analysis")
-        
+
         try:
             glm_results = MVP_GLM(
                 phe=phe_array,
                 geno=genotype_matrix,
-                CV=pcs,
+                CV=covariate_matrix_for_models,
                 verbose=False
             )
             results['GLM'] = glm_results
-            
-            # Calculate genomic inflation factor
+
             lambda_gc = genomic_inflation_factor(glm_results.pvalues)
             print(f"   GLM lambda (genomic inflation): {lambda_gc:.3f}")
             print_step("GLM analysis", step_start)
-            
+
         except Exception as e:
             print(f"   GLM analysis failed: {e}")
             import traceback
             traceback.print_exc()
-    
-    # MLM Analysis
+
     if 'MLM' in methods:
         if 'kinship' not in population_structure:
             print("   Skipping MLM: kinship matrix not calculated")
         else:
             step_start = time.time()
             print_step("Running MLM analysis")
-            
+
             try:
                 mlm_results = MVP_MLM(
                     phe=phe_array,
                     geno=genotype_matrix,
                     K=population_structure['kinship'],
-                    CV=pcs,
+                    CV=covariate_matrix_for_models,
                     verbose=False
                 )
                 results['MLM'] = mlm_results
-                
-                # Calculate genomic inflation factor
+
                 lambda_gc = genomic_inflation_factor(mlm_results.pvalues)
                 print(f"   MLM lambda (genomic inflation): {lambda_gc:.3f}")
                 print_step("MLM analysis", step_start)
-                
+
             except Exception as e:
                 print(f"   MLM analysis failed: {e}")
                 import traceback
                 traceback.print_exc()
-    
-    # FarmCPU Analysis
+
     if 'FARMCPU' in methods:
         step_start = time.time()
         print_step("Running FarmCPU analysis")
@@ -344,25 +407,23 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 phe=phe_array,
                 geno=genotype_matrix,
                 map_data=geno_map,
-                CV=pcs,
+                CV=covariate_matrix_for_models,
                 maxLoop=max_iterations,
-                p_threshold=0.05,  # rMVP default
-                QTN_threshold=0.01,  # rMVP default, will be adjusted to max(0.05, 0.01) = 0.05 by rMVP logic
+                p_threshold=0.05,
+                QTN_threshold=0.01,
                 verbose=False
             )
             results['FarmCPU'] = farmcpu_results
-            
-            # Calculate genomic inflation factor
+
             lambda_gc = genomic_inflation_factor(farmcpu_results.pvalues)
             print(f"   FarmCPU lambda (genomic inflation): {lambda_gc:.3f}")
             print_step("FarmCPU analysis", step_start)
-            
+
         except Exception as e:
             print(f"   FarmCPU analysis failed: {e}")
             import traceback
             traceback.print_exc()
 
-    # BLINK Analysis
     if 'BLINK' in methods:
         step_start = time.time()
         print_step("Running BLINK analysis")
@@ -372,7 +433,7 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 phe=phe_array,
                 geno=genotype_matrix,
                 map_data=geno_map,
-                CV=pcs,
+                CV=covariate_matrix_for_models,
                 maxLoop=max_iterations,
                 ld_threshold=blink_params.get('ld_threshold', 0.7),
                 maf_threshold=blink_params.get('maf_threshold', 0.0),
@@ -393,7 +454,6 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
             import traceback
             traceback.print_exc()
 
-    # FarmCPU Resampling Analysis
     if 'FARMCPU_RESAMPLING' in methods:
         step_start = time.time()
         print_step("Running FarmCPU resampling analysis")
@@ -403,7 +463,7 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 phe=phe_array,
                 geno=genotype_matrix,
                 map_data=geno_map,
-                CV=pcs,
+                CV=covariate_matrix_for_models,
                 runs=default_resampling_params['runs'],
                 mask_proportion=default_resampling_params['mask_proportion'],
                 significance_threshold=default_resampling_params['significance_threshold'],
@@ -687,6 +747,12 @@ def main():
                        help="Genetic map file (CSV/TSV with SNP, CHROM, POS columns)")
     parser.add_argument("--output", "-o", default="./GWAS_results",
                        help="Output directory for results")
+    parser.add_argument("--covariates", default=None,
+                       help="Optional covariate file (CSV/TSV) containing additional covariate columns")
+    parser.add_argument("--covariate-columns", default=None,
+                       help="Comma-separated list of covariate column names to retain (default: all numeric columns)")
+    parser.add_argument("--covariate-id-column", default='ID',
+                       help="Column name containing sample identifiers in the covariate file")
     parser.add_argument("--format", "-f", default=None, 
                        choices=['csv', 'tsv', 'numeric', 'vcf', 'plink', 'hapmap'],
                        help="Genotype file format (auto-detect if not specified)")
@@ -770,7 +836,8 @@ def main():
             key = 'FARMCPU_RESAMPLING'
         methods.append(key)
     trait_columns = [t.strip() for t in args.traits.split(',')] if args.traits else None
-    
+    covariate_columns = [c.strip() for c in args.covariate_columns.split(',')] if args.covariate_columns else None
+
     # Parse true QTNs
     true_qtns = None
     if args.true_qtns:
@@ -839,6 +906,9 @@ def main():
             map_file=args.map,
             genotype_format=args.format,
             trait_columns=trait_columns,
+            covariate_file=args.covariates,
+            covariate_columns=covariate_columns,
+            covariate_id_column=args.covariate_id_column,
             loader_kwargs=loader_kwargs,
         )
         
@@ -848,7 +918,9 @@ def main():
         matched_data = match_and_filter_individuals(
             data['phenotype_df'],
             data['genotype_matrix'],
-            data['individual_ids']
+            data['individual_ids'],
+            covariate_df=data.get('covariate_df'),
+            covariate_names=data.get('covariate_names'),
         )
         
         # Step 3: Calculate population structure
@@ -910,39 +982,83 @@ def main():
 
             trait_numeric = pd.to_numeric(phe_df[trait_name], errors="coerce")
             trait_values = trait_numeric.to_numpy()
-            valid_mask = np.isfinite(trait_values)
-            n_valid = int(valid_mask.sum())
-            if n_valid == 0:
+            trait_mask = np.isfinite(trait_values)
+            n_initial_valid = int(trait_mask.sum())
+            if n_initial_valid == 0:
                 print(f"   ❌ Trait '{trait_name}' has no non-missing values after matching — skipping")
                 continue
 
-            n_dropped = int(len(valid_mask) - n_valid)
-            if n_dropped > 0:
-                print(f"   Removing {n_dropped} individuals with missing {trait_name} measurements")
+            n_trait_missing = int(len(trait_mask) - n_initial_valid)
+            if n_trait_missing > 0:
+                print(f"   Removing {n_trait_missing} individuals with missing {trait_name} measurements")
 
-            trait_pheno_df = phe_df.loc[valid_mask, ['ID', trait_name]].copy()
-            trait_pheno_df[trait_name] = trait_values[valid_mask]
+            covariate_df = matched_data.get('covariate_df')
+            covariate_names_all = matched_data.get('covariate_names', [])
+            cov_matrix_full = None
+            if covariate_df is not None:
+                if covariate_names_all:
+                    cov_matrix_full = np.asarray(covariate_df[covariate_names_all].to_numpy(dtype=float))
+                else:
+                    cov_matrix_full = np.zeros((len(covariate_df), 0), dtype=float)
+                if cov_matrix_full.shape[1] > 0:
+                    cov_missing_mask = ~np.isfinite(cov_matrix_full).all(axis=1)
+                    missing_cov_included = trait_mask & cov_missing_mask
+                    n_cov_missing = int(missing_cov_included.sum())
+                    if n_cov_missing > 0:
+                        print(f"   Removing {n_cov_missing} individuals with missing covariate values")
+                    trait_mask = trait_mask & ~cov_missing_mask
+            else:
+                covariate_names_all = []
 
-            if n_dropped == 0:
+            n_valid = int(trait_mask.sum())
+            if n_valid == 0:
+                print(f"   ❌ Trait '{trait_name}' has no individuals remaining after removing missing covariate values — skipping")
+                continue
+
+            trait_pheno_df = phe_df.loc[trait_mask, ['ID', trait_name]].copy()
+            trait_pheno_df[trait_name] = trait_values[trait_mask]
+
+            if trait_mask.all():
                 trait_genotype_matrix = matched_data['genotype_matrix']
             else:
-                geno_subset = matched_data['genotype_matrix'][valid_mask, :]
+                geno_subset = matched_data['genotype_matrix'][trait_mask, :]
                 trait_genotype_matrix = GenotypeMatrix(geno_subset)
 
             pcs_full = population_structure['pcs']
-            trait_pcs = pcs_full[valid_mask, :] if pcs_full is not None else None
-            trait_population_structure = {}
-            if trait_pcs is not None:
-                trait_population_structure['pcs'] = trait_pcs
+            if pcs_full is not None:
+                trait_pcs = pcs_full[trait_mask, :]
+            else:
+                trait_pcs = np.zeros((n_valid, 0))
+            pc_names = population_structure.get('pc_names', [f'PC{i + 1}' for i in range(trait_pcs.shape[1])])
+            if len(pc_names) < trait_pcs.shape[1]:
+                pc_names = [f'PC{i + 1}' for i in range(trait_pcs.shape[1])]
+
+            covariate_parts = []
+            covariate_names_combined: List[str] = []
+            if cov_matrix_full is not None and cov_matrix_full.shape[1] > 0:
+                covariate_parts.append(cov_matrix_full[trait_mask, :])
+                covariate_names_combined.extend(covariate_names_all)
+            if trait_pcs.shape[1] > 0:
+                covariate_parts.append(trait_pcs)
+                covariate_names_combined.extend(pc_names[:trait_pcs.shape[1]])
+
+            if covariate_parts:
+                trait_covariate_matrix = np.column_stack(covariate_parts)
+            else:
+                trait_covariate_matrix = np.zeros((n_valid, 0))
+
+            trait_population_structure = {
+                'covariate_matrix': trait_covariate_matrix,
+                'covariate_names': covariate_names_combined,
+                'pcs': trait_pcs,
+                'pc_names': pc_names,
+            }
 
             if 'kinship' in population_structure:
                 kinship_full = population_structure['kinship']
-                kinship_subset = kinship_full[np.ix_(valid_mask, valid_mask)]
+                idx = np.where(trait_mask)[0]
+                kinship_subset = kinship_full[np.ix_(idx, idx)]
                 trait_population_structure['kinship'] = kinship_subset
-
-            if 'pcs' not in trait_population_structure:
-                # Keep interface consistent if PCA was skipped (n_pcs=0).
-                trait_population_structure['pcs'] = np.zeros((n_valid, 0))
 
             gwas_results = run_gwas_analysis(
                 trait_pheno_df,
@@ -986,6 +1102,8 @@ def main():
                     'Trait': trait_name,
                     'Trait_Label': trait_label,
                     'Method': method,
+                    'Covariate_Count': len(covariate_names_combined),
+                    'Covariates': ';'.join(covariate_names_combined),
                     **stats,
                 })
 

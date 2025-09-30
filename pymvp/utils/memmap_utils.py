@@ -7,9 +7,141 @@ import numpy as np
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Sequence
 import pandas as pd
-from .data_types import GenotypeMatrix
+from .data_types import GenotypeMatrix, GenotypeMap
+
+
+def save_genotype_to_memmap(genotype: Union[GenotypeMatrix, np.ndarray],
+                            sample_ids: Sequence[str],
+                            geno_map: Optional[GenotypeMap],
+                            output_prefix: Union[str, Path],
+                            dtype: np.dtype = np.int8,
+                            batch_size: int = 1000) -> dict:
+    """Persist genotype data to a reusable memmap with metadata.
+
+    Args:
+        genotype: GenotypeMatrix or ndarray (n_individuals × n_markers)
+        sample_ids: Iterable of sample identifiers
+        geno_map: Optional GenotypeMap; stored to CSV if provided
+        output_prefix: Base path for emitted files (without extension)
+        dtype: Storage dtype for memmap
+        batch_size: Marker batch size when copying data
+
+    Returns:
+        Dictionary describing generated artefacts.
+    """
+
+    dtype = np.dtype(dtype)
+    output_prefix = Path(output_prefix)
+    output_dir = output_prefix.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(genotype, GenotypeMatrix):
+        shape = genotype.shape
+        getter = genotype.get_batch
+    else:
+        array = np.asarray(genotype)
+        shape = array.shape
+
+        def getter(start: int, end: int):
+            return array[:, start:end]
+
+    n_individuals, n_markers = shape
+    memmap_path = output_prefix.with_suffix('.memmap')
+    metadata_path = output_prefix.with_suffix('.pymvp_cache.npz')
+    samples_path = output_prefix.with_suffix('.samples.txt')
+    map_path = output_prefix.with_suffix('.map.csv')
+
+    mm = np.memmap(memmap_path, dtype=dtype, mode='w+', shape=shape)
+    try:
+        for start in range(0, n_markers, batch_size):
+            end = min(start + batch_size, n_markers)
+            batch = getter(start, end)
+            if not isinstance(batch, np.ndarray):  # safety for sequences
+                batch = np.asarray(batch)
+            mm[:, start:end] = batch.astype(dtype, copy=False)
+        mm.flush()
+    finally:
+        del mm
+
+    # Persist sample IDs
+    with open(samples_path, 'w') as handle:
+        for sid in sample_ids:
+            handle.write(f"{sid}\n")
+
+    # Persist map if available
+    map_file_written: Optional[Path] = None
+    if geno_map is not None:
+        map_df = geno_map.to_dataframe()
+        map_df.to_csv(map_path, index=False)
+        map_file_written = map_path
+
+    np.savez_compressed(
+        metadata_path,
+        shape=shape,
+        dtype=dtype.str,
+        memmap_file=str(memmap_path.resolve()),
+        samples_file=str(samples_path.resolve()),
+        map_file=str(map_file_written.resolve()) if map_file_written else '',
+        writer_version="1",
+    )
+
+    return {
+        'memmap_path': memmap_path,
+        'metadata_path': metadata_path,
+        'samples_path': samples_path,
+        'map_path': map_file_written,
+        'shape': shape,
+        'dtype': dtype,
+    }
+
+
+def load_full_from_metadata(metadata_path: Union[str, Path],
+                            precompute_alleles: bool = True) -> Tuple[GenotypeMatrix, Sequence[str], Optional[GenotypeMap]]:
+    """Load genotype, sample IDs, and map from a pyMVP cache metadata file."""
+
+    metadata_path = Path(metadata_path)
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+
+    metadata = np.load(metadata_path, allow_pickle=True)
+
+    shape = tuple(int(x) for x in metadata['shape'])
+    dtype_value = metadata['dtype']
+    if isinstance(dtype_value, np.ndarray):
+        dtype_value = dtype_value.item()
+    dtype = np.dtype(dtype_value)
+    memmap_file = Path(metadata['memmap_file'].item())
+
+    genotype = GenotypeMatrix(
+        data=str(memmap_file),
+        shape=shape,
+        dtype=dtype,
+        precompute_alleles=precompute_alleles,
+    )
+
+    samples_file = metadata.get('samples_file')
+    if samples_file is not None:
+        samples_path = Path(samples_file.item())
+        with open(samples_path, 'r') as handle:
+            sample_ids = [line.strip() for line in handle if line.strip()]
+    else:
+        sample_ids = [f"Sample_{i+1}" for i in range(shape[0])]
+
+    map_file = metadata.get('map_file')
+    geno_map: Optional[GenotypeMap]
+    if map_file is not None:
+        map_path_str = map_file.item()
+        if map_path_str:
+            map_df = pd.read_csv(map_path_str, dtype={'SNP': str, 'CHROM': str, 'REF': str, 'ALT': str})
+            geno_map = GenotypeMap(map_df)
+        else:
+            geno_map = None
+    else:
+        geno_map = None
+
+    return genotype, sample_ids, geno_map
 
 def create_memmap_from_csv(csv_path: Union[str, Path], 
                           output_path: Optional[Union[str, Path]] = None,

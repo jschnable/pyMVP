@@ -21,6 +21,8 @@ from __future__ import print_function
 import sys
 import gzip
 import io
+import os
+import tempfile
 
 try:
     import numpy as np
@@ -29,6 +31,65 @@ except Exception as e:  # pragma: no cover
 
 
 MISSING = -9
+
+
+class _DynamicInt8MatrixWriter:
+    """Append-only int8 matrix builder backed by a temporary memmap."""
+
+    def __init__(self, n_rows, initial_capacity=4096):
+        self.n_rows = int(n_rows)
+        if self.n_rows <= 0:
+            raise ValueError("Writer requires a positive number of rows")
+        self.capacity = max(int(initial_capacity), 1)
+        tmp = tempfile.NamedTemporaryFile(prefix="pymvp_geno_", suffix=".tmp", delete=False)
+        self.path = tmp.name
+        tmp.close()
+        self.memmap = np.memmap(self.path, dtype=np.int8, mode='w+', shape=(self.n_rows, self.capacity))
+        self.count = 0
+
+    def _grow(self, min_capacity):
+        new_capacity = self.capacity
+        while new_capacity < min_capacity:
+            new_capacity = max(new_capacity * 2, min_capacity)
+        self.memmap.flush()
+        del self.memmap
+        with open(self.path, 'r+b') as fh:
+            fh.truncate(self.n_rows * new_capacity)
+        self.memmap = np.memmap(self.path, dtype=np.int8, mode='r+', shape=(self.n_rows, new_capacity))
+        self.capacity = new_capacity
+
+    def append(self, column):
+        if column.shape != (self.n_rows,):
+            raise ValueError(f"Column shape mismatch: expected ({self.n_rows},), got {column.shape}")
+        if self.count >= self.capacity:
+            self._grow(self.count + 1)
+        self.memmap[:, self.count] = column
+        self.count += 1
+
+    def finalize(self):
+        if self.memmap is None:
+            return np.zeros((self.n_rows, 0), dtype=np.int8)
+        total_cols = self.count
+        if total_cols == 0:
+            result = np.zeros((self.n_rows, 0), dtype=np.int8)
+        else:
+            if self.capacity != total_cols:
+                self.memmap.flush()
+                del self.memmap
+                with open(self.path, 'r+b') as fh:
+                    fh.truncate(self.n_rows * total_cols)
+                self.memmap = np.memmap(self.path, dtype=np.int8, mode='r', shape=(self.n_rows, total_cols))
+            else:
+                self.memmap.flush()
+                self.memmap = np.memmap(self.path, dtype=np.int8, mode='r', shape=(self.n_rows, total_cols))
+            result = np.empty((self.n_rows, total_cols), dtype=np.int8)
+            result[:, :] = self.memmap
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+        self.memmap = None
+        return result
 
 
 def _open_text(path):
@@ -172,12 +233,12 @@ def load_genotype_vcf(
 
     # Initialize
     individual_ids = None
-    columns = []  # list of np.ndarray (int8) per marker
+    writer = None  # lazy initialised streaming writer
     map_rows = []  # dict rows
 
     # Helper to finalize a candidate variant column with QC
     def consider_variant(col, chrom, pos, vid, ref, alt, ploidy):
-        nonlocal columns, map_rows
+        nonlocal writer, map_rows
         col = np.asarray(col, dtype=np.int16)  # temp safe range
         # If requested, restrict to SNPs
         if not include_indels:
@@ -203,9 +264,11 @@ def load_genotype_vcf(
             maf = min(mean_dos / denom, 1.0 - (mean_dos / denom))
             if maf < min_maf:
                 return
-        # Finalize dtype
+        # Finalize dtype and append to streaming writer
         col = col.astype(np.int8, copy=False)
-        columns.append(col)
+        if writer is None:
+            writer = _DynamicInt8MatrixWriter(len(individual_ids))
+        writer.append(col)
         map_rows.append({
             'SNP': _build_snp_id(chrom, pos, vid, ref, alt),
             'CHROM': str(chrom),
@@ -224,7 +287,7 @@ def load_genotype_vcf(
             raise ValueError('VCF contains no sample columns')
 
         def consider_variant(col, chrom, pos, vid, ref, alt, ploidy):
-            nonlocal columns, map_rows
+            nonlocal writer, map_rows
             col = np.asarray(col, dtype=np.int16)
             if not include_indels and (len(ref) != 1 or len(alt) != 1):
                 return
@@ -244,7 +307,10 @@ def load_genotype_vcf(
                 maf = min(mean_dos / denom, 1.0 - (mean_dos / denom))
                 if maf < min_maf:
                     return
-            columns.append(col.astype(np.int8, copy=False))
+            col = col.astype(np.int8, copy=False)
+            if writer is None:
+                writer = _DynamicInt8MatrixWriter(len(individual_ids))
+            writer.append(col)
             map_rows.append({
                 'SNP': _build_snp_id(chrom, pos, vid, ref, alt),
                 'CHROM': str(chrom),
@@ -422,11 +488,11 @@ def load_genotype_vcf(
             except Exception:
                 pass
 
-    if not columns:
+    if writer is None:
         # No variants passed filters
         geno = np.zeros((len(individual_ids or []), 0), dtype=np.int8)
     else:
-        geno = np.column_stack(columns).astype(np.int8, copy=False)
+        geno = writer.finalize()
 
     # Build geno_map output
     if return_pandas:

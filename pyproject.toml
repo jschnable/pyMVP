@@ -60,6 +60,9 @@ Homepage = "https://github.com/your-org/pyMVP"
 Repository = "https://github.com/your-org/pyMVP"
 Issues = "https://github.com/your-org/pyMVP/issues"
 
+[project.scripts]
+pymvp-cache-genotype = "pymvp.tools.convert_genotype:main"
+
 [tool.setuptools.packages.find]
 include = ["pymvp*"]
 
