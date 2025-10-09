@@ -67,28 +67,21 @@ class _DynamicInt8MatrixWriter:
         self.count += 1
 
     def finalize(self):
-        if self.memmap is None:
+        mm = self.memmap
+        if mm is None:
             return np.zeros((self.n_rows, 0), dtype=np.int8)
         total_cols = self.count
+        mm.flush()
         if total_cols == 0:
             result = np.zeros((self.n_rows, 0), dtype=np.int8)
         else:
-            if self.capacity != total_cols:
-                self.memmap.flush()
-                del self.memmap
-                with open(self.path, 'r+b') as fh:
-                    fh.truncate(self.n_rows * total_cols)
-                self.memmap = np.memmap(self.path, dtype=np.int8, mode='r', shape=(self.n_rows, total_cols))
-            else:
-                self.memmap.flush()
-                self.memmap = np.memmap(self.path, dtype=np.int8, mode='r', shape=(self.n_rows, total_cols))
-            result = np.empty((self.n_rows, total_cols), dtype=np.int8)
-            result[:, :] = self.memmap
+            result = np.array(mm[:, :total_cols], dtype=np.int8, copy=True, order='C')
         try:
             os.remove(self.path)
         except OSError:
             pass
         self.memmap = None
+        del mm
         return result
 
 

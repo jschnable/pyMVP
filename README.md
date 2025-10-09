@@ -122,7 +122,7 @@ python scripts/run_GWAS.py -p data/phe.csv -g data/test.hmp.txt --format hapmap 
 Multi-trait in one run (auto-detects all numeric traits):
 
 ```bash
-python scripts/run_GWAS.py -p data/phe_multi.csv -g data/geno.vcf.gz --outputs all_results manhattan qq
+python scripts/run_GWAS.py -p data/phe_multi.csv -g data/geno.vcf.gz --outputs all_marker_pvalues,manhattan,qq
 ```
 
 ![docs/images/trait3_methods_comparison.png](docs/images/trait3_methods_comparison.png)
@@ -237,7 +237,7 @@ python scripts/run_GWAS.py -p data/phe.csv -g data/geno.vcf.gz \
 - `--methods`: Comma-separated list of methods to run (`GLM,MLM,FarmCPU,FarmCPUResampling,BLINK`).
 - `--n-pcs`: Number of principal components (default: 3).
 - `--traits`: Comma-separated list of trait names; by default, all numeric traits present in the phenotype file are analyzed.
-- `--outputs`: Choose any of `all_marker_pvalues`, `significant_marker_pvalues`, `manhattan`, `qq`.
+- `--outputs`: Choose any of `all_marker_pvalues`, `significant_marker_pvalues`, `manhattan`, `qq` (comma- or space-separated).
 
 **Covariate options:**
 
