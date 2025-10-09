@@ -51,11 +51,19 @@ class _DynamicInt8MatrixWriter:
         new_capacity = self.capacity
         while new_capacity < min_capacity:
             new_capacity = max(new_capacity * 2, min_capacity)
+        old_columns = self.count
+        if old_columns > 0:
+            preserved = np.empty((self.n_rows, old_columns), dtype=np.int8)
+            np.copyto(preserved, self.memmap[:, :old_columns])
+        else:
+            preserved = None
         self.memmap.flush()
         del self.memmap
         with open(self.path, 'r+b') as fh:
             fh.truncate(self.n_rows * new_capacity)
         self.memmap = np.memmap(self.path, dtype=np.int8, mode='r+', shape=(self.n_rows, new_capacity))
+        if preserved is not None:
+            self.memmap[:, :old_columns] = preserved
         self.capacity = new_capacity
 
     def append(self, column):
