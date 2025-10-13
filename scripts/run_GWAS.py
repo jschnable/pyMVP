@@ -8,13 +8,14 @@ and FarmCPU resampling methods.
 """
 
 import argparse
+import re
 import sys
 import time
 import warnings
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Tuple
 
 # Add the parent directory to the path to import pyMVP
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -40,6 +41,81 @@ from pymvp.association.blink import MVP_BLINK
 from pymvp.matrix.pca import MVP_PCA
 from pymvp.matrix.kinship import MVP_K_VanRaden
 from pymvp.visualization.manhattan import MVP_Report
+
+OUTPUT_CHOICES: Tuple[str, ...] = (
+    'all_marker_pvalues',
+    'significant_marker_pvalues',
+    'manhattan',
+    'qq',
+)
+
+
+def normalize_outputs(outputs: Optional[List[str]]) -> List[str]:
+    """Normalise --outputs selections, splitting comma-separated tokens and de-duplicating."""
+    if not outputs:
+        return list(OUTPUT_CHOICES)
+
+    normalised: List[str] = []
+    seen = set()
+    for raw_entry in outputs:
+        if raw_entry is None:
+            continue
+        for token in re.split(r'[,\s]+', raw_entry):
+            entry = token.strip().lower()
+            if not entry:
+                continue
+            if entry not in OUTPUT_CHOICES:
+                raise ValueError(f"Invalid output option: {entry}")
+            if entry not in seen:
+                normalised.append(entry)
+                seen.add(entry)
+    if not normalised:
+        return list(OUTPUT_CHOICES)
+    return normalised
+
+
+class FarmCPUResamplingProgressReporter:
+    """Lightweight callable progress helper for FarmCPU resampling runs."""
+
+    def __init__(self, trait_name: str, total_runs: int, *, report_interval: float = 0.1) -> None:
+        self.trait_name = trait_name
+        self.total_runs = max(total_runs, 1)
+        self.report_interval = max(report_interval, 0.0)
+        self._last_reported_fraction = 0.0
+
+    def __call__(self, current_run: int, total_runs: int, elapsed_seconds: float) -> None:
+        # Align with caller-provided totals if they differ
+        if total_runs > 0:
+            self.total_runs = total_runs
+        current_run = max(min(current_run, self.total_runs), 0)
+        fraction_complete = current_run / self.total_runs if self.total_runs else 1.0
+
+        if current_run <= 1 and fraction_complete <= max(self.report_interval, 0.0):
+            print(
+                f"[{self.trait_name}] FarmCPU resampling started: "
+                f"{current_run}/{self.total_runs} runs complete"
+            )
+            self._last_reported_fraction = fraction_complete
+            return
+
+        if current_run >= self.total_runs:
+            print(
+                f"[{self.trait_name}] FarmCPU resampling finished: "
+                f"{self.total_runs}/{self.total_runs} runs in {elapsed_seconds:.1f}s"
+            )
+            self._last_reported_fraction = 1.0
+            return
+
+        if fraction_complete - self._last_reported_fraction >= self.report_interval:
+            runs_remaining = self.total_runs - current_run
+            avg_time_per_run = elapsed_seconds / max(current_run, 1)
+            eta_seconds = runs_remaining * avg_time_per_run
+            print(
+                f"[{self.trait_name}] FarmCPU resampling progress: "
+                f"{current_run}/{self.total_runs} runs "
+                f"({fraction_complete * 100:.1f}%); ETA {eta_seconds:.1f}s"
+            )
+            self._last_reported_fraction = fraction_complete
 
 def print_header():
     """Print script header with version info"""
@@ -798,8 +874,8 @@ def main():
                        help="Comma-separated list of trait column names (auto-detect if not specified)")
     # Output selection
     parser.add_argument("--outputs", nargs='+',
-                       choices=['all_marker_pvalues','significant_marker_pvalues','manhattan','qq'],
-                       default=['all_marker_pvalues','significant_marker_pvalues','manhattan','qq'],
+                       choices=list(OUTPUT_CHOICES),
+                       default=list(OUTPUT_CHOICES),
                        help=(
                            "Which outputs to generate: 'all_marker_pvalues' (full p-values), 'significant_marker_pvalues' (only significant SNPs),\n"
                            "'manhattan' (Manhattan plot), 'qq' (Q-Q plot). Choose any combination."
@@ -837,6 +913,7 @@ def main():
         methods.append(key)
     trait_columns = [t.strip() for t in args.traits.split(',')] if args.traits else None
     covariate_columns = [c.strip() for c in args.covariate_columns.split(',')] if args.covariate_columns else None
+    args.outputs = normalize_outputs(args.outputs)
 
     # Parse true QTNs
     true_qtns = None

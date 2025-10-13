@@ -14,6 +14,7 @@ import re
 
 from ..utils.data_types import AssociationResults, GenotypeMap
 from ..association.farmcpu_resampling import FarmCPUResamplingResults
+from ..utils.stats import genomic_inflation_factor
 
 def MVP_Report(results: Union[AssociationResults, Dict],
                map_data: Optional[GenotypeMap] = None,
@@ -670,9 +671,8 @@ def create_qq_plot(pvalues: np.ndarray,
     max_val = max(np.max(exp_log), np.max(obs_log))
     ax.plot([0, max_val], [0, max_val], 'r--', alpha=0.8, label='Null hypothesis')
 
-    # Calculate lambda (genomic inflation factor)
-    median_chi2 = np.median(2 * np.log(10) * obs_log)  # Convert back to chi-square scale
-    lambda_gc = median_chi2 / 0.456  # Expected median of chi-square(1) is ~0.456
+    # Calculate lambda (genomic inflation factor) using shared utility
+    lambda_gc = genomic_inflation_factor(observed_pvals)
 
     ax.set_xlabel('Expected -log₁₀(P-value)')
     ax.set_ylabel('Observed -log₁₀(P-value)')
@@ -769,9 +769,7 @@ def calculate_gwas_summary(pvalues: np.ndarray,
     n_suggestive = np.sum(valid_pvalues < suggestive_threshold) - n_significant
 
     # Calculate genomic inflation factor (lambda)
-    obs_log = -np.log10(valid_pvalues)
-    median_chi2 = np.median(2 * np.log(10) * obs_log)
-    lambda_gc = median_chi2 / 0.456
+    lambda_gc = genomic_inflation_factor(valid_pvalues)
 
     return {
         'n_markers': len(valid_pvalues),

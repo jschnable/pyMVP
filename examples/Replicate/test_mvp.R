@@ -1,9 +1,0 @@
-library(rMVP)
-setwd("examples/Replicate")
-MVP.Data(fileVCF="sap_mio_imputed_maf0.05_het0.1.renamed.vcf",
-         filePhe="sorghum_analysis_final_for_gwas_pc_scores_for_gwas.csv",
-         out="py_check",
-         priority="speed",
-         sep.phe=",",
-         fileKin=TRUE,
-         filePC=TRUE)
