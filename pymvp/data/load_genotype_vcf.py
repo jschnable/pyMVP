@@ -23,6 +23,8 @@ import gzip
 import io
 import os
 import tempfile
+from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 try:
     import numpy as np
@@ -31,6 +33,46 @@ except Exception as e:  # pragma: no cover
 
 
 MISSING = -9
+
+_GT_TOKEN_CACHE_SENTINEL = object()
+_GT_TOKEN_CACHE: Dict[str, Optional[Tuple[str, ...]]] = {}
+_BIALLELIC_DOSAGE_CACHE: Dict[Tuple[str, ...], Tuple[int, int]] = {}
+_BIALLELIC_GT_CACHE: Dict[str, Tuple[int, int]] = {}
+_BIALLELIC_GT_DIRECT: Dict[str, Tuple[int, int]] = {
+    '0/0': (0, 2),
+    '0|0': (0, 2),
+    '0/1': (1, 2),
+    '1/0': (1, 2),
+    '0|1': (1, 2),
+    '1|0': (1, 2),
+    '1/1': (2, 2),
+    '1|1': (2, 2),
+    '0': (0, 1),
+    '1': (1, 1),
+    './.': (MISSING, 0),
+    '.|.': (MISSING, 0),
+    '.': (MISSING, 0),
+}
+
+_GT_TOKEN_CACHE_SENTINEL = object()
+_GT_TOKEN_CACHE: Dict[str, Optional[Tuple[str, ...]]] = {}
+_BIALLELIC_DOSAGE_CACHE: Dict[Tuple[str, ...], Tuple[int, int]] = {}
+_BIALLELIC_GT_CACHE: Dict[str, Tuple[int, int]] = {}
+_BIALLELIC_GT_DIRECT: Dict[str, Tuple[int, int]] = {
+    '0/0': (0, 2),
+    '0|0': (0, 2),
+    '0/1': (1, 2),
+    '1/0': (1, 2),
+    '0|1': (1, 2),
+    '1|0': (1, 2),
+    '1/1': (2, 2),
+    '1|1': (2, 2),
+    '0': (0, 1),
+    '1': (1, 1),
+    './.': (MISSING, 0),
+    '.|.': (MISSING, 0),
+    '.': (MISSING, 0),
+}
 
 
 class _DynamicInt8MatrixWriter:
@@ -128,11 +170,18 @@ def _split_gt_tokens(gt):
     # Accept phased or unphased; return list of allele indices as strings
     if gt is None or gt == '.' or gt == './.' or gt == '.|.':
         return None
+    cached = _GT_TOKEN_CACHE.get(gt, _GT_TOKEN_CACHE_SENTINEL)
+    if cached is not _GT_TOKEN_CACHE_SENTINEL:
+        return cached
     sep = '/' if '/' in gt else '|' if '|' in gt else None
     if sep is None:
-        # Non-standard single allele or missing
+        _GT_TOKEN_CACHE[gt] = None
         return None
-    toks = gt.split(sep)
+    toks = tuple(gt.split(sep))
+    if any(token == '' for token in toks):
+        _GT_TOKEN_CACHE[gt] = None
+        return None
+    _GT_TOKEN_CACHE[gt] = toks
     return toks
 
 
@@ -140,21 +189,36 @@ def _code_dosage_biallelic(gt_tokens):
     # gt_tokens like ['0','1', ...]; returns (dosage, ploidy)
     if not gt_tokens:
         return MISSING, 0
+    if isinstance(gt_tokens, tuple):
+        key = gt_tokens
+    else:
+        key = tuple(gt_tokens)
+    cached = _BIALLELIC_DOSAGE_CACHE.get(key)
+    if cached is not None:
+        return cached
     alt_count = 0
     ploidy = 0
     for token in gt_tokens:
         if token == '.':
-            return MISSING, 0
+            result = (MISSING, 0)
+            _BIALLELIC_DOSAGE_CACHE[key] = result
+            return result
         try:
             allele = int(token)
         except ValueError:
-            return MISSING, 0
+            result = (MISSING, 0)
+            _BIALLELIC_DOSAGE_CACHE[key] = result
+            return result
         if allele not in (0, 1):
-            return MISSING, 0
+            result = (MISSING, 0)
+            _BIALLELIC_DOSAGE_CACHE[key] = result
+            return result
         ploidy += 1
         if allele == 1:
             alt_count += 1
-    return alt_count, ploidy
+    result = (alt_count, ploidy)
+    _BIALLELIC_DOSAGE_CACHE[key] = result
+    return result
 
 
 def _code_dosage_split(gt_tokens, alt_index):
@@ -177,6 +241,60 @@ def _code_dosage_split(gt_tokens, alt_index):
         if allele == alt_index:
             alt_count += 1
     return alt_count, ploidy
+
+
+def _decode_biallelic_gt(gt: Optional[str]) -> Tuple[int, int]:
+    if gt is None:
+        return MISSING, 0
+    direct = _BIALLELIC_GT_DIRECT.get(gt)
+    if direct is not None:
+        return direct
+    cached = _BIALLELIC_GT_CACHE.get(gt)
+    if cached is not None:
+        return cached
+    alt_count = 0
+    ploidy = 0
+    result: Tuple[int, int]
+    reading_digit = False
+    allele_value = 0
+    for ch in gt:
+        if ch == '.':
+            result = (MISSING, 0)
+            _BIALLELIC_GT_CACHE[gt] = result
+            return result
+        if ch in '/|':
+            if reading_digit:
+                if allele_value == 1:
+                    alt_count += 1
+                elif allele_value not in (0,):
+                    result = (MISSING, 0)
+                    _BIALLELIC_GT_CACHE[gt] = result
+                    return result
+                ploidy += 1
+                reading_digit = False
+                allele_value = 0
+            continue
+        if '0' <= ch <= '9':
+            reading_digit = True
+            allele_value = allele_value * 10 + (ord(ch) - 48)
+        else:
+            result = (MISSING, 0)
+            _BIALLELIC_GT_CACHE[gt] = result
+            return result
+    if reading_digit:
+        if allele_value == 1:
+            alt_count += 1
+        elif allele_value not in (0,):
+            result = (MISSING, 0)
+            _BIALLELIC_GT_CACHE[gt] = result
+            return result
+        ploidy += 1
+    if ploidy == 0:
+        result = (MISSING, 0)
+    else:
+        result = (alt_count, ploidy)
+    _BIALLELIC_GT_CACHE[gt] = result
+    return result
 
 
 def _ds_to_int(ds_val):
@@ -438,35 +556,89 @@ def load_genotype_vcf(
                 fmt_keys = _parse_format_keys(fmt)
                 key_to_idx = {k: i for i, k in enumerate(fmt_keys)}
 
+                gt_index = key_to_idx.get('GT')
+                ds_index = key_to_idx.get('DS')
+                gt_primary = gt_index == 0
+
+                ds_array: Optional[np.ndarray]
+                if ds_index is None:
+                    ds_array = None
+                else:
+                    ds_array = np.full(len(individual_ids), MISSING, dtype=np.int16)
+                    if ds_index == 0:
+                        for si, field in enumerate(sample_fields):
+                            token = field.partition(':')[0]
+                            if token:
+                                ds_array[si] = _ds_to_int(token)
+                    elif ds_index == 1 and gt_primary:
+                        for si, field in enumerate(sample_fields):
+                            head, sep, tail = field.partition(':')
+                            if sep:
+                                token, _, _ = tail.partition(':')
+                                if token:
+                                    ds_array[si] = _ds_to_int(token)
+                    else:
+                        for si, field in enumerate(sample_fields):
+                            toks = field.split(':')
+                            if ds_index < len(toks):
+                                token = toks[ds_index]
+                                if token:
+                                    ds_array[si] = _ds_to_int(token)
+
+                is_biallelic = len(alt_alleles) == 1
+
+                if gt_index is not None:
+                    extracted_gt = []
+                    if gt_primary:
+                        for field in sample_fields:
+                            extracted_gt.append(field.partition(':')[0] if field else '')
+                    else:
+                        for field in sample_fields:
+                            if not field:
+                                extracted_gt.append('')
+                                continue
+                            toks = field.split(':')
+                            extracted_gt.append(toks[gt_index] if gt_index < len(toks) else '')
+                else:
+                    extracted_gt = [''] * len(sample_fields)
+
+                direct_map = _BIALLELIC_GT_DIRECT
+                decode_biallelic = _decode_biallelic_gt
+                split_tokens = _split_gt_tokens
+
                 # Helper: build column(s) for this site
                 def build_columns_for_alt(alt_index, alt_base):
                     col = np.full(len(individual_ids), MISSING, dtype=np.int16)
                     variant_ploidy = 0
-                    # For each sample, parse its field
-                    for si, field in enumerate(sample_fields):
-                        if not field:
-                            continue
-                        toks = field.split(':')
-                        gt = None
-                        if 'GT' in key_to_idx and key_to_idx['GT'] < len(toks):
-                            gt = toks[key_to_idx['GT']]
-                        gt_tokens = _split_gt_tokens(gt) if gt is not None else None
-                        if gt_tokens is not None:
-                            if len(alt_alleles) > 1:
-                                dosage, ploidy = _code_dosage_split(gt_tokens, alt_index)
+                    if is_biallelic:
+                        for si, gt in enumerate(extracted_gt):
+                            ds_val = ds_array[si] if ds_array is not None else MISSING
+                            if gt:
+                                direct = direct_map.get(gt)
+                                if direct is not None:
+                                    dosage, ploidy = direct
+                                else:
+                                    dosage, ploidy = decode_biallelic(gt)
                             else:
-                                dosage, ploidy = _code_dosage_biallelic(gt_tokens)
+                                dosage, ploidy = (MISSING, 0)
                             if dosage != MISSING:
                                 col[si] = dosage
                                 variant_ploidy = max(variant_ploidy, ploidy)
-                            elif 'DS' in key_to_idx and key_to_idx['DS'] < len(toks):
-                                col[si] = _ds_to_int(toks[key_to_idx['DS']])
-                        else:
-                            if 'DS' in key_to_idx and key_to_idx['DS'] < len(toks):
-                                col[si] = _ds_to_int(toks[key_to_idx['DS']])
-                            else:
-                                # Keep missing
-                                pass
+                            elif ds_val != MISSING:
+                                col[si] = ds_val
+                    else:
+                        for si, gt in enumerate(extracted_gt):
+                            ds_val = ds_array[si] if ds_array is not None else MISSING
+                            gt_tokens = split_tokens(gt) if gt else None
+                            if gt_tokens is not None:
+                                dosage, ploidy = _code_dosage_split(gt_tokens, alt_index)
+                                if dosage != MISSING:
+                                    col[si] = dosage
+                                    variant_ploidy = max(variant_ploidy, ploidy)
+                                elif ds_val != MISSING:
+                                    col[si] = ds_val
+                            elif ds_val != MISSING:
+                                col[si] = ds_val
                     return col, variant_ploidy
 
                 if len(alt_alleles) == 1:
