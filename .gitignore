@@ -76,6 +76,9 @@ validation_data/
 performance_test_large/
 test_datasets/
 *test_data*
+*.vcf
+*.vcf.gz
+harmonized_gec_spec.md
 
 # GWAS results and outputs
 *results*/
@@ -91,6 +94,7 @@ pyMVP_FarmCPU_*/
 *.jpg
 *.jpeg
 *.pdf
+*.png
 *.csv
 *.tsv
 *.txt
