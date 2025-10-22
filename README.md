@@ -127,6 +127,28 @@ python scripts/run_GWAS.py -p data/phe_multi.csv -g data/geno.vcf.gz --outputs a
 
 ![docs/images/trait3_methods_comparison.png](docs/images/trait3_methods_comparison.png)
 
+### Effective number of independent tests (Li et al. 2012)
+
+pyMVP can estimate and apply the effective number of independent markers following the approach of [Li et al. (2012)](https://doi.org/10.1007/s00439-011-1118-2), which harmonises with the Genomic-control Effective Count (GEC) procedure. This is useful for setting genome-wide significance thresholds that reflect LD structure instead of the raw marker count.
+
+* `--compute-effective-tests` runs the estimator during genotype loading and stores the resulting metadata (`Me`, per-chromosome breakdown, and dropped monomorphic counts).
+* `--use-effective-tests` swaps the Bonferroni denominator from the raw marker count to the estimated `Me` value (implies `--compute-effective-tests` when needed).
+* Optional tuning flags: `--effective-test-window`, `--effective-test-corr-cutoff`, `--effective-test-gap-limit`, `--effective-test-span-limit`, `--effective-test-prune-threshold`.
+
+Example:
+
+```bash
+python scripts/run_GWAS.py \
+  --phenotype data/phe.csv \
+  --genotype data/geno.vcf.gz \
+  --compute-effective-tests \
+  --use-effective-tests \
+  --effective-test-window 2000000 \
+  --output results_effective
+```
+
+The CLI prints the estimated effective number of tests and uses it as the Bonferroni denominator for all methods unless you override the significance threshold explicitly (`--significance`).
+
 ## Input Formats
 
 ### Genetic Marker Data
@@ -249,9 +271,10 @@ python scripts/run_GWAS.py -p data/phe.csv -g data/geno.vcf.gz \
 
 - Default: Bonferroni with `alpha=0.05` and the true number of markers.
 - `--alpha`: Override alpha used for Bonferroni.
-- `--n-eff`: Use an effective number of markers for Bonferroni denominator.
-- `--compute-effective-tests`: Estimate the Li & Ji effective marker count (GEC-style) after loading genotypes and use it as the Bonferroni denominator. Optional tuning knobs: `--effective-test-window`, `--effective-test-corr-cutoff`, `--effective-test-gap-limit`, `--effective-test-span-limit`, `--effective-test-prune-threshold`.
-- `--significance`: Fixed p-value threshold; overrides `--alpha` and `--n-eff` when provided.
+- `--n-eff`: Provide your own effective number of tests for the Bonferroni denominator.
+- `--compute-effective-tests`: Estimate the effective number of independent markers following Li et al. (2012) using the harmonised GEC algorithm and store the result in the genotype metadata. Optional tuning knobs: `--effective-test-window`, `--effective-test-corr-cutoff`, `--effective-test-gap-limit`, `--effective-test-span-limit`, `--effective-test-prune-threshold`.
+- `--use-effective-tests`: Replace the Bonferroni denominator with the Li et al. (2012) estimate (implies `--compute-effective-tests` if the estimate has not yet been generated).
+- `--significance`: Fixed p-value threshold; overrides `--alpha`, `--n-eff`, and `--use-effective-tests` when provided.
 
 **Genotype loader/QC options:**
 

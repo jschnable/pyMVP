@@ -8,6 +8,7 @@ and FarmCPU resampling methods.
 """
 
 import argparse
+import math
 import re
 import sys
 import time
@@ -193,7 +194,7 @@ def load_and_validate_data(phenotype_file: str,
             total_snps = effective_tests_info.get("total_snps", geno_map.n_markers)
             dropped_mono = effective_tests_info.get("dropped_monomorphic_total", 0)
             message = (
-                f"   Effective tests (GEC-style): {me_value:,} across {total_snps:,} SNPs"
+                f"   Effective tests (Li et al. 2012): {me_value:,} across {total_snps:,} SNPs"
             )
             if dropped_mono:
                 message += f" (dropped {dropped_mono:,} monomorphic markers)"
@@ -257,7 +258,7 @@ def load_and_validate_data(phenotype_file: str,
                 total_snps = effective_info.get("total_snps", geno_map.n_markers)
                 dropped_mono = effective_info.get("dropped_monomorphic_total", 0)
                 message = (
-                    f"   Effective tests (GEC-style, map file): {me_value:,} across {total_snps:,} SNPs"
+                    f"   Effective tests (Li et al. 2012, map file): {me_value:,} across {total_snps:,} SNPs"
                 )
                 if dropped_mono:
                     message += f" (dropped {dropped_mono:,} monomorphic markers)"
@@ -627,8 +628,11 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
     
     standard_results: Dict[str, AssociationResults] = {}
     resampling_results: Dict[str, FarmCPUResamplingResults] = {}
-    if n_tests is not None and n_tests > 0:
+    use_user_threshold_only = significance_threshold is not None and n_tests is None
+    if n_tests is not None:
         effective_tests = float(n_tests)
+    elif use_user_threshold_only:
+        effective_tests = float("nan")
     else:
         effective_tests = float(genotype_matrix.n_markers)
     if significance_threshold is not None:
@@ -681,11 +685,14 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
             'min_pvalue': np.min(result.pvalues),
             'threshold_used': global_threshold,
             'alpha': bonferroni_alpha,
-            'n_tests_used': effective_tests,
+            'n_tests_used': effective_tests if math.isfinite(effective_tests) else None,
         }
         
         print(f"   {method}: {n_significant} SNPs pass multiple-testing threshold (p ≤ {global_threshold:.2e})")
-        print(f"       Bonferroni parameters: alpha={bonferroni_alpha}, n_tests_used={effective_tests}")
+        if math.isfinite(effective_tests):
+            print(f"       Bonferroni parameters: alpha={bonferroni_alpha}, n_tests_used={effective_tests}")
+        else:
+            print("       Threshold supplied directly; Bonferroni denominator not applied.")
         
         if n_significant > 0:
             sig_snps = all_results_df[passed_mask].copy()
@@ -890,8 +897,14 @@ def main():
                        help="Effective number of markers to use for Bonferroni denominator (optional)")
     parser.add_argument("--compute-effective-tests", action='store_true',
                        help=(
-                           "Estimate the effective number of independent markers using the harmonised GEC algorithm "
-                           "after loading the genotype file."
+                           "Estimate the effective number of independent markers (Li et al. 2012; harmonised GEC algorithm) "
+                           "after loading the genotype file. Saves the result in the genotype map metadata."
+                       ))
+    parser.add_argument("--use-effective-tests", action='store_true',
+                       help=(
+                           "Use the estimated effective number of independent markers (Li et al. 2012) as the "
+                           "Bonferroni denominator when deriving genome-wide significance thresholds. Implies "
+                           "--compute-effective-tests if not supplied."
                        ))
     parser.add_argument("--effective-test-window", type=int, default=None,
                        help="Maximum genomic span (bp) for LD blocks when computing effective tests (default 3,000,000)")
@@ -1018,22 +1031,24 @@ def main():
                 'include_indels': (not args.snps_only),
             })
 
-        if args.compute_effective_tests:
-            effective_kwargs: Dict[str, Any] = {}
+        effective_option_requested = args.compute_effective_tests or args.use_effective_tests
+        effective_kwargs_cli: Optional[Dict[str, Any]] = None
+        if effective_option_requested:
+            effective_kwargs_cli = {}
             if args.effective_test_window is not None:
-                effective_kwargs['max_window_bp'] = args.effective_test_window
+                effective_kwargs_cli['max_window_bp'] = args.effective_test_window
             if args.effective_test_corr_cutoff is not None:
-                effective_kwargs['corr_cutoff'] = args.effective_test_corr_cutoff
+                effective_kwargs_cli['corr_cutoff'] = args.effective_test_corr_cutoff
             if args.effective_test_gap_limit is not None:
-                effective_kwargs['gap_snp_limit'] = args.effective_test_gap_limit
+                effective_kwargs_cli['gap_snp_limit'] = args.effective_test_gap_limit
             if args.effective_test_span_limit is not None:
-                effective_kwargs['span_bp_limit'] = args.effective_test_span_limit
+                effective_kwargs_cli['span_bp_limit'] = args.effective_test_span_limit
             if args.effective_test_prune_threshold is not None:
-                effective_kwargs['prune_redundant_threshold'] = args.effective_test_prune_threshold
+                effective_kwargs_cli['prune_redundant_threshold'] = args.effective_test_prune_threshold
 
             loader_kwargs['compute_effective_tests'] = True
-            if effective_kwargs:
-                loader_kwargs['effective_test_kwargs'] = effective_kwargs
+            if effective_kwargs_cli:
+                loader_kwargs['effective_test_kwargs'] = effective_kwargs_cli
 
         resampling_params = {
             'runs': args.farmcpu_resampling_runs,
@@ -1066,6 +1081,29 @@ def main():
             covariate_id_column=args.covariate_id_column,
             loader_kwargs=loader_kwargs,
         )
+
+        effective_tests_metadata = data.get('effective_tests')
+        if args.use_effective_tests and (
+            not effective_tests_metadata or effective_tests_metadata.get("Me") is None
+        ):
+            print("   Computing effective number of independent tests (Li et al. 2012) for thresholding...")
+            additional_effective = estimate_effective_tests_from_genotype(
+                data['genotype_matrix'],
+                data['geno_map'],
+                **(effective_kwargs_cli or {}),
+            )
+            data['geno_map'].metadata["effective_tests"] = additional_effective
+            data['effective_tests'] = additional_effective
+            effective_tests_metadata = additional_effective
+            me_value = int(additional_effective.get("Me", 0))
+            total_snps = additional_effective.get("total_snps", data['geno_map'].n_markers)
+            dropped_mono = additional_effective.get("dropped_monomorphic_total", 0)
+            message = (
+                f"   Effective tests (Li et al. 2012): {me_value:,} across {total_snps:,} markers"
+            )
+            if dropped_mono:
+                message += f" (dropped {dropped_mono:,} monomorphic markers)"
+            print(message)
         
         # Step 2: Match individuals
         print()
@@ -1091,24 +1129,35 @@ def main():
         if n_markers_total <= 0:
             raise ValueError("No markers available after matching; cannot compute significance threshold")
         effective_tests_metadata = data.get('effective_tests')
-        if args.n_eff and args.n_eff > 0:
-            effective_tests = float(args.n_eff)
-            effective_tests_source = "user-specified"
-        elif effective_tests_metadata and effective_tests_metadata.get("Me") is not None:
-            effective_tests = float(effective_tests_metadata["Me"])
-            effective_tests_source = "effective-test estimator"
-        else:
-            effective_tests = float(n_markers_total)
-            effective_tests_source = "total markers"
+        bonferroni_denominator: Optional[float] = None
+        denominator_source = "total markers"
 
         if args.significance is None:
-            base_significance = args.alpha / max(effective_tests, 1.0)
+            if args.n_eff and args.n_eff > 0:
+                bonferroni_denominator = float(args.n_eff)
+                denominator_source = "user-specified (--n-eff)"
+            elif (
+                args.use_effective_tests
+                and effective_tests_metadata
+                and effective_tests_metadata.get("Me") is not None
+            ):
+                bonferroni_denominator = float(effective_tests_metadata["Me"])
+                denominator_source = "effective-test estimator (Li et al. 2012)"
+            else:
+                bonferroni_denominator = float(n_markers_total)
+                if args.use_effective_tests:
+                    print("   ⚠️ Effective test estimate unavailable; using total marker count for Bonferroni.")
+                denominator_source = "total markers"
+
+            base_significance = args.alpha / max(bonferroni_denominator, 1.0)
+            print(
+                f"   Bonferroni denominator set from {denominator_source}: {bonferroni_denominator:.2f} tests"
+            )
         else:
             base_significance = args.significance
+            print(f"   Using user-specified significance threshold: p ≤ {base_significance:.2e}")
 
-        print(
-            f"   Bonferroni denominator set from {effective_tests_source}: {effective_tests:.2f} tests"
-        )
+        effective_tests = bonferroni_denominator
         
         # Step 4: Determine traits to analyze
         phe_df = matched_data['phenotype_df']

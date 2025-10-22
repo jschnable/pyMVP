@@ -5,6 +5,7 @@ specification.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from concurrent.futures import Executor, Future
 from dataclasses import dataclass
 from typing import (
@@ -21,6 +22,13 @@ from typing import (
 )
 
 import numpy as np
+
+try:
+    from numba import njit
+
+    _NUMBA_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    _NUMBA_AVAILABLE = False
 
 from .data_types import GenotypeMap, GenotypeMatrix
 
@@ -70,6 +78,72 @@ DEFAULT_POLYNOMIAL_COEFFS: Tuple[float, ...] = (
     0.0,
 )
 
+_TRIU_CACHE: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+
+def _get_triu_indices(n: int) -> Tuple[np.ndarray, np.ndarray]:
+    cached = _TRIU_CACHE.get(n)
+    if cached is None:
+        cached = np.triu_indices(n)
+        _TRIU_CACHE[n] = cached
+    return cached
+
+if _NUMBA_AVAILABLE:
+
+    @njit(cache=True)
+    def _numba_standardise_corr(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        n_samples, n_markers = matrix.shape
+        means = np.zeros(n_markers, dtype=np.float64)
+        for j in range(n_markers):
+            s = 0.0
+            for i in range(n_samples):
+                s += matrix[i, j]
+            means[j] = s / n_samples if n_samples > 0 else 0.0
+        for j in range(n_markers):
+            m = means[j]
+            for i in range(n_samples):
+                matrix[i, j] -= m
+        denom = n_samples - 1
+        if denom < 1:
+            denom = 1
+        variances = np.zeros(n_markers, dtype=np.float64)
+        for j in range(n_markers):
+            s = 0.0
+            for i in range(n_samples):
+                val = matrix[i, j]
+                s += val * val
+            variances[j] = s / denom
+        valid = np.zeros(n_markers, dtype=np.bool_)
+        for j in range(n_markers):
+            if variances[j] > 1e-12:
+                inv_std = 1.0 / np.sqrt(variances[j])
+                valid[j] = True
+                for i in range(n_samples):
+                    matrix[i, j] *= inv_std
+            else:
+                for i in range(n_samples):
+                    matrix[i, j] = 0.0
+        corr = np.zeros((n_markers, n_markers), dtype=np.float64)
+        for a in range(n_markers):
+            for b in range(a, n_markers):
+                if valid[a] and valid[b]:
+                    s = 0.0
+                    for i in range(n_samples):
+                        s += matrix[i, a] * matrix[i, b]
+                    value = s / denom
+                elif a == b:
+                    value = 1.0
+                else:
+                    value = 0.0
+                if a == b:
+                    value = 1.0
+                corr[a, b] = value
+                corr[b, a] = value
+        return corr, variances
+else:
+
+    def _numba_standardise_corr(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        raise RuntimeError("Numba is not available")
+
 
 def _apply_polynomial_transform(matrix: np.ndarray, coeffs: Sequence[float]) -> None:
     """In-place polynomial transform mirroring convert2PValueCoefficient."""
@@ -77,15 +151,11 @@ def _apply_polynomial_transform(matrix: np.ndarray, coeffs: Sequence[float]) -> 
         return
 
     # Work on upper triangle including diagonal.
-    triu_idx = np.triu_indices_from(matrix)
+    triu_idx = _get_triu_indices(matrix.shape[0])
     values = matrix[triu_idx]
-
     x = values * values
-    result = np.zeros_like(x)
-    for coeff in coeffs[:-1]:
-        result = (result + coeff) * x
-    result += coeffs[-1]
-
+    poly_coeffs = coeffs[::-1]
+    result = np.polynomial.polynomial.polyval(x, poly_coeffs)
     result = np.clip(result, 0.0, 1.0, out=result)
 
     matrix[triu_idx] = result
@@ -117,6 +187,129 @@ class _GenotypeLDSource(LDSparseMatrixProtocol):
             int(idx): int(pos) for idx, pos in zip(self._indices, self._positions)
         }
         self.monomorphic_dropped = int(monomorphic_dropped)
+        self._column_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
+        self._variance_cache: Dict[int, float] = {}
+        self._stats_cache: Dict[int, Tuple[float, float]] = {}
+        self._mean_cache: Dict[int, float] = {}
+        self._cache_capacity = max(256, min(4096, len(self._indices)))
+        self._low_variance_skipped = 0
+        self._sample_count = int(self._genotype.n_individuals)
+
+    def _enforce_cache_limit(self) -> None:
+        while len(self._column_cache) > self._cache_capacity:
+            self._column_cache.popitem(last=False)
+
+    def _prefetch_range(self, start: int, end: int) -> None:
+        if end < start:
+            return
+        span = end - start + 1
+        if span <= 0:
+            return
+        if span > self._cache_capacity * 4:
+            return
+        missing = [idx for idx in range(start, end + 1) if idx not in self._column_cache]
+        if not missing:
+            return
+        fetched = self._genotype.get_columns_imputed(missing)
+        if fetched.ndim == 1:
+            fetched = fetched.reshape(self._genotype.n_individuals, -1)
+        for offset, idx in enumerate(missing):
+            col = np.ascontiguousarray(fetched[:, offset], dtype=np.float64)
+            col.setflags(write=False)
+            self._column_cache[idx] = col
+        self._enforce_cache_limit()
+
+    def _ensure_columns(self, indices: Sequence[int]) -> List[np.ndarray]:
+        idx_list = [int(i) for i in indices]
+        if not idx_list:
+            return []
+        if len(idx_list) > 1:
+            ordered = sorted(set(idx_list))
+            span = ordered[-1] - ordered[0] + 1
+            if span > len(ordered):
+                self._prefetch_range(ordered[0], ordered[-1])
+        missing = [idx for idx in idx_list if idx not in self._column_cache]
+        if missing:
+            fetched = self._genotype.get_columns_imputed(missing)
+            if fetched.ndim == 1:
+                fetched = fetched.reshape(self._genotype.n_individuals, -1)
+            for offset, idx in enumerate(missing):
+                col = np.ascontiguousarray(fetched[:, offset], dtype=np.float64)
+                col.setflags(write=False)
+                self._column_cache[idx] = col
+            self._enforce_cache_limit()
+        for idx in idx_list:
+            try:
+                self._column_cache.move_to_end(idx)
+            except KeyError:
+                # index may have been pruned from cache due to size; refetch
+                fetched = self._genotype.get_columns_imputed([idx])
+                col = np.ascontiguousarray(fetched[:, 0], dtype=np.float64)
+                col.setflags(write=False)
+                self._column_cache[idx] = col
+                self._enforce_cache_limit()
+        return [self._column_cache[idx] for idx in idx_list]
+
+    def _get_columns_matrix(self, indices: Sequence[int]) -> np.ndarray:
+        cols = self._ensure_columns(indices)
+        if not cols:
+            raise ValueError("index_list must contain at least one marker")
+        n_cols = len(cols)
+        matrix = np.empty((self._sample_count, n_cols), dtype=np.float64, order="F")
+        for offset, col in enumerate(cols):
+            matrix[:, offset] = col
+        return matrix
+
+    def is_low_variance(self, index: int, *, threshold: float = 1e-12) -> bool:
+        idx = int(index)
+        var = self._variance_cache.get(idx)
+        if var is None:
+            column = self._ensure_columns([idx])[0]
+            if column.size <= 1:
+                var = 0.0
+            else:
+                stats = self._get_column_stats(idx, column)
+                var = self._variance_from_stats(stats)
+            self._variance_cache[idx] = var
+        return var <= threshold
+
+    def record_low_variance_skip(self, count: int) -> None:
+        if count:
+            self._low_variance_skipped += int(count)
+
+    @property
+    def low_variance_skipped(self) -> int:
+        return self._low_variance_skipped
+
+    def _get_column_stats(
+        self,
+        index: int,
+        column: Optional[np.ndarray] = None,
+    ) -> Tuple[float, float]:
+        idx = int(index)
+        stats = self._stats_cache.get(idx)
+        if stats is not None:
+            return stats
+        if column is None:
+            column = self._ensure_columns([idx])[0]
+        sum_val = float(np.sum(column, dtype=np.float64))
+        sum_sq = float(np.dot(column, column))
+        stats = (sum_val, sum_sq)
+        self._stats_cache[idx] = stats
+        self._mean_cache[idx] = sum_val / max(self._sample_count, 1)
+        return stats
+
+    def _variance_from_stats(self, stats: Tuple[float, float]) -> float:
+        sum_val, sum_sq = stats
+        n = self._sample_count
+        if n <= 1:
+            return 0.0
+        denom = n - 1
+        mean = sum_val / n
+        var = (sum_sq - mean * mean * n) / denom
+        if var < 0.0 and abs(var) < 1e-12:
+            var = 0.0
+        return float(var)
 
     def get_all_unique_indexes(self) -> Sequence[int]:
         return self._indices
@@ -128,50 +321,84 @@ class _GenotypeLDSource(LDSparseMatrixProtocol):
         if not index_list:
             raise ValueError("index_list must contain at least one marker")
 
-        columns = self._genotype.get_columns_imputed(index_list)
-        if columns.size == 0:
-            raise ValueError("Genotype slice returned an empty matrix")
+        columns = self._get_columns_matrix(index_list)
+        n_samples, n_markers = columns.shape
+        if n_markers == 1 or n_samples <= 1:
+            return np.ones((n_markers, n_markers), dtype=np.float64)
 
-        columns = columns.astype(np.float64, copy=False)
-        # Standardise columns to zero mean / unit variance; protect against zeros.
-        means = np.mean(columns, axis=0, dtype=np.float64)
-        columns -= means
-        stds = np.std(columns, axis=0, ddof=1)
-        zero_variance = stds == 0
-        stds[zero_variance] = 1.0
-        columns /= stds
-        np.nan_to_num(columns, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            corr = (columns.T @ columns) / max(columns.shape[0] - 1, 1)
-        np.nan_to_num(corr, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        use_numba = _NUMBA_AVAILABLE and n_markers > 1 and n_samples > 1
+        if use_numba:
+            try:
+                corr, variances = _numba_standardise_corr(columns.copy())
+            except Exception:  # pragma: no cover - fallback safety
+                use_numba = False
+        if not use_numba:
+            means = np.mean(columns, axis=0, dtype=np.float64)
+            columns -= means
 
-        if zero_variance.any():
-            zero_idx = np.where(zero_variance)[0]
-            for idx in zero_idx:
-                corr[idx, :] = 0.0
-                corr[:, idx] = 0.0
+            denom = max(n_samples - 1, 1)
+            sumsq = np.einsum("ij,ij->j", columns, columns, dtype=np.float64)
+            variances = sumsq / denom
+            nonzero = variances > 1e-12
+
+            if not np.any(nonzero):
+                return np.identity(n_markers, dtype=np.float64)
+
+            std = np.zeros_like(variances)
+            std[nonzero] = np.sqrt(variances[nonzero])
+            columns[:, nonzero] /= std[nonzero]
+            columns[:, ~nonzero] = 0.0
+
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                corr = columns.T @ columns
+            corr /= max(n_samples - 1, 1)
+            np.nan_to_num(corr, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            nonzero = variances > 1e-12
+            corr = corr
+
+        if (~nonzero).any():
+            zero_idx = np.where(~nonzero)[0]
+            corr[zero_idx, :] = 0.0
+            corr[:, zero_idx] = 0.0
             corr[zero_idx, zero_idx] = 1.0
 
+        np.fill_diagonal(corr, 1.0)
         return corr
 
     def release_ld_data(self) -> None:
+        self._column_cache.clear()
+        self._variance_cache.clear()
+        self._stats_cache.clear()
+        self._mean_cache.clear()
         return None
 
     def pair_correlation(self, idx_a: int, idx_b: int) -> Optional[float]:
         if idx_a == idx_b:
             return 1.0
-        cols = self._genotype.get_columns_imputed([idx_a, idx_b])
-        if cols.shape[1] != 2:
+        vectors = self._ensure_columns([idx_a, idx_b])
+        if len(vectors) != 2:
             return None
-        a = cols[:, 0].astype(np.float64, copy=False)
-        b = cols[:, 1].astype(np.float64, copy=False)
-        a -= np.mean(a)
-        b -= np.mean(b)
-        std_a = np.std(a, ddof=1)
-        std_b = np.std(b, ddof=1)
-        if std_a == 0 or std_b == 0:
+        a, b = vectors
+        n = self._sample_count
+        if n <= 1:
             return None
-        corr = float(np.dot(a, b) / ((len(a) - 1) * std_a * std_b))
+        stats_a = self._get_column_stats(idx_a, a)
+        stats_b = self._get_column_stats(idx_b, b)
+        var_a = self._variance_from_stats(stats_a)
+        var_b = self._variance_from_stats(stats_b)
+        if var_a <= 1e-12 or var_b <= 1e-12:
+            return None
+        sum_a, _ = stats_a
+        sum_b, _ = stats_b
+        sum_ab = float(np.dot(a, b))
+        mean_a = sum_a / n
+        mean_b = sum_b / n
+        cov = sum_ab - n * mean_a * mean_b
+        denom = (n - 1) * np.sqrt(var_a) * np.sqrt(var_b)
+        if denom <= 0.0:
+            return None
+        corr = cov / denom
         if np.isnan(corr):
             return None
         return corr
@@ -218,9 +445,28 @@ def _construct_blocks(
     else:
         positions = list(range(len(indices)))
 
-    entries = sorted(zip(indices, positions), key=lambda x: x[1])
+    raw_entries = sorted(zip(indices, positions), key=lambda x: x[1])
+    total_indices = len(raw_entries)
+
+    entries = raw_entries
+    low_var_checker = getattr(ld_source, "is_low_variance", None)
+    if callable(low_var_checker):
+        filtered: List[Tuple[int, int]] = []
+        skipped = 0
+        for idx, pos in raw_entries:
+            if low_var_checker(idx):
+                skipped += 1
+                continue
+            filtered.append((idx, pos))
+        if skipped and hasattr(ld_source, "record_low_variance_skip"):
+            getattr(ld_source, "record_low_variance_skip")(skipped)
+        entries = filtered
+
     blocks: List[List[int]] = []
     stats: List[BlockStat] = []
+
+    if not entries:
+        return [], [], total_indices
 
     n = len(entries)
     start = 0
@@ -271,7 +517,7 @@ def _construct_blocks(
         )
         start = max(end, start + 1)
 
-    return blocks, stats, len(entries)
+    return blocks, stats, total_indices
 
 
 def _prune_redundant_snps(
@@ -370,6 +616,8 @@ def _process_chromosome(
     n_snps = total_indices
 
     monomorphic_dropped = getattr(ld_source, "monomorphic_dropped", 0)
+    extra_low_var = getattr(ld_source, "low_variance_skipped", 0)
+    monomorphic_dropped += extra_low_var
 
     result = ChromosomeResult(
         Me=Me_total,
@@ -424,19 +672,7 @@ def estimate_effective_tests(
 
     per_chromosome: MutableMapping[str, ChromosomeResult] = {}
 
-    if executor is None:
-        for chrom, source in sources.items():
-            per_chromosome[chrom] = _process_chromosome(
-                chrom,
-                source,
-                max_window_bp=max_window_bp,
-                corr_cutoff=corr_cutoff,
-                gap_snp_limit=gap_snp_limit,
-                span_bp_limit=span_bp_limit,
-                prune_redundant_threshold=prune_redundant_threshold,
-                polynomial_coeffs=polynomial_coeffs,
-            )
-    else:
+    if executor is not None:
         futures: Dict[Future, str] = {}
         for chrom, source in sources.items():
             future = executor.submit(
@@ -454,6 +690,18 @@ def estimate_effective_tests(
 
         for future, chrom in futures.items():
             per_chromosome[chrom] = future.result()
+    else:
+        for chrom, source in sources.items():
+            per_chromosome[chrom] = _process_chromosome(
+                chrom,
+                source,
+                max_window_bp=max_window_bp,
+                corr_cutoff=corr_cutoff,
+                gap_snp_limit=gap_snp_limit,
+                span_bp_limit=span_bp_limit,
+                prune_redundant_threshold=prune_redundant_threshold,
+                polynomial_coeffs=polynomial_coeffs,
+            )
 
     total_me = sum(result.Me for result in per_chromosome.values())
     rounded_total_me = int(round(total_me))
