@@ -30,6 +30,7 @@ from pymvp.utils.stats import (
     genomic_inflation_factor
 )
 from pymvp.utils.data_types import GenotypeMatrix, AssociationResults
+from pymvp.utils.effective_tests import estimate_effective_tests_from_genotype
 from pymvp.association.farmcpu_resampling import (
     MVP_FarmCPUResampling,
     FarmCPUResamplingResults,
@@ -164,10 +165,19 @@ def load_and_validate_data(phenotype_file: str,
                 "plink (.bed+.bim+.fam), hapmap (.hmp, .hmp.txt)"
             )
 
+    compute_effective = False
+    effective_kwargs = None
+    effective_tests_info = None
     try:
-        loader_kwargs = loader_kwargs or {}
+        loader_kwargs = dict(loader_kwargs or {})
+        compute_effective = loader_kwargs.pop('compute_effective_tests', False)
+        effective_kwargs = loader_kwargs.pop('effective_test_kwargs', None)
         genotype_matrix, individual_ids, geno_map = load_genotype_file(
-            genotype_file, file_format=genotype_format, **loader_kwargs
+            genotype_file,
+            file_format=genotype_format,
+            compute_effective_tests=compute_effective,
+            effective_test_kwargs=effective_kwargs,
+            **loader_kwargs,
         )
         print(f"   Loaded {genotype_matrix.n_individuals} individuals x {genotype_matrix.n_markers} markers")
         if genotype_format == 'vcf':
@@ -177,6 +187,17 @@ def load_and_validate_data(phenotype_file: str,
                 print("   Note: htslib may print [W::vcf_parse] messages when ##contig lines are missing.")
                 print("         These warnings do not affect pyMVP results.")
                 print("         Set HTS_LOG_LEVEL=error to hide them if you prefer a quiet log.")
+        effective_tests_info = geno_map.metadata.get("effective_tests")
+        if effective_tests_info:
+            me_value = int(effective_tests_info.get("Me", 0))
+            total_snps = effective_tests_info.get("total_snps", geno_map.n_markers)
+            dropped_mono = effective_tests_info.get("dropped_monomorphic_total", 0)
+            message = (
+                f"   Effective tests (GEC-style): {me_value:,} across {total_snps:,} SNPs"
+            )
+            if dropped_mono:
+                message += f" (dropped {dropped_mono:,} monomorphic markers)"
+            print(message)
     except Exception as e:
         raise ValueError(f"Error loading genotype file: {e}")
 
@@ -224,10 +245,31 @@ def load_and_validate_data(phenotype_file: str,
                     )
 
             geno_map = supplied_map
+            if compute_effective:
+                effective_info = estimate_effective_tests_from_genotype(
+                    genotype_matrix,
+                    geno_map,
+                    **(effective_kwargs or {}),
+                )
+                geno_map.metadata["effective_tests"] = effective_info
+                effective_tests_info = effective_info
+                me_value = int(effective_info.get("Me", 0))
+                total_snps = effective_info.get("total_snps", geno_map.n_markers)
+                dropped_mono = effective_info.get("dropped_monomorphic_total", 0)
+                message = (
+                    f"   Effective tests (GEC-style, map file): {me_value:,} across {total_snps:,} SNPs"
+                )
+                if dropped_mono:
+                    message += f" (dropped {dropped_mono:,} monomorphic markers)"
+                print(message)
+            elif effective_tests_info:
+                geno_map.metadata.setdefault("effective_tests", effective_tests_info)
         except Exception as e:
             raise ValueError(f"Error loading map file: {e}")
 
     print_step("Data loading", step_start)
+
+    final_effective_tests = geno_map.metadata.get("effective_tests")
 
     return {
         'phenotype_df': phenotype_df,
@@ -236,6 +278,7 @@ def load_and_validate_data(phenotype_file: str,
         'geno_map': geno_map,
         'covariate_df': covariate_df,
         'covariate_names': covariate_names,
+        'effective_tests': final_effective_tests,
     }
 
 
@@ -572,7 +615,7 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
                            save_all_results: bool = True,
                            save_significant: bool = True,
                            bonferroni_alpha: float = 0.05,
-                           n_eff: Optional[int] = None,
+                           n_tests: Optional[float] = None,
                            max_genotype_dosage: float = 2.0) -> Dict[str, Any]:
     """Analyze results and conditionally save output files for a single trait"""
     
@@ -584,7 +627,10 @@ def analyze_results_and_save(results: Dict[str, Union[AssociationResults, FarmCP
     
     standard_results: Dict[str, AssociationResults] = {}
     resampling_results: Dict[str, FarmCPUResamplingResults] = {}
-    effective_tests = int(n_eff) if (n_eff and n_eff > 0) else genotype_matrix.n_markers
+    if n_tests is not None and n_tests > 0:
+        effective_tests = float(n_tests)
+    else:
+        effective_tests = float(genotype_matrix.n_markers)
     if significance_threshold is not None:
         global_threshold = float(significance_threshold)
     else:
@@ -842,6 +888,21 @@ def main():
                        help="Base alpha for Bonferroni (default: 0.05)")
     parser.add_argument("--n-eff", type=int, default=None,
                        help="Effective number of markers to use for Bonferroni denominator (optional)")
+    parser.add_argument("--compute-effective-tests", action='store_true',
+                       help=(
+                           "Estimate the effective number of independent markers using the harmonised GEC algorithm "
+                           "after loading the genotype file."
+                       ))
+    parser.add_argument("--effective-test-window", type=int, default=None,
+                       help="Maximum genomic span (bp) for LD blocks when computing effective tests (default 3,000,000)")
+    parser.add_argument("--effective-test-corr-cutoff", type=float, default=None,
+                       help="Absolute adjacent-marker correlation threshold for block growth (default 0.7)")
+    parser.add_argument("--effective-test-gap-limit", type=int, default=None,
+                       help="Maximum consecutive missing correlations before starting a new block (default 500)")
+    parser.add_argument("--effective-test-span-limit", type=int, default=None,
+                       help="Maximum base-pair span for any LD block (default 3,000,000)")
+    parser.add_argument("--effective-test-prune-threshold", type=float, default=None,
+                       help="Correlation threshold for pruning redundant SNPs inside a block (default 0.9988)")
     parser.add_argument("--max-genotype-dosage", type=float, default=2.0,
                        help="Maximum genotype dosage used to normalise allele frequencies (e.g. 2 for diploids, 4 for tetraploids)")
     parser.add_argument("--max-iterations", type=int, default=10,
@@ -882,7 +943,7 @@ def main():
                        ))
     # Genotype loader/QC options
     parser.add_argument("--vcf-backend", dest="vcf_backend", choices=['auto','cyvcf2','builtin'], default='auto',
-                       help="VCF/BCF parsing backend (auto selects cyvcf2 if available)")
+                        help="VCF/BCF parsing backend (auto uses builtin for VCF, cyvcf2 when needed)")
     parser.add_argument("--no-split-multiallelic", dest="no_split_multiallelic", action='store_true',
                        help="Do not split multi-allelic VCF sites into multiple markers")
     parser.add_argument("--snps-only", dest="snps_only", action='store_true',
@@ -957,6 +1018,23 @@ def main():
                 'include_indels': (not args.snps_only),
             })
 
+        if args.compute_effective_tests:
+            effective_kwargs: Dict[str, Any] = {}
+            if args.effective_test_window is not None:
+                effective_kwargs['max_window_bp'] = args.effective_test_window
+            if args.effective_test_corr_cutoff is not None:
+                effective_kwargs['corr_cutoff'] = args.effective_test_corr_cutoff
+            if args.effective_test_gap_limit is not None:
+                effective_kwargs['gap_snp_limit'] = args.effective_test_gap_limit
+            if args.effective_test_span_limit is not None:
+                effective_kwargs['span_bp_limit'] = args.effective_test_span_limit
+            if args.effective_test_prune_threshold is not None:
+                effective_kwargs['prune_redundant_threshold'] = args.effective_test_prune_threshold
+
+            loader_kwargs['compute_effective_tests'] = True
+            if effective_kwargs:
+                loader_kwargs['effective_test_kwargs'] = effective_kwargs
+
         resampling_params = {
             'runs': args.farmcpu_resampling_runs,
             'mask_proportion': args.farmcpu_resampling_mask,
@@ -1012,8 +1090,25 @@ def main():
         n_markers_total = matched_data['genotype_matrix'].n_markers
         if n_markers_total <= 0:
             raise ValueError("No markers available after matching; cannot compute significance threshold")
-        effective_tests = args.n_eff if (args.n_eff and args.n_eff > 0) else n_markers_total
-        base_significance = args.significance if args.significance is not None else args.alpha / max(effective_tests, 1)
+        effective_tests_metadata = data.get('effective_tests')
+        if args.n_eff and args.n_eff > 0:
+            effective_tests = float(args.n_eff)
+            effective_tests_source = "user-specified"
+        elif effective_tests_metadata and effective_tests_metadata.get("Me") is not None:
+            effective_tests = float(effective_tests_metadata["Me"])
+            effective_tests_source = "effective-test estimator"
+        else:
+            effective_tests = float(n_markers_total)
+            effective_tests_source = "total markers"
+
+        if args.significance is None:
+            base_significance = args.alpha / max(effective_tests, 1.0)
+        else:
+            base_significance = args.significance
+
+        print(
+            f"   Bonferroni denominator set from {effective_tests_source}: {effective_tests:.2f} tests"
+        )
         
         # Step 4: Determine traits to analyze
         phe_df = matched_data['phenotype_df']
@@ -1171,7 +1266,7 @@ def main():
                 save_all_results=('all_marker_pvalues' in args.outputs),
                 save_significant=('significant_marker_pvalues' in args.outputs),
                 bonferroni_alpha=args.alpha,
-                n_eff=args.n_eff,
+                n_tests=effective_tests,
                 max_genotype_dosage=args.max_genotype_dosage,
             )
             for method, stats in analysis_results['summary_stats'].items():

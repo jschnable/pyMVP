@@ -331,21 +331,37 @@ def load_genotype_vcf(
     - max_missing: drop variants with missing rate > threshold (0..1]
     - min_maf: drop variants with minor allele frequency < threshold
     - return_pandas: return geno_map as pandas.DataFrame if pandas is available
+    - backend: 'auto' (defaults to builtin for VCF/VCF.GZ), 'cyvcf2', or 'builtin'
     """
     import re
 
-    # Optional fast backend
+    # Backend selection: prefer builtin for VCF text, require cyvcf2 for BCF.
     use_cyvcf2 = False
     vcf_lower = str(vcf_path).lower()
     is_bcf = vcf_lower.endswith('.bcf')
-    if backend in ('auto', 'cyvcf2'):
+
+    if backend == 'auto':
+        if is_bcf:
+            try:
+                import cyvcf2  # type: ignore
+                use_cyvcf2 = True
+            except Exception:
+                raise ImportError(
+                    'Loading .bcf requires cyvcf2. Install with "pip install cyvcf2" or convert to .vcf/.vcf.gz.'
+                )
+        else:
+            use_cyvcf2 = False
+    elif backend == 'cyvcf2':
         try:
             import cyvcf2  # type: ignore
             use_cyvcf2 = True
         except Exception:
-            use_cyvcf2 = False
-            if backend == 'cyvcf2':
-                raise ImportError('cyvcf2 requested but not available')
+            raise ImportError('cyvcf2 requested but not available')
+    elif backend == 'builtin':
+        use_cyvcf2 = False
+    else:
+        raise ValueError("backend must be one of {'auto', 'cyvcf2', 'builtin'}")
+
     # BCF requires cyvcf2 backend
     if is_bcf and not use_cyvcf2:
         raise ImportError('Loading .bcf requires cyvcf2. Install with "pip install cyvcf2" or convert to .vcf/.vcf.gz.')
@@ -523,6 +539,7 @@ def load_genotype_vcf(
         # Guard: .bcf is binary and not supported by builtin parser
         if is_bcf:
             raise ImportError('Builtin VCF parser does not support .bcf. Please install cyvcf2 or use .vcf/.vcf.gz.')
+        sanity_checked = False
         fh = _open_text(vcf_path)
         try:
             for line in fh:
@@ -588,46 +605,67 @@ def load_genotype_vcf(
                 is_biallelic = len(alt_alleles) == 1
 
                 if gt_index is not None:
-                    extracted_gt = []
                     if gt_primary:
-                        for field in sample_fields:
-                            extracted_gt.append(field.partition(':')[0] if field else '')
+                        gt_array = np.array(
+                            [field.partition(':')[0] if field else '' for field in sample_fields],
+                            dtype='<U3',
+                        )
                     else:
+                        gt_values = []
                         for field in sample_fields:
                             if not field:
-                                extracted_gt.append('')
+                                gt_values.append('')
                                 continue
                             toks = field.split(':')
-                            extracted_gt.append(toks[gt_index] if gt_index < len(toks) else '')
+                            gt_values.append(toks[gt_index] if gt_index < len(toks) else '')
+                        gt_array = np.array(gt_values, dtype='<U3')
                 else:
-                    extracted_gt = [''] * len(sample_fields)
+                    gt_array = np.empty(len(sample_fields), dtype='<U3')
+                    gt_array.fill('')
 
-                direct_map = _BIALLELIC_GT_DIRECT
-                decode_biallelic = _decode_biallelic_gt
                 split_tokens = _split_gt_tokens
 
                 # Helper: build column(s) for this site
                 def build_columns_for_alt(alt_index, alt_base):
+                    nonlocal sanity_checked
                     col = np.full(len(individual_ids), MISSING, dtype=np.int16)
                     variant_ploidy = 0
                     if is_biallelic:
-                        for si, gt in enumerate(extracted_gt):
-                            ds_val = ds_array[si] if ds_array is not None else MISSING
-                            if gt:
-                                direct = direct_map.get(gt)
-                                if direct is not None:
-                                    dosage, ploidy = direct
-                                else:
-                                    dosage, ploidy = decode_biallelic(gt)
-                            else:
-                                dosage, ploidy = (MISSING, 0)
-                            if dosage != MISSING:
-                                col[si] = dosage
-                                variant_ploidy = max(variant_ploidy, ploidy)
-                            elif ds_val != MISSING:
-                                col[si] = ds_val
+                        cleaned = np.char.replace(np.char.replace(gt_array, '/', ''), '|', '')
+                        missing_mask = (cleaned == '') | (np.char.find(cleaned, '.') != -1)
+
+                        if not sanity_checked:
+                            if len(alt_alleles) != 1:
+                                raise ValueError(
+                                    "Multi-allelic variants are not supported by the fast builtin loader. "
+                                    "Please switch to the cyvcf2 backend."
+                                )
+                            subset = cleaned[: min(10, cleaned.size)]
+                            subset = subset[(subset != '') & (np.char.find(subset, '.') == -1)]
+                            if subset.size:
+                                if np.any(np.char.find(subset, '2') != -1) or np.any(np.char.find(subset, '3') != -1):
+                                    raise ValueError(
+                                        "Detected genotype allele codes greater than 1. "
+                                        "Polyploid genotypes require the cyvcf2 backend."
+                                    )
+                                lengths = np.char.str_len(subset)
+                                if np.any(lengths > 2):
+                                    raise ValueError(
+                                        "Detected genotypes with ploidy greater than diploid. "
+                                        "Please use the cyvcf2 backend for polyploid datasets."
+                                    )
+                            sanity_checked = True
+
+                        dosage_array = np.char.count(cleaned, '1').astype(np.int16)
+                        valid_mask = ~missing_mask
+                        if np.any(valid_mask):
+                            col[valid_mask] = dosage_array[valid_mask]
+                            variant_ploidy = 2
+                        if ds_array is not None:
+                            ds_mask = missing_mask & (ds_array != MISSING)
+                            col[ds_mask] = ds_array[ds_mask]
                     else:
-                        for si, gt in enumerate(extracted_gt):
+                        for si, gt in enumerate(gt_array):
                             ds_val = ds_array[si] if ds_array is not None else MISSING
                             gt_tokens = split_tokens(gt) if gt else None
                             if gt_tokens is not None:
@@ -703,7 +741,8 @@ def _main(argv):  # pragma: no cover
     p.add_argument('--max-missing', type=float, default=1.0)
     p.add_argument('--min-maf', type=float, default=0.0)
     p.add_argument('--no-pandas', action='store_true', help='Return map as list instead of DataFrame')
-    p.add_argument('--backend', choices=['auto','cyvcf2','builtin'], default='auto', help='Choose parsing backend')
+    p.add_argument('--backend', choices=['auto','cyvcf2','builtin'], default='auto',
+                   help='Choose parsing backend (auto prefers builtin for VCF, cyvcf2 for BCF)')
     args = p.parse_args(argv)
 
     geno, ids, gmap = load_genotype_vcf(

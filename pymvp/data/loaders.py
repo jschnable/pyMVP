@@ -5,15 +5,16 @@ Data loading utilities for various file formats
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Union, Tuple, Optional, Dict, List
+from typing import Union, Tuple, Optional, Dict, List, Any
 import warnings
 import time
 import sys
 
 from ..utils.data_types import GenotypeMatrix, GenotypeMap
 from ..utils.memmap_utils import load_full_from_metadata
+from ..utils.effective_tests import estimate_effective_tests_from_genotype
 try:
-    # Local VCF loader (fast cyvcf2 with builtin fallback)
+    # Local VCF loader (builtin parser by default, cyvcf2 optional)
     from .load_genotype_vcf import load_genotype_vcf as _load_genotype_vcf
 except Exception:
     _load_genotype_vcf = None
@@ -372,6 +373,8 @@ def _deduplicate_genotype_samples(individual_ids: List[str], geno_np: np.ndarray
 
 def load_genotype_file(filepath: Union[str, Path],
                       file_format: Optional[str] = None,
+                      compute_effective_tests: bool = False,
+                      effective_test_kwargs: Optional[Dict[str, Any]] = None,
                       **kwargs) -> Tuple[GenotypeMatrix, List[str], GenotypeMap]:
     """Load genotype file in various formats
     
@@ -407,6 +410,13 @@ def load_genotype_file(filepath: Union[str, Path],
         individual_ids = list(individual_ids)
         elapsed = time.time() - load_start
         _maybe_warn(elapsed)
+        if compute_effective_tests:
+            effective_tests_kwargs = effective_test_kwargs or {}
+            geno_map.metadata["effective_tests"] = estimate_effective_tests_from_genotype(
+                genotype,
+                geno_map,
+                **effective_tests_kwargs,
+            )
         return genotype, individual_ids, geno_map
 
     if file_format == 'vcf':
@@ -417,7 +427,16 @@ def load_genotype_file(filepath: Union[str, Path],
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
         geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
-        geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
+        geno_map = GenotypeMap(
+            geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df)
+        )
+        if compute_effective_tests:
+            effective_tests_kwargs = effective_test_kwargs or {}
+            geno_map.metadata["effective_tests"] = estimate_effective_tests_from_genotype(
+                geno_matrix,
+                geno_map,
+                **effective_tests_kwargs,
+            )
         elapsed = time.time() - load_start
         _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
@@ -430,7 +449,16 @@ def load_genotype_file(filepath: Union[str, Path],
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
         geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
-        geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
+        geno_map = GenotypeMap(
+            geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df)
+        )
+        if compute_effective_tests:
+            effective_tests_kwargs = effective_test_kwargs or {}
+            geno_map.metadata["effective_tests"] = estimate_effective_tests_from_genotype(
+                geno_matrix,
+                geno_map,
+                **effective_tests_kwargs,
+            )
         elapsed = time.time() - load_start
         _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
@@ -442,7 +470,16 @@ def load_genotype_file(filepath: Union[str, Path],
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
         geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
-        geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
+        geno_map = GenotypeMap(
+            geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df)
+        )
+        if compute_effective_tests:
+            effective_tests_kwargs = effective_test_kwargs or {}
+            geno_map.metadata["effective_tests"] = estimate_effective_tests_from_genotype(
+                geno_matrix,
+                geno_map,
+                **effective_tests_kwargs,
+            )
         elapsed = time.time() - load_start
         _maybe_warn(elapsed)
         return geno_matrix, individual_ids, geno_map
@@ -491,6 +528,13 @@ def load_genotype_file(filepath: Union[str, Path],
             'POS': list(range(1, len(marker_names) + 1))  # Sequential positions
         })
         geno_map = GenotypeMap(map_data)
+        if compute_effective_tests:
+            effective_tests_kwargs = effective_test_kwargs or {}
+            geno_map.metadata["effective_tests"] = estimate_effective_tests_from_genotype(
+                geno_matrix,
+                geno_map,
+                **effective_tests_kwargs,
+            )
 
         elapsed = time.time() - load_start
         _maybe_warn(elapsed)

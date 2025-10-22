@@ -63,13 +63,15 @@ class GenotypeMap:
     Expected columns: [SNP_ID, Chr, Pos, REF, ALT]
     """
     
-    def __init__(self, data: Union[pd.DataFrame, str, Path]):
+    def __init__(self, data: Union[pd.DataFrame, str, Path], metadata: Optional[Dict[str, Any]] = None):
         if isinstance(data, (str, Path)):
             self.data = pd.read_csv(data)
         elif isinstance(data, pd.DataFrame):
             self.data = data.copy()
         else:
             raise ValueError("Data must be DataFrame or file path")
+
+        self.metadata: Dict[str, Any] = dict(metadata) if metadata else {}
             
         # Validate required columns
         required_cols = ['SNP', 'CHROM', 'POS']
@@ -100,6 +102,13 @@ class GenotypeMap:
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to pandas DataFrame"""
         return self.data.copy()
+
+    def with_metadata(self, **metadata: Any) -> "GenotypeMap":
+        """Return a new GenotypeMap with merged metadata dictionary."""
+        merged = dict(self.metadata)
+        merged.update(metadata)
+        new_map = GenotypeMap(self.data.copy(), metadata=merged)
+        return new_map
 
 
 class GenotypeMatrix:

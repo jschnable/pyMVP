@@ -250,6 +250,7 @@ python scripts/run_GWAS.py -p data/phe.csv -g data/geno.vcf.gz \
 - Default: Bonferroni with `alpha=0.05` and the true number of markers.
 - `--alpha`: Override alpha used for Bonferroni.
 - `--n-eff`: Use an effective number of markers for Bonferroni denominator.
+- `--compute-effective-tests`: Estimate the Li & Ji effective marker count (GEC-style) after loading genotypes and use it as the Bonferroni denominator. Optional tuning knobs: `--effective-test-window`, `--effective-test-corr-cutoff`, `--effective-test-gap-limit`, `--effective-test-span-limit`, `--effective-test-prune-threshold`.
 - `--significance`: Fixed p-value threshold; overrides `--alpha` and `--n-eff` when provided.
 
 **Genotype loader/QC options:**
