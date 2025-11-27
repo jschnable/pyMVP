@@ -156,14 +156,17 @@ def MVP_GLM_ultrafast(phe: np.ndarray,
         else:
             G = _impute_numpy_batch_major_allele(geno[:, start:end], fill_value=missing_fill_value)
 
-        xs = X.T @ G                      # shape (p, b)
-        sy = G.T @ y                      # shape (b,)
-        ss = np.sum(G * G, axis=0)        # shape (b,)
+        # Suppress warnings for expected numerical issues in matrix operations
+        # These are properly handled by validity checks below
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            xs = X.T @ G                      # shape (p, b)
+            sy = G.T @ y                      # shape (b,)
+            ss = np.sum(G * G, axis=0)        # shape (b,)
 
-        B21 = xs.T @ iXX                  # shape (b, p)
-        tmp = sy - (xs.T @ beta_cov)      # shape (b,)
-        t2 = np.einsum('ij,ij->i', B21, xs.T)
-        B22 = ss - t2
+            B21 = xs.T @ iXX                  # shape (b, p)
+            tmp = sy - (xs.T @ beta_cov)      # shape (b,)
+            t2 = np.einsum('ij,ij->i', B21, xs.T)
+            B22 = ss - t2
 
         valid = B22 > 1e-8
         invB22 = np.zeros_like(B22)
@@ -171,8 +174,9 @@ def MVP_GLM_ultrafast(phe: np.ndarray,
 
         beta_marker = invB22 * tmp
 
-        beta_cov_new = beta_cov[np.newaxis, :] - (beta_marker[:, np.newaxis] * B21)
-        rhs_cov = beta_cov_new @ xy
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            beta_cov_new = beta_cov[np.newaxis, :] - (beta_marker[:, np.newaxis] * B21)
+            rhs_cov = beta_cov_new @ xy
         df_array = np.full_like(B22, df_full, dtype=float)
         df_array[~valid] = df_reduced
 

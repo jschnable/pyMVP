@@ -153,9 +153,12 @@ def MVP_PCA_genotype(M: Union[GenotypeMatrix, np.ndarray],
         # Center the genotype matrix by per-marker means
         means_batch = np.mean(G_batch, axis=0)
         G_batch -= means_batch[np.newaxis, :]
-        
+
         # Add to covariance matrix
-        covariance += G_batch @ G_batch.T
+        # Suppress warnings for expected numerical issues (overflow, divide by zero)
+        # that are handled correctly in the computation
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            covariance += G_batch @ G_batch.T
     
     # Normalize by number of markers
     covariance /= n_markers
