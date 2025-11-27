@@ -16,6 +16,7 @@ import numpy as np
 from typing import Optional, Union, Dict, Tuple
 from scipy import stats, optimize
 from ..utils.data_types import GenotypeMatrix, KinshipMatrix, AssociationResults
+from ..utils.perf import warn_if_potential_single_thread_blas
 import warnings
 import time
 
@@ -250,6 +251,8 @@ def MVP_MLM(phe: np.ndarray,
     Returns:
         AssociationResults object containing Effect, SE, and P-value for each marker
     """
+    
+    warn_if_potential_single_thread_blas()
     
     # Handle cpu=0 to mean use all available cores
     if cpu == 0:

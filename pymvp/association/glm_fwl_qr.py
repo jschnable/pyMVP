@@ -129,14 +129,18 @@ def MVP_GLM_ultrafast(phe: np.ndarray,
         X = np.ones((n, 1))
 
     X = np.asfortranarray(X, dtype=np.float64)
-    XtX = X.T @ X
-    try:
-        iXX = np.linalg.inv(XtX)
-    except np.linalg.LinAlgError:
-        iXX = np.linalg.pinv(XtX, rcond=1e-10)
-    xy = X.T @ y
-    beta_cov = iXX @ xy
-    yy = float(y @ y)
+
+    # Suppress warnings for expected numerical issues in initial covariate setup
+    # These are properly handled by try-except and validity checks
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        XtX = X.T @ X
+        try:
+            iXX = np.linalg.inv(XtX)
+        except np.linalg.LinAlgError:
+            iXX = np.linalg.pinv(XtX, rcond=1e-10)
+        xy = X.T @ y
+        beta_cov = iXX @ xy
+        yy = float(y @ y)
     p = X.shape[1]
 
     df_full = int(n - p - 1)

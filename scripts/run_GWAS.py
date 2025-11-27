@@ -522,6 +522,11 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
         step_start = time.time()
         print_step("Running FarmCPU analysis")
 
+        # Use the same significance threshold for pseudo-QTN selection as final significance determination
+        # Default to 0.01/0.05 if no threshold specified (original FarmCPU paper defaults)
+        farmcpu_p_threshold = default_significance if default_significance is not None else 0.05
+        farmcpu_qtn_threshold = default_significance if default_significance is not None else 0.01
+
         try:
             farmcpu_results = MVP_FarmCPU(
                 phe=phe_array,
@@ -529,8 +534,8 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 map_data=geno_map,
                 CV=covariate_matrix_for_models,
                 maxLoop=max_iterations,
-                p_threshold=0.05,
-                QTN_threshold=0.01,
+                p_threshold=farmcpu_p_threshold,
+                QTN_threshold=farmcpu_qtn_threshold,
                 verbose=False
             )
             results['FarmCPU'] = farmcpu_results
@@ -548,6 +553,10 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
         step_start = time.time()
         print_step("Running BLINK analysis")
 
+        # Use the same significance threshold for pseudo-QTN selection as final significance determination
+        # Allow override via blink_params, otherwise use calculated threshold
+        blink_p_threshold = blink_params.get('p_threshold', default_significance)
+
         try:
             blink_results = MVP_BLINK(
                 phe=phe_array,
@@ -559,7 +568,7 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                 maf_threshold=blink_params.get('maf_threshold', 0.0),
                 bic_method=blink_params.get('bic_method', 'naive'),
                 method_sub=blink_params.get('method_sub', 'reward'),
-                p_threshold=blink_params.get('p_threshold', None),
+                p_threshold=blink_p_threshold,
                 max_genotype_dosage=blink_params.get('max_genotype_dosage', max_genotype_dosage),
                 verbose=False,
             )

@@ -7,6 +7,7 @@ import time
 from typing import Optional, Union, List, Tuple, Dict, Sequence
 from scipy import stats
 from ..utils.data_types import GenotypeMatrix, GenotypeMap, AssociationResults
+from ..utils.perf import warn_if_potential_single_thread_blas
 from .glm import MVP_GLM
 from .mlm import MVP_MLM
 import warnings
@@ -118,13 +119,15 @@ def MVP_FarmCPU(phe: np.ndarray,
         maxLine: Batch size for processing markers
         cpu: Number of CPU threads (currently ignored)
         reward_method: How to substitute pseudo-QTN p-values in final results.
-            'min' (default, matches rMVP "reward"): minimum covariate p-value across iterations.
-            'last': use covariate p-value from the final iteration only.
+                'min' (default, matches rMVP "reward"): minimum covariate p-value across iterations.
+                'last': use covariate p-value from the final iteration only.
         verbose: Print progress information
     
     Returns:
         AssociationResults object containing final Effect, SE, and P-value for each marker
     """
+    
+    warn_if_potential_single_thread_blas()
     
     # Handle input validation
     if isinstance(phe, np.ndarray):
@@ -479,10 +482,13 @@ def _get_covariate_statistics(phe: np.ndarray, covariates: np.ndarray, verbose: 
     X = np.column_stack([np.ones(trait_values.shape[0]), covariates])
 
     try:
-        XtX = X.T @ X
-        XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
-        beta = XtX_inv @ (X.T @ trait_values)
-        residuals = trait_values - X @ beta
+        # Suppress warnings for expected numerical issues in matrix operations
+        # These are properly handled by try-except and validity checks
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            XtX = X.T @ X
+            XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
+            beta = XtX_inv @ (X.T @ trait_values)
+            residuals = trait_values - X @ beta
         df = trait_values.shape[0] - X.shape[1]
         if df <= 0:
             raise np.linalg.LinAlgError

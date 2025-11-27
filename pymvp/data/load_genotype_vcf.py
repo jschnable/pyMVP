@@ -54,25 +54,7 @@ _BIALLELIC_GT_DIRECT: Dict[str, Tuple[int, int]] = {
     '.': (MISSING, 0),
 }
 
-_GT_TOKEN_CACHE_SENTINEL = object()
-_GT_TOKEN_CACHE: Dict[str, Optional[Tuple[str, ...]]] = {}
-_BIALLELIC_DOSAGE_CACHE: Dict[Tuple[str, ...], Tuple[int, int]] = {}
-_BIALLELIC_GT_CACHE: Dict[str, Tuple[int, int]] = {}
-_BIALLELIC_GT_DIRECT: Dict[str, Tuple[int, int]] = {
-    '0/0': (0, 2),
-    '0|0': (0, 2),
-    '0/1': (1, 2),
-    '1/0': (1, 2),
-    '0|1': (1, 2),
-    '1|0': (1, 2),
-    '1/1': (2, 2),
-    '1|1': (2, 2),
-    '0': (0, 1),
-    '1': (1, 1),
-    './.': (MISSING, 0),
-    '.|.': (MISSING, 0),
-    '.': (MISSING, 0),
-}
+_FORMAT_CACHE: Dict[str, Tuple[Tuple[str, ...], Dict[str, int]]] = {}
 
 
 class _DynamicInt8MatrixWriter:
@@ -162,8 +144,18 @@ def _build_snp_id(chrom, pos, vid, ref, alt):
     return "%s:%s:%s:%s" % (chrom, pos, ref, alt)
 
 
-def _parse_format_keys(fmt_str):
-    return fmt_str.split(':') if fmt_str else []
+def _parse_format_keys(fmt_str: str) -> Tuple[Tuple[str, ...], Dict[str, int]]:
+    cached = _FORMAT_CACHE.get(fmt_str)
+    if cached is not None:
+        return cached
+    if not fmt_str:
+        result: Tuple[Tuple[str, ...], Dict[str, int]] = (tuple(), {})
+    else:
+        keys = tuple(fmt_str.split(':'))
+        key_to_idx = {k: i for i, k in enumerate(keys)}
+        result = (keys, key_to_idx)
+    _FORMAT_CACHE[fmt_str] = result
+    return result
 
 
 def _split_gt_tokens(gt):
@@ -570,8 +562,7 @@ def load_genotype_vcf(
 
                 fmt = parts[8] if len(parts) >= 9 else ''
                 sample_fields = parts[9:] if len(parts) >= 10 else []
-                fmt_keys = _parse_format_keys(fmt)
-                key_to_idx = {k: i for i, k in enumerate(fmt_keys)}
+                fmt_keys, key_to_idx = _parse_format_keys(fmt)
 
                 gt_index = key_to_idx.get('GT')
                 ds_index = key_to_idx.get('DS')
@@ -606,10 +597,9 @@ def load_genotype_vcf(
 
                 if gt_index is not None:
                     if gt_primary:
-                        gt_array = np.array(
-                            [field.partition(':')[0] if field else '' for field in sample_fields],
-                            dtype='<U3',
-                        )
+                        gt_values = [
+                            field.partition(':')[0] if field else '' for field in sample_fields
+                        ]
                     else:
                         gt_values = []
                         for field in sample_fields:
@@ -618,10 +608,9 @@ def load_genotype_vcf(
                                 continue
                             toks = field.split(':')
                             gt_values.append(toks[gt_index] if gt_index < len(toks) else '')
-                        gt_array = np.array(gt_values, dtype='<U3')
                 else:
-                    gt_array = np.empty(len(sample_fields), dtype='<U3')
-                    gt_array.fill('')
+                    gt_values = [''] * len(sample_fields)
+                gt_array = np.array(gt_values, dtype='<U8') if gt_values else np.empty(len(sample_fields), dtype='<U8')
 
                 split_tokens = _split_gt_tokens
 
@@ -629,43 +618,55 @@ def load_genotype_vcf(
                 def build_columns_for_alt(alt_index, alt_base):
                     nonlocal sanity_checked
                     col = np.full(len(individual_ids), MISSING, dtype=np.int16)
+                    missing_mask = np.ones(len(individual_ids), dtype=bool)
                     variant_ploidy = 0
-                    if is_biallelic:
-                        cleaned = np.char.replace(np.char.replace(gt_array, '/', ''), '|', '')
-                        missing_mask = (cleaned == '') | (np.char.find(cleaned, '.') != -1)
-
+                    if is_biallelic and gt_index is not None:
                         if not sanity_checked:
                             if len(alt_alleles) != 1:
                                 raise ValueError(
                                     "Multi-allelic variants are not supported by the fast builtin loader. "
                                     "Please switch to the cyvcf2 backend."
                                 )
-                            subset = cleaned[: min(10, cleaned.size)]
-                            subset = subset[(subset != '') & (np.char.find(subset, '.') == -1)]
+                            subset = gt_array[: min(10, gt_array.size)]
                             if subset.size:
-                                if np.any(np.char.find(subset, '2') != -1) or np.any(np.char.find(subset, '3') != -1):
-                                    raise ValueError(
-                                        "Detected genotype allele codes greater than 1. "
-                                        "Polyploid genotypes require the cyvcf2 backend."
-                                    )
-                                lengths = np.char.str_len(subset)
-                                if np.any(lengths > 2):
-                                    raise ValueError(
-                                        "Detected genotypes with ploidy greater than diploid. "
-                                        "Please use the cyvcf2 backend for polyploid datasets."
-                                    )
+                                subset = subset[(subset != '') & (np.char.find(subset, '.') == -1)]
+                                if subset.size:
+                                    cleaned_subset = np.char.replace(np.char.replace(subset, '/', ''), '|', '')
+                                    if np.any(np.char.find(cleaned_subset, '2') != -1) or np.any(np.char.find(cleaned_subset, '3') != -1):
+                                        raise ValueError(
+                                            "Detected genotype allele codes greater than 1. "
+                                            "Polyploid genotypes require the cyvcf2 backend."
+                                        )
+                                    lengths = np.char.str_len(cleaned_subset)
+                                    if np.any(lengths > 2):
+                                        raise ValueError(
+                                            "Detected genotypes with ploidy greater than diploid. "
+                                            "Please use the cyvcf2 backend for polyploid datasets."
+                                        )
                             sanity_checked = True
 
-                        dosage_array = np.char.count(cleaned, '1').astype(np.int16)
-                        valid_mask = ~missing_mask
-                        if np.any(valid_mask):
-                            col[valid_mask] = dosage_array[valid_mask]
-                            variant_ploidy = 2
-                        if ds_array is not None:
-                            ds_mask = missing_mask & (ds_array != MISSING)
-                            col[ds_mask] = ds_array[ds_mask]
+                        unique_gts = np.unique(gt_array)
+                        for gt_code in unique_gts:
+                            mask = gt_array == gt_code
+                            if not gt_code:
+                                if ds_array is not None:
+                                    ds_mask = mask & (ds_array != MISSING)
+                                    if np.any(ds_mask):
+                                        col[ds_mask] = ds_array[ds_mask]
+                                        missing_mask[ds_mask] = False
+                                continue
+                            dosage, ploidy = _decode_biallelic_gt(gt_code)
+                            if dosage != MISSING:
+                                col[mask] = dosage
+                                missing_mask[mask] = False
+                                variant_ploidy = max(variant_ploidy, ploidy)
+                            elif ds_array is not None:
+                                ds_mask = mask & (ds_array != MISSING)
+                                if np.any(ds_mask):
+                                    col[ds_mask] = ds_array[ds_mask]
+                                    missing_mask[ds_mask] = False
                     else:
-                        for si, gt in enumerate(gt_array):
+                        for si, gt in enumerate(gt_values):
                             ds_val = ds_array[si] if ds_array is not None else MISSING
                             gt_tokens = split_tokens(gt) if gt else None
                             if gt_tokens is not None:
@@ -673,10 +674,18 @@ def load_genotype_vcf(
                                 if dosage != MISSING:
                                     col[si] = dosage
                                     variant_ploidy = max(variant_ploidy, ploidy)
+                                    missing_mask[si] = False
                                 elif ds_val != MISSING:
                                     col[si] = ds_val
+                                    missing_mask[si] = False
                             elif ds_val != MISSING:
                                 col[si] = ds_val
+                                missing_mask[si] = False
+                    if ds_array is not None:
+                        ds_mask = missing_mask & (ds_array != MISSING)
+                        if np.any(ds_mask):
+                            col[ds_mask] = ds_array[ds_mask]
+                            missing_mask[ds_mask] = False
                     return col, variant_ploidy
 
                 if len(alt_alleles) == 1:
