@@ -54,8 +54,9 @@ if HAS_NUMBA:
         
         # Vectorized computation for all markers in batch
         for j in numba.prange(n_markers):  # Parallel loop over markers
-            g = G_batch[:, j]
-            batch_UXWUs[:, j] = X.T @ (weights * g)
+            g = np.ascontiguousarray(G_batch[:, j])
+            term = np.ascontiguousarray(weights * g)
+            batch_UXWUs[:, j] = X.T @ term
             batch_UsWUs[j] = np.sum(weights * g * g)
             batch_UsWy[j] = np.sum(weights * g * y)
         
@@ -82,7 +83,7 @@ if HAS_NUMBA:
         # Process all markers in vectorized fashion
         for j in numba.prange(n_markers):  # Parallel loop
             # Calculate B22 (marker precision after removing covariate effects)
-            UXWUs_j = batch_UXWUs[:, j]
+            UXWUs_j = np.ascontiguousarray(batch_UXWUs[:, j])
             B22 = batch_UsWUs[j] - UXWUs_j.T @ iUXWUX @ UXWUs_j
             
             if B22 <= 1e-12:  # Numerical stability check

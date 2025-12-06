@@ -27,7 +27,7 @@ from pymvp.data.loaders import (
     load_covariate_file, match_individuals, detect_file_format
 )
 from pymvp.utils.stats import (
-    bonferroni_correction, calculate_maf_from_genotypes, 
+    calculate_maf_from_genotypes,
     genomic_inflation_factor
 )
 from pymvp.utils.data_types import GenotypeMatrix, AssociationResults
@@ -385,6 +385,8 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
                      farmcpu_resampling_params: Optional[Dict[str, Any]] = None,
                      blink_params: Optional[Dict[str, Any]] = None,
                      default_significance: Optional[float] = None,
+                     farmcpu_p_threshold: Optional[float] = None,
+                     farmcpu_qtn_threshold: Optional[float] = None,
                      max_genotype_dosage: float = 2.0
                      ) -> Dict[str, Union[AssociationResults, FarmCPUResamplingResults]]:
     """Run GWAS analysis using specified methods for a single trait."""
@@ -524,8 +526,16 @@ def run_gwas_analysis(phenotype_df: pd.DataFrame,
 
         # Use the same significance threshold for pseudo-QTN selection as final significance determination
         # Default to 0.01/0.05 if no threshold specified (original FarmCPU paper defaults)
-        farmcpu_p_threshold = default_significance if default_significance is not None else 0.05
-        farmcpu_qtn_threshold = default_significance if default_significance is not None else 0.01
+        farmcpu_p_threshold = (
+            farmcpu_p_threshold
+            if farmcpu_p_threshold is not None
+            else (default_significance if default_significance is not None else 0.05)
+        )
+        farmcpu_qtn_threshold = (
+            farmcpu_qtn_threshold
+            if farmcpu_qtn_threshold is not None
+            else (default_significance if default_significance is not None else 0.01)
+        )
 
         try:
             farmcpu_results = MVP_FarmCPU(
@@ -929,6 +939,10 @@ def main():
                        help="Maximum genotype dosage used to normalise allele frequencies (e.g. 2 for diploids, 4 for tetraploids)")
     parser.add_argument("--max-iterations", type=int, default=10,
                        help="Maximum iterations for FarmCPU")
+    parser.add_argument("--farmcpu-p-threshold", type=float, default=None,
+                       help="P-value threshold for FarmCPU candidate scan (defaults to significance threshold or 0.05)")
+    parser.add_argument("--farmcpu-qtn-threshold", type=float, default=None,
+                       help="P-value cutoff for selecting pseudo-QTNs in FarmCPU (defaults to significance threshold or 0.01)")
     parser.add_argument("--farmcpu-resampling-runs", type=int, default=100,
                        help="Number of FarmCPU resampling runs (X)")
     parser.add_argument("--farmcpu-resampling-mask", type=float, default=0.1,
@@ -1301,6 +1315,8 @@ def main():
                 farmcpu_resampling_params=(resampling_params if 'FARMCPU_RESAMPLING' in methods else None),
                 blink_params=blink_params,
                 default_significance=base_significance,
+                farmcpu_p_threshold=args.farmcpu_p_threshold,
+                farmcpu_qtn_threshold=args.farmcpu_qtn_threshold,
                 max_genotype_dosage=args.max_genotype_dosage,
             )
             if not gwas_results:
