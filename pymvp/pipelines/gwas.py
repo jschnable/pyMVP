@@ -6,6 +6,7 @@ It encapsulates data loading, sample alignment, population structure correction,
 association testing, and result reporting into a reusable pipeline class.
 """
 
+import concurrent.futures
 import time
 import math
 import warnings
@@ -35,6 +36,54 @@ from ..association.blink import MVP_BLINK
 from ..matrix.pca import MVP_PCA
 from ..matrix.kinship import MVP_K_VanRaden
 from ..visualization.manhattan import MVP_Report
+# Helper function for parallel execution
+def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, max_iterations, base_threshold, n_markers):
+    """Worker function to run a single GWAS method in a separate process."""
+    try:
+        if method == 'GLM':
+            res = MVP_GLM(phe=y_sub, geno=g_sub, CV=cov_sub, verbose=False)
+            lambda_gc = genomic_inflation_factor(res.pvalues)
+            return ('GLM', res, lambda_gc, None)
+
+        elif method == 'MLM':
+            if k_sub is None:
+                return ('MLM', None, None, "Kinship matrix missing")
+            res = MVP_MLM(phe=y_sub, geno=g_sub, CV=cov_sub, K=k_sub, verbose=False)
+            lambda_gc = genomic_inflation_factor(res.pvalues)
+            return ('MLM', res, lambda_gc, None)
+
+        elif method == 'FARMCPU':
+            fc_p = fc_params.get('p_threshold', base_threshold if base_threshold else 0.05 / n_markers)
+            res = MVP_FarmCPU(
+                phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
+                maxLoop=max_iterations, verbose=False
+            )
+            lambda_gc = genomic_inflation_factor(res.pvalues)
+            return ('FarmCPU', res, lambda_gc, None)
+
+        elif method == 'BLINK':
+            res = MVP_BLINK(
+                phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
+                maxLoop=max_iterations, verbose=False
+            )
+            lambda_gc = genomic_inflation_factor(res.pvalues)
+            return ('BLINK', res, lambda_gc, None)
+            
+        elif method == 'FARMCPU_RESAMPLING':
+            # Resampling is usually heavy and might output files directly or need special handling
+            runs = fc_params.get('resampling_runs', 100)
+            # trait_name is needed? Not passed here.
+            # We skip this in parallel worker for now or pass trait_name?
+            # It's better to keep resampling sequential if complex, or pass trait_name.
+            # Let's support it if trivial.
+            # MVP_FarmCPUResampling requires trait_name. 
+            pass
+
+        return (method, None, None, f"Unknown method {method}")
+
+    except Exception as e:
+        return (method, None, None, str(e))
+
 
 OUTPUT_CHOICES: Tuple[str, ...] = (
     'all_marker_pvalues',
@@ -332,71 +381,54 @@ class GWASPipeline:
                 
             y_sub, g_sub, cov_sub, k_sub = trait_data
 
-            # Run Methods
+            # Run Methods (Parallel Execution)
             method_results = {}
             
             # Setup params for FarmCPU/BLINK
-            # (Simplified; passing defaults if not provided)
             fc_params = farmcpu_params or {}
             blk_params = blink_params or {}
+            
+            # Identify parallelizable methods
+            parallel_methods = []
+            if 'GLM' in methods: parallel_methods.append('GLM')
+            if 'MLM' in methods: parallel_methods.append('MLM')
+            if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
+            if 'BLINK' in methods: parallel_methods.append('BLINK')
+            
+            # Resampling usually handled separately or sequentially due to complexity
+            run_resampling = 'FARMCPU_RESAMPLING' in methods
 
-            # -- GLM --
-            if 'GLM' in methods:
-                try:
-                    self.log("   Running GLM...")
-                    res = MVP_GLM(phe=y_sub, geno=g_sub, CV=cov_sub, verbose=False)
-                    method_results['GLM'] = res
-                    self.log(f"   GLM Lambda (GC): {genomic_inflation_factor(res.pvalues):.3f}")
-                except Exception as e:
-                    self.log(f"   GLM Failed: {e}")
+            self.log(f"   Running parallel analysis for: {parallel_methods}")
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, len(parallel_methods))) as executor:
+                future_to_method = {
+                    executor.submit(
+                        _run_single_method, 
+                        method, 
+                        y_sub, g_sub, cov_sub, k_sub, 
+                        self.geno_map, 
+                        fc_params, blk_params, 
+                        max_iterations, base_threshold, n_markers
+                    ): method for method in parallel_methods
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_method):
+                    m_name = future_to_method[future]
+                    try:
+                        res_name, res_obj, lambda_gc, error = future.result()
+                        if error:
+                            self.log(f"   {m_name} Failed: {error}")
+                        else:
+                            method_results[res_name] = res_obj
+                            if lambda_gc is not None:
+                                self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
+                    except Exception as exc:
+                        self.log(f"   {m_name} generated an exception: {exc}")
 
-            # -- MLM --
-            if 'MLM' in methods and k_sub is not None:
-                try:
-                    self.log("   Running MLM...")
-                    res = MVP_MLM(phe=y_sub, geno=g_sub, CV=cov_sub, K=k_sub, verbose=False)
-                    method_results['MLM'] = res
-                    self.log(f"   MLM Lambda (GC): {genomic_inflation_factor(res.pvalues):.3f}")
-                except Exception as e:
-                    self.log(f"   MLM Failed: {e}")
-
-            # -- FarmCPU --
-            if 'FARMCPU' in methods:
-                try:
-                    self.log("   Running FarmCPU...")
-                    # Default threshold logic matches script
-                    fc_p = fc_params.get('p_threshold', base_threshold if base_threshold else 0.05 / n_markers) 
-                    # Note: FarmCPU default logic is complex, approximating here for pipeline
-                    
-                    res = MVP_FarmCPU(
-                        phe=y_sub, geno=g_sub, map_data=self.geno_map, CV=cov_sub,
-                        maxLoop=max_iterations,
-                        verbose=False
-                    )
-                    method_results['FarmCPU'] = res
-                    self.log(f"   FarmCPU Lambda (GC): {genomic_inflation_factor(res.pvalues):.3f}")
-                except Exception as e:
-                    self.log(f"   FarmCPU Failed: {e}")
-
-            # -- BLINK --
-            if 'BLINK' in methods:
-                try:
-                    self.log("   Running BLINK...")
-                    res = MVP_BLINK(
-                        phe=y_sub, geno=g_sub, map_data=self.geno_map, CV=cov_sub,
-                        maxLoop=max_iterations,
-                        verbose=False
-                    )
-                    method_results['BLINK'] = res
-                    self.log(f"   BLINK Lambda (GC): {genomic_inflation_factor(res.pvalues):.3f}")
-                except Exception as e:
-                    self.log(f"   BLINK Failed: {e}")
-
-            # -- FarmCPU Resampling --
-            if 'FARMCPU_RESAMPLING' in methods:
+            # Specific handling for Resampling (Sequential)
+            if run_resampling:
                  try: 
-                     self.log("   Running FarmCPU Resampling...")
-                     # extracting resampling specific params
+                     self.log("   Running FarmCPU Resampling (Sequential)...")
                      runs = fc_params.get('resampling_runs', 100)
                      res = MVP_FarmCPUResampling(
                          phe=y_sub, geno=g_sub, map_data=self.geno_map, CV=cov_sub,
@@ -542,7 +574,7 @@ class GWASPipeline:
                     if 'manhattan' in outputs: plot_types.append('manhattan')
                     if 'qq' in outputs: plot_types.append('qq')
                     
-                    MVP_Report(
+                    report = MVP_Report(
                         results=Res, map_data=self.geno_map,
                         output_prefix=str(self.output_dir / f"GWAS_{trait_name}_{method}"),
                         plot_types=plot_types,
@@ -550,6 +582,12 @@ class GWASPipeline:
                         verbose=False,
                         save_plots=True
                     )
+                    
+                    # Cleanup figures to avoid "More than 20 figures opened" warning
+                    import matplotlib.pyplot as plt
+                    for m_plots in report.get('plots', {}).values():
+                        for fig in m_plots.values():
+                             plt.close(fig)
                 except Exception as e:
                     self.log(f"   Plotting error {method}: {e}")
 

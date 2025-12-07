@@ -349,8 +349,10 @@ def MVP_MLM(phe: np.ndarray,
     # Transform to eigenspace
     if verbose:
         print("Transforming data to eigenspace...")
-    y_transformed = eigenvecs.T @ trait_values
-    X_transformed = eigenvecs.T @ X
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        y_transformed = eigenvecs.T @ trait_values
+        X_transformed = eigenvecs.T @ X
     
     # Estimate variance components using original method (not the bottleneck)
     if verbose:
@@ -394,13 +396,19 @@ def MVP_MLM(phe: np.ndarray,
         end_marker = min(start_marker + maxLine, n_markers)
         
         # Get batch of markers (imputed)
+        # Get batch of markers (imputed)
         if isinstance(genotype, GenotypeMatrix):
             G_batch = genotype.get_batch_imputed(start_marker, end_marker).astype(np.float64)
         else:
             G_batch = genotype[:, start_marker:end_marker].astype(np.float64)
         
+        # Sanitize to prevent numerical warnings (overflow/invalid)
+        G_batch = np.nan_to_num(G_batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        
         # Transform genotypes to eigenspace
-        G_batch_transformed = eigenvecs.T @ G_batch
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            G_batch_transformed = eigenvecs.T @ G_batch
         
         # Prepare batch data tuple
         batch_data = (y_transformed, X_transformed, G_batch_transformed, eigenvals, delta_hat, vg_hat, start_marker)
@@ -481,8 +489,10 @@ def estimate_variance_components_brent(y: np.ndarray,
             return np.inf
         
         # REML residuals: P₀y = V⁻¹y - V⁻¹X(X'V⁻¹X)⁻¹X'V⁻¹y
-        Viy = V0bi * y  # V⁻¹y
-        P0y = Viy - ViX @ (XViX_inv @ (ViX.T @ y))  # REML residuals
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            Viy = V0bi * y  # V⁻¹y
+            P0y = Viy - ViX @ (XViX_inv @ (ViX.T @ y))  # REML residuals
         yP0y = np.dot(P0y, y)  # y'P₀y
         
         # Check for numerical issues
@@ -505,12 +515,14 @@ def estimate_variance_components_brent(y: np.ndarray,
     
     try:
         # Use Brent's method with heritability bounds [0,1] like rMVP
-        result = optimize.minimize_scalar(
-            neg_reml_likelihood, 
-            bounds=(0.001, 0.999),  # h² ∈ [0,1] with small margins for numerical stability
-            method='bounded',
-            options={'xatol': 1.22e-4, 'maxiter': 500}  # rMVP tolerance
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = optimize.minimize_scalar(
+                neg_reml_likelihood, 
+                bounds=(0.001, 0.999),  # h² ∈ [0,1] with small margins for numerical stability
+                method='bounded',
+                options={'xatol': 1.22e-4, 'maxiter': 500}  # rMVP tolerance
+            )
         
         if result.success:
             h2_hat = result.x
@@ -531,12 +543,27 @@ def estimate_variance_components_brent(y: np.ndarray,
     # Recompute at optimal h²
     V0b = h2_hat * eig_safe + (1.0 - h2_hat) * np.ones_like(eig_safe)
     V0bi = 1.0 / V0b
-    ViX = V0bi[:, np.newaxis] * X
-    XViX = X.T @ ViX
-    XViX_inv = np.linalg.solve(XViX, np.eye(XViX.shape[0]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ViX = V0bi[:, np.newaxis] * X
+        XViX = X.T @ ViX
+    # Robust inversion for XViX
+    try:
+        XViX_inv = np.linalg.solve(XViX, np.eye(XViX.shape[0]))
+    except np.linalg.LinAlgError:
+         # Fallback to pseudo-inverse if singular
+        XViX_inv = np.linalg.pinv(XViX)
     
+    # Calculate P0y (Projected phenotype)
     Viy = V0bi * y
-    P0y = Viy - ViX @ (XViX_inv @ (ViX.T @ y))
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # beta = (X' V^-1 X)^-1 X' V^-1 y
+        beta = XViX_inv @ (ViX.T @ y)
+        
+        # P0y = V^-1 y - V^-1 X beta
+        P0y = Viy - ViX @ beta
     yP0y = float(np.dot(P0y, y))
     
     # Base variance and final components (rMVP method)

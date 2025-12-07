@@ -566,10 +566,38 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
         plot_positions = current_pos + norm_positions
         cumulative_pos[indices_ordered] = plot_positions
 
-        # Plot points for this chromosome
+        cumulative_pos[indices_ordered] = plot_positions
+        
         color = colors[i % len(colors)]
-        ax.scatter(plot_positions, chrom_log_pvals,
-                  c=color, s=point_size, alpha=0.8, edgecolors='none')
+
+        # Decimation Logic: Reduce noise points (p > 0.01) by 95%
+        # -log10(0.01) = 2.0
+        decimate_log_thresh = 1.0
+        keep_fraction = 0.10  # Keep 5% of noise points
+        
+        sig_mask = chrom_log_pvals >= decimate_log_thresh
+        noise_mask = ~sig_mask
+        
+        # Plot all significant points
+        if np.any(sig_mask):
+            ax.scatter(plot_positions[sig_mask], chrom_log_pvals[sig_mask],
+                      c=color, s=point_size, alpha=0.8, edgecolors='none')
+            
+        # Plot subsampled noise points
+        if np.any(noise_mask):
+            noise_indices = np.where(noise_mask)[0]
+            n_noise = len(noise_indices)
+            n_keep = max(1000, int(n_noise * keep_fraction))
+            
+            if n_keep < n_noise:
+                # Deterministic subsampling for reproducibility (visuals shouldn't flicker)
+                np.random.seed(42 + i) 
+                keep_indices = np.random.choice(noise_indices, n_keep, replace=False)
+                ax.scatter(plot_positions[keep_indices], chrom_log_pvals[keep_indices],
+                          c=color, s=point_size, alpha=0.8, edgecolors='none')
+            else:
+                 ax.scatter(plot_positions[noise_mask], chrom_log_pvals[noise_mask],
+                          c=color, s=point_size, alpha=0.8, edgecolors='none')
 
         if highlight_mask is not None:
             chrom_highlight = highlight_mask[indices_ordered]

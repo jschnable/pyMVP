@@ -68,12 +68,28 @@ def MVP_K_VanRaden(M: Union[GenotypeMatrix, np.ndarray],
             Z_batch = genotype[:, start_marker:end_marker].astype(np.float64)
         
         # Center the genotype matrix by subtracting per-marker means (2p)
-        means_batch = np.mean(Z_batch, axis=0)
+        means_batch = np.nanmean(Z_batch, axis=0) # Use nanmean to be safe
+        
+        # Check for NaNs in means (e.g. all missing column)
+        means_batch[np.isnan(means_batch)] = 0.0
+        
         Z_batch -= means_batch[np.newaxis, :]
         
+        # Sanitize Z_batch (handle residual NaNs/Infs)
+        if not np.all(np.isfinite(Z_batch)):
+            if verbose and batch_idx == 0:
+                 print("Warning: Z_batch contains NaNs or Infs. Replacing with 0.")
+            Z_batch[~np.isfinite(Z_batch)] = 0.0
+        
         # Compute cross products: kin += Z_batch @ Z_batch.T
-        # Using numpy's optimized matrix multiplication
-        kin += Z_batch @ Z_batch.T
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                kin += Z_batch @ Z_batch.T
+        except Exception as e:
+            # Fallback for extremely large values?
+            print(f"Error in kinship matmul batch {batch_idx}: {e}")
+            raise
     
     if verbose:
         print("Symmetrizing and normalizing kinship matrix...")

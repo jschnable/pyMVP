@@ -65,7 +65,7 @@ def main():
         significance=args.significance,
         alpha=args.alpha,
         n_eff=args.n_eff,
-        use_effective_tests=args.use_effective_tests,
+        use_effective_tests=args.use_effective_tests or args.compute_effective_tests,
         max_genotype_dosage=args.max_genotype_dosage,
         outputs=outputs
     )
