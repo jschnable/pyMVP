@@ -124,3 +124,8 @@ simple_test/
 *.rpm
 *.tar.gz
 *.zip
+
+# Sorghum data and outputs
+sorghum*/
+sorghum*
+sorghum_data/
