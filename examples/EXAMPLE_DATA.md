@@ -1,4 +1,4 @@
-# Example Data for pyMVP
+# Example Data for PANICLE
 
 This directory contains real sorghum data curated for testing and demonstration purposes.
 
@@ -43,7 +43,7 @@ These three markers are known to be associated with plant height variation and e
 All example scripts in this directory are designed to work with these files:
 
 ```python
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 # Basic GWAS
 pipeline = GWASPipeline(output_dir='./results')
@@ -84,9 +84,9 @@ When analyzing this data with appropriate population structure correction (MLM o
 
 This small dataset allows for:
 - Fast testing (~10-30 seconds per analysis)
-- Demonstration of all pyMVP features
+- Demonstration of all PANICLE features
 - Verification of installation and setup
-- Learning the pyMVP workflow
+- Learning the PANICLE workflow
 
 ## Original Data Source
 
@@ -100,5 +100,5 @@ For the full dataset, see the `sorghum_data/` directory in the parent repository
 ## Citation
 
 If you use this example data in publications, please cite:
-- The pyMVP package (citation TBD)
+- The PANICLE package (citation TBD)
 - Original SbDiv panel and genotyping work (Mangal et al. 2025, in prep)

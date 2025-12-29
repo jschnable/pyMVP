@@ -1,6 +1,6 @@
-# pyMVP API Reference
+# PANICLE API Reference
 
-Complete reference for the pyMVP package.
+Complete reference for the PANICLE package.
 
 ## Table of Contents
 - [GWASPipeline](#gwaspipeline)
@@ -14,7 +14,7 @@ Complete reference for the pyMVP package.
 
 The main high-level interface for running GWAS analyses.
 
-### Class: `pymvp.pipelines.gwas.GWASPipeline`
+### Class: `panicle.pipelines.gwas.GWASPipeline`
 
 ```python
 GWASPipeline(output_dir='./GWAS_results')
@@ -35,7 +35,7 @@ GWASPipeline(output_dir='./GWAS_results')
 
 **Example:**
 ```python
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 pipeline = GWASPipeline(output_dir='./my_results')
 ```
@@ -237,14 +237,14 @@ pipeline.run_analysis(
 
 Low-level association testing functions. These are called internally by `GWASPipeline` but can also be used directly.
 
-### `MVP_GLM()`
+### `PANICLE_GLM()`
 
 General Linear Model association test.
 
 ```python
-from pymvp.association.glm import MVP_GLM
+from panicle.association.glm import PANICLE_GLM
 
-results = MVP_GLM(
+results = PANICLE_GLM(
     phe,           # Phenotype array (n × 2): [ID, value]
     geno,          # Genotype matrix (n × m)
     CV=None,       # Covariates (n × p)
@@ -259,14 +259,14 @@ results = MVP_GLM(
 
 ---
 
-### `MVP_MLM()`
+### `PANICLE_MLM()`
 
 Mixed Linear Model association test.
 
 ```python
-from pymvp.association.mlm import MVP_MLM
+from panicle.association.mlm import PANICLE_MLM
 
-results = MVP_MLM(
+results = PANICLE_MLM(
     phe,              # Phenotype array (n × 2)
     geno,             # Genotype matrix (n × m)
     K,                # Kinship matrix (n × n)
@@ -283,14 +283,14 @@ results = MVP_MLM(
 
 ---
 
-### `MVP_MLM_Hybrid()`
+### `PANICLE_MLM_Hybrid()`
 
 Hybrid MLM: Wald test screening + LRT refinement for top hits.
 
 ```python
-from pymvp.association.hybrid_mlm import MVP_MLM_Hybrid
+from panicle.association.hybrid_mlm import PANICLE_MLM_Hybrid
 
-results = MVP_MLM_Hybrid(
+results = PANICLE_MLM_Hybrid(
     phe,
     geno,
     K,
@@ -307,14 +307,14 @@ results = MVP_MLM_Hybrid(
 
 ---
 
-### `MVP_FarmCPU()`
+### `PANICLE_FarmCPU()`
 
 Fixed and random model Circulating Probability Unification.
 
 ```python
-from pymvp.association.farmcpu import MVP_FarmCPU
+from panicle.association.farmcpu import PANICLE_FarmCPU
 
-results = MVP_FarmCPU(
+results = PANICLE_FarmCPU(
     phe,
     geno,
     map_data,      # Genetic map (SNP, Chr, Pos)
@@ -329,14 +329,14 @@ results = MVP_FarmCPU(
 
 ---
 
-### `MVP_BLINK()`
+### `PANICLE_BLINK()`
 
 Bayesian-information and Linkage-disequilibrium Iteratively Nested Keyway.
 
 ```python
-from pymvp.association.blink import MVP_BLINK
+from panicle.association.blink import PANICLE_BLINK
 
-results = MVP_BLINK(
+results = PANICLE_BLINK(
     phe,
     geno,
     map_data,
@@ -357,7 +357,7 @@ Functions for loading different data file formats.
 ### `load_phenotype_file()`
 
 ```python
-from pymvp.data.loaders import load_phenotype_file
+from panicle.data.loaders import load_phenotype_file
 
 pheno_df = load_phenotype_file(
     filename,
@@ -372,7 +372,7 @@ pheno_df = load_phenotype_file(
 ### `load_genotype_file()`
 
 ```python
-from pymvp.data.loaders import load_genotype_file
+from panicle.data.loaders import load_genotype_file
 
 geno_matrix, individual_ids, geno_map = load_genotype_file(
     filename,
@@ -389,7 +389,7 @@ geno_matrix, individual_ids, geno_map = load_genotype_file(
 ### `load_covariate_file()`
 
 ```python
-from pymvp.data.loaders import load_covariate_file
+from panicle.data.loaders import load_covariate_file
 
 cov_df = load_covariate_file(
     filename,
@@ -407,14 +407,14 @@ cov_df = load_covariate_file(
 ### Population Structure
 
 ```python
-from pymvp.matrix.pca import MVP_PCA
-from pymvp.matrix.kinship import MVP_K_VanRaden
+from panicle.matrix.pca import PANICLE_PCA
+from panicle.matrix.kinship import PANICLE_K_VanRaden
 
 # Compute PCs
-pcs = MVP_PCA(M, pcs_keep=5, verbose=True)
+pcs = PANICLE_PCA(M, pcs_keep=5, verbose=True)
 
 # Compute kinship matrix
-K = MVP_K_VanRaden(M, verbose=True)
+K = PANICLE_K_VanRaden(M, verbose=True)
 ```
 
 ---
@@ -422,7 +422,7 @@ K = MVP_K_VanRaden(M, verbose=True)
 ### Statistical Functions
 
 ```python
-from pymvp.utils.stats import genomic_inflation_factor, calculate_maf_from_genotypes
+from panicle.utils.stats import genomic_inflation_factor, calculate_maf_from_genotypes
 
 # Calculate genomic inflation factor (lambda GC)
 lambda_gc = genomic_inflation_factor(pvalues)
@@ -436,7 +436,7 @@ maf = calculate_maf_from_genotypes(geno_matrix, max_dosage=2.0)
 ### Effective Tests
 
 ```python
-from pymvp.utils.effective_tests import estimate_effective_tests_from_genotype
+from panicle.utils.effective_tests import estimate_effective_tests_from_genotype
 
 eff_info = estimate_effective_tests_from_genotype(
     geno_matrix,
@@ -456,10 +456,10 @@ eff_info = estimate_effective_tests_from_genotype(
 ### Visualization
 
 ```python
-from pymvp.visualization.manhattan import MVP_Report
+from panicle.visualization.manhattan import PANICLE_Report
 
 # Generate Manhattan and QQ plots
-MVP_Report(
+PANICLE_Report(
     results=assoc_results,
     map_data=geno_map,
     output_prefix='my_gwas',
@@ -478,7 +478,7 @@ MVP_Report(
 Named tuple containing GWAS results:
 
 ```python
-from pymvp.utils.data_types import AssociationResults
+from panicle.utils.data_types import AssociationResults
 
 results = AssociationResults(
     effects=effect_array,   # Effect sizes
@@ -496,7 +496,7 @@ print(results.effects)
 Wrapper around genotype data (usually memory-mapped):
 
 ```python
-from pymvp.utils.data_types import GenotypeMatrix
+from panicle.utils.data_types import GenotypeMatrix
 
 geno = GenotypeMatrix(data_array)
 
@@ -515,7 +515,7 @@ subset = geno[0:10, :]  # First 10 individuals, all markers
 ### Workflow 1: Standard GWAS
 
 ```python
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 pipeline = GWASPipeline(output_dir='./results')
 pipeline.load_data('phenos.csv', 'genos.vcf.gz')
@@ -527,16 +527,16 @@ pipeline.run_analysis(traits=['Trait1'], methods=['GLM', 'MLM'])
 ### Workflow 2: Direct Association Testing
 
 ```python
-from pymvp.association.mlm import MVP_MLM
-from pymvp.matrix.kinship import MVP_K_VanRaden
+from panicle.association.mlm import PANICLE_MLM
+from panicle.matrix.kinship import PANICLE_K_VanRaden
 import numpy as np
 
 # Prepare data
 phe = np.column_stack([np.arange(n), phenotype_values])
-K = MVP_K_VanRaden(genotype_matrix)
+K = PANICLE_K_VanRaden(genotype_matrix)
 
 # Run MLM
-results = MVP_MLM(phe, genotype_matrix, K)
+results = PANICLE_MLM(phe, genotype_matrix, K)
 
 # Get significant SNPs
 sig_indices = results.pvalues < 0.05/len(results.pvalues)

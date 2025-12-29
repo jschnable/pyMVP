@@ -87,7 +87,7 @@ harmonized_gec_spec.md
 gwas_analysis_results/
 farmcpu_comparison_results/
 rMVP_FarmCPU_*/
-pyMVP_FarmCPU_*/
+PANICLE_FarmCPU_*/
 *_pvals/
 
 # Generated files and outputs
@@ -100,6 +100,37 @@ pyMVP_FarmCPU_*/
 *.txt
 *.log
 *.out
+!examples/example_phenotypes.csv
+!examples/example_covariates.csv
+!examples/example_genotypes.vcf.gz.panicle.map.csv
+
+# Internal artifacts and reports
+artifacts/
+artifact/
+reports/
+report/
+report_*/
+*_report/
+*_reports/
+*_summary/
+*_summaries/
+*_metrics/
+*_benchmark/
+*_REPORT.md
+*_SUMMARY.md
+*_CHECKLIST.md
+*_ISSUE.md
+*.rpt
+*.report
+*.summary
+*.metrics
+*.stats
+*.benchmark
+internal/
+notes/
+private/
+internal_*.md
+*_internal.md
 
 # Working files and temporary
 *.tmp
@@ -129,3 +160,7 @@ simple_test/
 sorghum*/
 sorghum*
 sorghum_data/
+
+# Analysis outputs
+hybrid_mlm_analysis/
+loco_mlm_analysis/

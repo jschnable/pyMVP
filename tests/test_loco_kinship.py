@@ -1,11 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from pymvp.utils.data_types import GenotypeMatrix
-from pymvp.matrix.kinship import MVP_K_VanRaden
-from pymvp.matrix.kinship_loco import MVP_K_VanRaden_LOCO
-from pymvp.association.mlm import MVP_MLM
-from pymvp.association.mlm_loco import MVP_MLM_LOCO
+from panicle.utils.data_types import GenotypeMatrix
+from panicle.matrix.kinship import PANICLE_K_VanRaden
+from panicle.matrix.kinship_loco import PANICLE_K_VanRaden_LOCO
+from panicle.association.mlm import PANICLE_MLM
+from panicle.association.mlm_loco import PANICLE_MLM_LOCO
 
 
 def _make_test_data(seed: int = 123):
@@ -29,9 +29,9 @@ def test_loco_kinship_matches_naive():
     genotypes, map_df = _make_test_data()
     geno = GenotypeMatrix(genotypes)
 
-    loco = MVP_K_VanRaden_LOCO(geno, map_df, maxLine=7, verbose=False)
+    loco = PANICLE_K_VanRaden_LOCO(geno, map_df, maxLine=7, verbose=False)
 
-    full_ref = MVP_K_VanRaden(geno, maxLine=7, verbose=False).to_numpy()
+    full_ref = PANICLE_K_VanRaden(geno, maxLine=7, verbose=False).to_numpy()
     full_loco = loco.get_full().to_numpy()
     np.testing.assert_allclose(full_loco, full_ref, rtol=1e-8, atol=1e-8)
 
@@ -39,7 +39,7 @@ def test_loco_kinship_matches_naive():
     for chrom in np.unique(chroms):
         keep_mask = chroms != chrom
         geno_subset = genotypes[:, keep_mask]
-        ref = MVP_K_VanRaden(geno_subset, maxLine=7, verbose=False).to_numpy()
+        ref = PANICLE_K_VanRaden(geno_subset, maxLine=7, verbose=False).to_numpy()
         loco_k = loco.get_loco(chrom).to_numpy()
         np.testing.assert_allclose(loco_k, ref, rtol=1e-8, atol=1e-8)
 
@@ -60,9 +60,9 @@ def test_mlm_loco_matches_per_chrom_mlm():
     phe = np.column_stack([np.arange(n_individuals), rng.normal(size=n_individuals)])
 
     geno = GenotypeMatrix(genotypes)
-    loco = MVP_K_VanRaden_LOCO(geno, map_df, maxLine=6, verbose=False)
+    loco = PANICLE_K_VanRaden_LOCO(geno, map_df, maxLine=6, verbose=False)
 
-    loco_results = MVP_MLM_LOCO(
+    loco_results = PANICLE_MLM_LOCO(
         phe=phe,
         geno=geno,
         map_data=map_df,
@@ -79,7 +79,7 @@ def test_mlm_loco_matches_per_chrom_mlm():
     for chrom in loco.chromosomes:
         indices = np.where(chroms == chrom)[0]
         geno_subset = genotypes[:, indices]
-        res = MVP_MLM(
+        res = PANICLE_MLM(
             phe=phe,
             geno=geno_subset,
             K=loco.get_loco(chrom),

@@ -8,8 +8,8 @@ from typing import Optional, Union, List, Tuple, Dict, Sequence
 from scipy import stats
 from ..utils.data_types import GenotypeMatrix, GenotypeMap, AssociationResults
 from ..utils.perf import warn_if_potential_single_thread_blas
-from .glm import MVP_GLM
-from .mlm import MVP_MLM
+from .glm import PANICLE_GLM
+from .mlm import PANICLE_MLM
 import warnings
 
 # rMVP preprocessing replaces missing genotypes (-9/NA) with the heterozygote dosage (1).
@@ -85,7 +85,7 @@ class FarmCPUTimer:
         
         print("-" * 60)
 
-def MVP_FarmCPU(phe: np.ndarray,
+def PANICLE_FarmCPU(phe: np.ndarray,
                geno: Union[GenotypeMatrix, np.ndarray],
                map_data: GenotypeMap,
                CV: Optional[np.ndarray] = None,

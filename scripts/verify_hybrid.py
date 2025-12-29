@@ -2,10 +2,10 @@
 import numpy as np
 import pandas as pd
 import time
-from pymvp.association.mlm_loco import MVP_MLM_LOCO
-from pymvp.association.hybrid_mlm import MVP_MLM_Hybrid
-from pymvp.matrix.kinship import MVP_K_VanRaden
-from pymvp.utils.data_types import GenotypeMatrix, KinshipMatrix
+from panicle.association.mlm_loco import MVP_MLM_LOCO
+from panicle.association.hybrid_mlm import MVP_MLM_Hybrid
+from panicle.matrix.kinship import MVP_K_VanRaden
+from panicle.utils.data_types import GenotypeMatrix, KinshipMatrix
 
 def test_hybrid_mlm():
     print("Generating synthetic data...")

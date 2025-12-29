@@ -9,17 +9,17 @@ from pathlib import Path
 import warnings
 
 from ..utils.data_types import Phenotype, GenotypeMatrix, GenotypeMap, KinshipMatrix, AssociationResults
-from ..association.glm import MVP_GLM
-from ..association.mlm import MVP_MLM
-from ..association.mlm_loco import MVP_MLM_LOCO
-from ..association.farmcpu import MVP_FarmCPU
-from ..association.blink import MVP_BLINK
-from ..association.farmcpu_resampling import MVP_FarmCPUResampling
-from ..matrix.kinship import MVP_K_VanRaden
-from ..matrix.pca import MVP_PCA
-from ..visualization.manhattan import MVP_Report
+from ..association.glm import PANICLE_GLM
+from ..association.mlm import PANICLE_MLM
+from ..association.mlm_loco import PANICLE_MLM_LOCO
+from ..association.farmcpu import PANICLE_FarmCPU
+from ..association.blink import PANICLE_BLINK
+from ..association.farmcpu_resampling import PANICLE_FarmCPUResampling
+from ..matrix.kinship import PANICLE_K_VanRaden
+from ..matrix.pca import PANICLE_PCA
+from ..visualization.manhattan import PANICLE_Report
 
-def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
+def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
         geno: Union[str, Path, np.ndarray, GenotypeMatrix],
         map_data: Union[str, Path, pd.DataFrame, GenotypeMap],
         K: Optional[Union[KinshipMatrix, np.ndarray]] = None,
@@ -31,7 +31,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
         priority: str = "speed",
         threshold: float = 5e-8,
         file_output: bool = True,
-        output_prefix: str = "MVP",
+        output_prefix: str = "PANICLE",
         verbose: bool = True,
         **kwargs) -> Dict[str, Any]:
     """Primary GWAS analysis function
@@ -67,7 +67,8 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
     
     if verbose:
         print("=" * 60)
-        print("pyMVP: Memory-efficient, Visualization-enhanced GWAS")
+        print("PANICLE: Python Algorithms for Nucleotide-phenotype")
+        print("         Inference and Chromosome-wide Locus Evaluation")
         print("=" * 60)
     
     # Initialize results structure
@@ -160,7 +161,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 print("\n[Phase 2] Computing kinship matrix...")
             
             kinship_start = time.time()
-            kinship_matrix = MVP_K_VanRaden(
+            kinship_matrix = PANICLE_K_VanRaden(
                 genotype, 
                 maxLine=maxLine,
                 verbose=verbose
@@ -225,7 +226,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 print("\nRunning GLM analysis...")
             
             glm_start = time.time()
-            glm_results = MVP_GLM(
+            glm_results = PANICLE_GLM(
                 phe=phenotype_array,
                 geno=genotype,
                 CV=CV,
@@ -256,7 +257,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
             mlm_start = time.time()
             if K is not None and verbose:
                 warnings.warn("Provided kinship matrix is ignored; MLM now uses LOCO kinship.")
-            mlm_results = MVP_MLM_LOCO(
+            mlm_results = PANICLE_MLM_LOCO(
                 phe=phenotype_array,
                 geno=genotype,
                 map_data=genetic_map,
@@ -287,7 +288,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 print("\nRunning FarmCPU analysis...")
 
             farmcpu_start = time.time()
-            farmcpu_results = MVP_FarmCPU(
+            farmcpu_results = PANICLE_FarmCPU(
                 phe=phenotype_array,
                 geno=genotype,
                 map_data=genetic_map,
@@ -318,7 +319,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 print("\nRunning BLINK analysis...")
 
             blink_start = time.time()
-            blink_results = MVP_BLINK(
+            blink_results = PANICLE_BLINK(
                 phe=phenotype_array,
                 geno=genotype,
                 map_data=genetic_map,
@@ -362,7 +363,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                     "p-values above the QTN threshold cannot act as pseudo QTNs in "
                     "later FarmCPU iterations."
                 )
-            resampling_results = MVP_FarmCPUResampling(
+            resampling_results = PANICLE_FarmCPUResampling(
                 phe=phenotype_array,
                 geno=genotype,
                 map_data=genetic_map,
@@ -392,7 +393,7 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
             print(f"\n[Phase 4] Generating visualization report...")
         
         viz_start = time.time()
-        visualization_report = MVP_Report(
+        visualization_report = PANICLE_Report(
             results=analysis_results['results'],
             map_data=genetic_map,
             threshold=threshold,
@@ -493,7 +494,7 @@ def save_results_to_files(results: Dict[str, Any],
         # Save summary statistics
         summary_file = f"{output_prefix}_summary.txt"
         with open(summary_file, 'w') as f:
-            f.write("pyMVP GWAS Analysis Summary\n")
+            f.write("PANICLE GWAS Analysis Summary\n")
             f.write("=" * 40 + "\n")
             f.write(f"Methods run: {', '.join(results['summary']['methods_run'])}\n")
             f.write(f"Total individuals: {results['summary']['total_individuals']}\n")

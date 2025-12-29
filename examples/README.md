@@ -1,6 +1,6 @@
-# pyMVP Examples
+# PANICLE Examples
 
-This directory contains example scripts demonstrating different pyMVP workflows.
+This directory contains example scripts demonstrating different PANICLE workflows.
 
 ## Overview
 
@@ -28,8 +28,8 @@ All examples use these file names by default. You can also use your own data or 
 ### Running an Example
 
 ```bash
-# Make sure pyMVP is installed
-cd /path/to/pyMVP
+# Make sure PANICLE is installed
+cd /path/to/PANICLE
 pip install -e .
 
 # Run an example

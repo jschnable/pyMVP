@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ..utils.data_types import GenotypeMap, GenotypeMatrix
-from .farmcpu import MVP_FarmCPU
+from .farmcpu import PANICLE_FarmCPU
 
 
 @dataclass
@@ -266,7 +266,7 @@ def _build_non_cluster_entries(
     return entries
 
 
-def MVP_FarmCPUResampling(
+def PANICLE_FarmCPUResampling(
     phe: np.ndarray,
     geno: Union[GenotypeMatrix, np.ndarray],
     map_data: GenotypeMap,

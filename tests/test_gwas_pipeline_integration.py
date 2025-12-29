@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 
 @pytest.fixture

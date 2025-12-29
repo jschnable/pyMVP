@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymvp.data.loaders import load_genotype_file
-from pymvp.utils.data_types import GenotypeMap, GenotypeMatrix
-from pymvp.utils.effective_tests import estimate_effective_tests_from_genotype
+from panicle.data.loaders import load_genotype_file
+from panicle.utils.data_types import GenotypeMap, GenotypeMatrix
+from panicle.utils.effective_tests import estimate_effective_tests_from_genotype
 
 
 def _load_run_gwas_module() -> ModuleType:

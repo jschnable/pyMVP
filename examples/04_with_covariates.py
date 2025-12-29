@@ -17,7 +17,7 @@ External covariates can help control for:
 - Other measured confounders
 """
 
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 def main():
     print("=" * 70)

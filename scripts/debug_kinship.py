@@ -5,9 +5,9 @@ import pandas as pd
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pymvp.pipelines.gwas import GWASPipeline
-from pymvp.matrix.kinship import MVP_K_VanRaden
-from pymvp.utils.data_types import GenotypeMatrix
+from panicle.pipelines.gwas import GWASPipeline
+from panicle.matrix.kinship import MVP_K_VanRaden
+from panicle.utils.data_types import GenotypeMatrix
 
 # Config
 VCF_PATH = "sorghum_data/SbDiv_811_maf0.05_het0.10.vcf.gz"
@@ -112,7 +112,7 @@ def main():
     # 7. Run MLM fully
     print("\nRunning Full MLM to Reproduce Warnings...")
     y_sub, g_sub, cov_sub, k_sub = pipeline._prepare_trait_data(TRAIT)
-    from pymvp.association.mlm_loco import MVP_MLM_LOCO
+    from panicle.association.mlm_loco import MVP_MLM_LOCO
     
     # Calculate EigenK manually if needed or let MLM do it
     # MLM calculates it if not passed.

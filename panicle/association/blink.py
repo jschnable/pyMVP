@@ -19,7 +19,7 @@ from scipy import stats
 
 from ..utils.data_types import AssociationResults, GenotypeMap, GenotypeMatrix
 from ..utils.stats import calculate_maf_from_genotypes
-from .glm import MVP_GLM
+from .glm import PANICLE_GLM
 from .farmcpu import remove_qtns_by_ld, _get_covariate_statistics  # type: ignore
 
 
@@ -40,7 +40,7 @@ class BlinkIterationDetails:
     selected_qtns: Tuple[int, ...]
 
 
-def MVP_BLINK(
+def PANICLE_BLINK(
     phe: np.ndarray,
     geno: Union[GenotypeMatrix, np.ndarray],
     map_data: GenotypeMap,
@@ -427,9 +427,9 @@ def MVP_BLINK(
         snp_map=map_data,
     )
 
-    MVP_BLINK.last_iteration_details = iteration_details
-    MVP_BLINK.last_selected_qtns = selected_qtns_last
-    MVP_BLINK.last_iteration_qtns = iteration_qtn_log
+    PANICLE_BLINK.last_iteration_details = iteration_details
+    PANICLE_BLINK.last_selected_qtns = selected_qtns_last
+    PANICLE_BLINK.last_iteration_qtns = iteration_qtn_log
 
     return association
 
@@ -1238,6 +1238,6 @@ def _jaccard_similarity(a: Sequence[int], b: Sequence[int]) -> float:
 
 
 # Attributes exposed for debugging/test harnesses
-MVP_BLINK.last_iteration_details = []  # type: ignore[attr-defined]
-MVP_BLINK.last_selected_qtns: List[int] = []  # type: ignore[attr-defined]
-MVP_BLINK.last_iteration_qtns = []  # type: ignore[attr-defined]
+PANICLE_BLINK.last_iteration_details = []  # type: ignore[attr-defined]
+PANICLE_BLINK.last_selected_qtns: List[int] = []  # type: ignore[attr-defined]
+PANICLE_BLINK.last_iteration_qtns = []  # type: ignore[attr-defined]

@@ -2,9 +2,9 @@
 import pytest
 import numpy as np
 from scipy import stats
-from pymvp.association.glm import MVP_GLM
+from panicle.association.glm import PANICLE_GLM
 import pandas as pd
-from pymvp.association.mlm_loco import MVP_MLM_LOCO
+from panicle.association.mlm_loco import PANICLE_MLM_LOCO
 
 def test_glm_statistical_correctness():
     """Verify GLM p-values against standard scipy.stats regression"""
@@ -20,7 +20,7 @@ def test_glm_statistical_correctness():
     geno = np.random.randint(0, 3, size=(n, n_markers)).astype(float)
     
     # Run MVP GLM
-    res = MVP_GLM(phe, geno, cpu=1, verbose=False)
+    res = PANICLE_GLM(phe, geno, cpu=1, verbose=False)
     
     # Check each marker manually
     for j in range(n_markers):
@@ -51,7 +51,7 @@ def test_glm_covariates_correctness():
     
     geno = np.random.randint(0, 3, size=(n, n_markers))
     
-    res = MVP_GLM(phe, geno, CV=CV, verbose=False)
+    res = PANICLE_GLM(phe, geno, CV=CV, verbose=False)
     
     # Validation using statsmodels (OLS)
     import statsmodels.api as sm
@@ -83,7 +83,7 @@ def test_mlm_returns_reasonable_values():
         'POS': np.arange(m) + 1
     })
 
-    res = MVP_MLM_LOCO(phe, geno, map_data=map_df, verbose=False)
+    res = PANICLE_MLM_LOCO(phe, geno, map_data=map_df, verbose=False)
     
     assert len(res.pvalues) == m
     assert np.all(res.pvalues >= 0) and np.all(res.pvalues <= 1)

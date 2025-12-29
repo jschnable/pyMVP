@@ -16,12 +16,12 @@ from ..utils.data_types import AssociationResults, GenotypeMap
 from ..association.farmcpu_resampling import FarmCPUResamplingResults
 from ..utils.stats import genomic_inflation_factor
 
-def MVP_Report(results: Union[AssociationResults, Dict],
+def PANICLE_Report(results: Union[AssociationResults, Dict],
                map_data: Optional[GenotypeMap] = None,
                threshold: float = 5e-8,
                suggestive_threshold: float = 1e-5,
                plot_types: List[str] = ["manhattan", "qq"],
-               output_prefix: str = "MVP_results",
+               output_prefix: str = "PANICLE_results",
                dpi: int = 300,
                figsize: Tuple[int, int] = (8, 4),
                colors: Optional[List[str]] = None,

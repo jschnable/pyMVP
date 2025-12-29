@@ -7,7 +7,7 @@ from typing import Optional, Union, Tuple
 from ..utils.data_types import GenotypeMatrix, KinshipMatrix
 import warnings
 
-def MVP_PCA(M: Optional[Union[GenotypeMatrix, np.ndarray]] = None,
+def PANICLE_PCA(M: Optional[Union[GenotypeMatrix, np.ndarray]] = None,
            K: Optional[Union[KinshipMatrix, np.ndarray]] = None, 
            pcs_keep: int = 5,
            maxLine: int = 5000,
@@ -37,13 +37,13 @@ def MVP_PCA(M: Optional[Union[GenotypeMatrix, np.ndarray]] = None,
     
     if K is not None:
         # PCA on kinship matrix (relationship-based PCA)
-        return MVP_PCA_kinship(K, pcs_keep, verbose)
+        return PANICLE_PCA_kinship(K, pcs_keep, verbose)
     else:
         # PCA on genotype matrix (marker-based PCA)
-        return MVP_PCA_genotype(M, pcs_keep, maxLine, verbose)
+        return PANICLE_PCA_genotype(M, pcs_keep, maxLine, verbose)
 
 
-def MVP_PCA_kinship(K: Union[KinshipMatrix, np.ndarray],
+def PANICLE_PCA_kinship(K: Union[KinshipMatrix, np.ndarray],
                    pcs_keep: int = 5,
                    verbose: bool = True) -> np.ndarray:
     """PCA on kinship matrix using eigendecomposition
@@ -95,7 +95,7 @@ def MVP_PCA_kinship(K: Union[KinshipMatrix, np.ndarray],
         raise ValueError(f"Failed to compute eigendecomposition: {e}")
 
 
-def MVP_PCA_genotype(M: Union[GenotypeMatrix, np.ndarray],
+def PANICLE_PCA_genotype(M: Union[GenotypeMatrix, np.ndarray],
                     pcs_keep: int = 5, 
                     maxLine: int = 5000,
                     verbose: bool = True) -> np.ndarray:
@@ -196,7 +196,7 @@ def MVP_PCA_genotype(M: Union[GenotypeMatrix, np.ndarray],
         raise ValueError(f"Failed to compute eigendecomposition: {e}")
 
 
-def MVP_PCA_SVD(M: Union[GenotypeMatrix, np.ndarray],
+def PANICLE_PCA_SVD(M: Union[GenotypeMatrix, np.ndarray],
                 pcs_keep: int = 5,
                 center: bool = True,
                 verbose: bool = True) -> Tuple[np.ndarray, np.ndarray]:

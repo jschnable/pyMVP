@@ -1,6 +1,6 @@
-# pyMVP Documentation
+# PANICLE Documentation
 
-Welcome to the pyMVP documentation! This guide will help you perform genome-wide association studies (GWAS) with pyMVP.
+Welcome to the PANICLE documentation! This guide will help you perform genome-wide association studies (GWAS) with PANICLE.
 
 ## Documentation Index
 
@@ -49,14 +49,14 @@ Welcome to the pyMVP documentation! This guide will help you perform genome-wide
 
 ### Installation
 ```bash
-git clone https://github.com/jschnable/pyMVP.git
-cd pyMVP
+git clone https://github.com/jschnable/PANICLE.git
+cd PANICLE
 pip install -e .
 ```
 
 ### Minimal Example
 ```python
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 pipeline = GWASPipeline(output_dir='./results')
 pipeline.load_data('phenos.csv', 'genos.vcf.gz')
@@ -168,10 +168,10 @@ See [Output Files](output_files.md) for detailed format specifications.
 
 ## Citation
 
-If you use pyMVP in your research, please cite:
+If you use PANICLE in your research, please cite:
 
 ```
-pyMVP: A Python package for efficient multivariate GWAS analysis
+PANICLE: A Python package for efficient multivariate GWAS analysis
 [Full citation to be added]
 ```
 

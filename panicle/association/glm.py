@@ -12,9 +12,9 @@ from typing import Optional, Union
 import numpy as np
 
 from ..utils.data_types import GenotypeMatrix, AssociationResults
-from .glm_fwl_qr import MVP_GLM_ultrafast
+from .glm_fwl_qr import PANICLE_GLM_ultrafast
 
-def MVP_GLM(phe: np.ndarray,
+def PANICLE_GLM(phe: np.ndarray,
            geno: Union[GenotypeMatrix, np.ndarray],
            CV: Optional[np.ndarray] = None,
            maxLine: int = 5000,
@@ -41,7 +41,7 @@ def MVP_GLM(phe: np.ndarray,
     Returns:
         AssociationResults object with effects, SEs, and p-values.
     """
-    return MVP_GLM_ultrafast(
+    return PANICLE_GLM_ultrafast(
         phe=phe,
         geno=geno,
         CV=CV,

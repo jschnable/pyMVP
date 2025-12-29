@@ -4,7 +4,7 @@ from typing import Tuple
 
 import pytest
 
-from pymvp.data.load_genotype_vcf import (
+from panicle.data.load_genotype_vcf import (
     MISSING,
     _code_dosage_biallelic,
     _code_dosage_split,

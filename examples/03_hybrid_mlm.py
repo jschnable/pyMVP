@@ -17,7 +17,7 @@ Use when:
 - Avoiding false positives is critical
 """
 
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 import pandas as pd
 import numpy as np
 import time

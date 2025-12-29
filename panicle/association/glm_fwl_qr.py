@@ -28,7 +28,7 @@ from typing import Optional, Union, Tuple
 import numpy as np
 from scipy import stats
 
-from pymvp.utils.data_types import GenotypeMatrix, AssociationResults
+from panicle.utils.data_types import GenotypeMatrix, AssociationResults
 
 
 def _impute_numpy_batch_major_allele(batch: np.ndarray,
@@ -86,7 +86,7 @@ def _compute_qr(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     return Q, R
 
 
-def MVP_GLM_ultrafast(phe: np.ndarray,
+def PANICLE_GLM_ultrafast(phe: np.ndarray,
                       geno: Union[GenotypeMatrix, np.ndarray],
                       CV: Optional[np.ndarray] = None,
                       maxLine: int = 5000,

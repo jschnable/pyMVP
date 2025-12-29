@@ -5,12 +5,12 @@ import time
 from typing import Optional, Union, Dict
 
 from ..utils.data_types import GenotypeMatrix, AssociationResults
-from ..matrix.kinship_loco import MVP_K_VanRaden_LOCO, LocoKinship, _extract_chromosomes
+from ..matrix.kinship_loco import PANICLE_K_VanRaden_LOCO, LocoKinship, _extract_chromosomes
 from .mlm import estimate_variance_components_brent, _calculate_neg_ml_likelihood
-from .mlm_loco import MVP_MLM_LOCO
+from .mlm_loco import PANICLE_MLM_LOCO
 from .lrt import fit_marker_lrt
 
-def MVP_MLM_Hybrid(phe: np.ndarray,
+def PANICLE_MLM_Hybrid(phe: np.ndarray,
                    geno: Union[GenotypeMatrix, np.ndarray],
                    map_data,
                    loco_kinship: Optional[LocoKinship] = None,
@@ -80,7 +80,7 @@ def MVP_MLM_Hybrid(phe: np.ndarray,
         X = np.ones((n_individuals, 1))
 
     if loco_kinship is None:
-        loco_kinship = MVP_K_VanRaden_LOCO(geno, map_data, maxLine=maxLine, verbose=verbose)
+        loco_kinship = PANICLE_K_VanRaden_LOCO(geno, map_data, maxLine=maxLine, verbose=verbose)
 
     if isinstance(geno, GenotypeMatrix):
         n_markers = geno.n_markers
@@ -96,7 +96,7 @@ def MVP_MLM_Hybrid(phe: np.ndarray,
         print("\n--- Phase 1: Fast Wald Screening ---")
         
     # Run LOCO MLM
-    wald_results = MVP_MLM_LOCO(
+    wald_results = PANICLE_MLM_LOCO(
         phe=phe,
         geno=geno,
         map_data=map_data,
@@ -205,22 +205,18 @@ def MVP_MLM_Hybrid(phe: np.ndarray,
             null_model["null_neg_loglik"]
         )
         
-        # Update P-value
-        final_pvalues[marker_idx] = lrt_p
-        final_effects[marker_idx] = lrt_beta
-        final_se[marker_idx] = lrt_se
-        
-        # Note: We technically should also update Effect and SE, 
-        # but LRT primarily gives a P-value. 
-        # To get beta/SE from LRT model, we'd need to solve the GLS at h2_alt.
-        # For now, we update P-value as that's the critical metric.
+        # Update results if the LRT model is numerically stable
+        if np.isfinite(lrt_p) and np.isfinite(lrt_beta) and np.isfinite(lrt_se):
+            final_pvalues[marker_idx] = lrt_p
+            final_effects[marker_idx] = lrt_beta
+            final_se[marker_idx] = lrt_se
         
     duration = time.time() - start_time
     if verbose:
         print(f"\nRefinement complete in {duration:.2f}s ({duration/max(1,n_candidates):.3f}s/marker)")
         
     # Return updated results
-    # We reuse effects/SE from Wald (approximation), but update P-values (exact)
+    # Effects/SE are refined only for candidates with stable LRT fits.
     return AssociationResults(
         final_effects,
         final_se,

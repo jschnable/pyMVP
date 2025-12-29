@@ -103,8 +103,16 @@ def fit_marker_lrt(y_transformed: np.ndarray,
         XViX_inv = np.linalg.pinv(XViX)
     beta_hat_vec = XViX_inv @ (ViX.T @ y_transformed)
     beta_marker = float(beta_hat_vec[-1])
-    # SE from covariance matrix diag
-    cov_beta = XViX_inv
+    # SE from covariance matrix diag, scaled by ML variance estimate
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        Viy = V0bi * y_transformed
+        P0y = Viy - ViX @ beta_hat_vec
+    yP0y = float(np.dot(P0y, y_transformed))
+    df = len(y_transformed) - X_alt.shape[1]
+    v_base = yP0y / max(1, df)
+    if not np.isfinite(v_base) or v_base < 0:
+        return float(lrt_stat), float(p_value), beta_marker, float('inf')
+    cov_beta = XViX_inv * v_base
     se_marker = float(np.sqrt(max(cov_beta[-1, -1], 0.0)))
     
     return float(lrt_stat), float(p_value), beta_marker, se_marker

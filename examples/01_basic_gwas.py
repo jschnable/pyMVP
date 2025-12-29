@@ -10,7 +10,7 @@ Prerequisites:
 - genotypes.vcf.gz: VCF file with genetic variants
 """
 
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 def main():
     print("=" * 70)

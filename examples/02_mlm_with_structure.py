@@ -15,7 +15,7 @@ Prerequisites:
 - genotypes.vcf.gz
 """
 
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 def main():
     print("=" * 70)

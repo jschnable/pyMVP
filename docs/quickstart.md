@@ -1,13 +1,13 @@
-# pyMVP Quick Start Guide
+# PANICLE Quick Start Guide
 
-This guide will get you up and running with pyMVP for genome-wide association studies (GWAS).
+This guide will get you up and running with PANICLE for genome-wide association studies (GWAS).
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/jschnable/pyMVP.git
-cd pyMVP
+git clone https://github.com/jschnable/PANICLE.git
+cd PANICLE
 
 # Install in development mode
 pip install -e .
@@ -18,7 +18,7 @@ pip install -e .
 Here's a minimal example to run a GWAS analysis:
 
 ```python
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 # 1. Initialize the pipeline
 pipeline = GWASPipeline(output_dir='./my_gwas_results')

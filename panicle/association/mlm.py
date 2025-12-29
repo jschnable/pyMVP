@@ -208,7 +208,7 @@ def process_batch_parallel(batch_data):
     return start_marker, effects, std_errors, pvalues
 
 
-def MVP_MLM(phe: np.ndarray,
+def PANICLE_MLM(phe: np.ndarray,
            geno: Union[GenotypeMatrix, np.ndarray],
            K: Optional[Union[KinshipMatrix, np.ndarray]] = None,
            eigenK: Optional[Dict] = None,

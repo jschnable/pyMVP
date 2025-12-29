@@ -115,7 +115,7 @@ class LocoKinship:
         return eigen
 
 
-def MVP_K_VanRaden_LOCO(M: Union[GenotypeMatrix, np.ndarray],
+def PANICLE_K_VanRaden_LOCO(M: Union[GenotypeMatrix, np.ndarray],
                         map_data: Union[GenotypeMap, pd.DataFrame, np.ndarray, List],
                         maxLine: int = 5000,
                         verbose: bool = True) -> LocoKinship:

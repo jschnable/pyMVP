@@ -8,8 +8,8 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pymvp.cli.utils import parse_args
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.cli.utils import parse_args
+from panicle.pipelines.gwas import GWASPipeline
 
 OUTPUT_CHOICES = (
     'all_marker_pvalues',

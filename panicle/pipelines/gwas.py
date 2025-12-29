@@ -26,25 +26,25 @@ from ..utils.stats import (
 from ..utils.data_types import GenotypeMatrix, AssociationResults
 from ..utils.effective_tests import estimate_effective_tests_from_genotype
 from ..association.farmcpu_resampling import (
-    MVP_FarmCPUResampling,
+    PANICLE_FarmCPUResampling,
     FarmCPUResamplingResults,
 )
-from ..association.glm import MVP_GLM
-from ..association.mlm import MVP_MLM
-from ..association.mlm_loco import MVP_MLM_LOCO
-from ..association.farmcpu import MVP_FarmCPU
-from ..association.blink import MVP_BLINK
-from ..matrix.pca import MVP_PCA
-from ..matrix.kinship import MVP_K_VanRaden
-from ..visualization.manhattan import MVP_Report
-from ..association.hybrid_mlm import MVP_MLM_Hybrid
+from ..association.glm import PANICLE_GLM
+from ..association.mlm import PANICLE_MLM
+from ..association.mlm_loco import PANICLE_MLM_LOCO
+from ..association.farmcpu import PANICLE_FarmCPU
+from ..association.blink import PANICLE_BLINK
+from ..matrix.pca import PANICLE_PCA
+from ..matrix.kinship import PANICLE_K_VanRaden
+from ..visualization.manhattan import PANICLE_Report
+from ..association.hybrid_mlm import PANICLE_MLM_Hybrid
 
 # Helper function for parallel execution
 def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, hybrid_params, max_iterations, base_threshold, n_markers):
     """Worker function to run a single GWAS method in a separate process."""
     try:
         if method == 'GLM':
-            res = MVP_GLM(phe=y_sub, geno=g_sub, CV=cov_sub, verbose=False)
+            res = PANICLE_GLM(phe=y_sub, geno=g_sub, CV=cov_sub, verbose=False)
             lambda_gc = genomic_inflation_factor(res.pvalues)
             return ('GLM', res, lambda_gc, None)
 
@@ -52,9 +52,9 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             if map_data is None:
                 if k_sub is None:
                     return ('MLM', None, None, "Kinship matrix missing")
-                res = MVP_MLM(phe=y_sub, geno=g_sub, CV=cov_sub, K=k_sub, verbose=False)
+                res = PANICLE_MLM(phe=y_sub, geno=g_sub, CV=cov_sub, K=k_sub, verbose=False)
             else:
-                res = MVP_MLM_LOCO(
+                res = PANICLE_MLM_LOCO(
                     phe=y_sub,
                     geno=g_sub,
                     map_data=map_data,
@@ -66,7 +66,7 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
 
         elif method == 'FARMCPU':
             fc_p = fc_params.get('p_threshold', base_threshold if base_threshold else 0.05 / n_markers)
-            res = MVP_FarmCPU(
+            res = PANICLE_FarmCPU(
                 phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
                 maxLoop=max_iterations, verbose=False
             )
@@ -74,7 +74,7 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             return ('FarmCPU', res, lambda_gc, None)
 
         elif method == 'BLINK':
-            res = MVP_BLINK(
+            res = PANICLE_BLINK(
                 phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
                 maxLoop=max_iterations, verbose=False
             )
@@ -88,8 +88,8 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             # We skip this in parallel worker for now or pass trait_name?
             # It's better to keep resampling sequential if complex, or pass trait_name.
             # Let's support it if trivial.
-            # MVP_FarmCPUResampling requires trait_name. 
-            # MVP_FarmCPUResampling requires trait_name. 
+            # PANICLE_FarmCPUResampling requires trait_name. 
+            # PANICLE_FarmCPUResampling requires trait_name. 
             pass
 
         elif method == 'HybridMLM':
@@ -97,7 +97,7 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
                 return ('HybridMLM', None, None, "Genotype map missing")
 
             h_params = hybrid_params or {}
-            res = MVP_MLM_Hybrid(
+            res = PANICLE_MLM_Hybrid(
                 phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
                 screen_threshold=h_params.get('screen_threshold', 1e-4),
                 maxLine=h_params.get('max_line', 1000),
@@ -147,7 +147,7 @@ class GWASPipeline:
         effective_tests_info (dict): Effective number of independent tests (if computed)
 
     Example:
-        >>> from pymvp.pipelines.gwas import GWASPipeline
+        >>> from panicle.pipelines.gwas import GWASPipeline
         >>>
         >>> # Initialize pipeline
         >>> pipeline = GWASPipeline(output_dir='./my_gwas')
@@ -508,7 +508,7 @@ class GWASPipeline:
         if n_pcs > 0:
             try:
                 self.log(f"   Calculating {n_pcs} PCs...")
-                self.pcs = MVP_PCA(M=self.genotype_matrix, pcs_keep=n_pcs, verbose=False)
+                self.pcs = PANICLE_PCA(M=self.genotype_matrix, pcs_keep=n_pcs, verbose=False)
                 self.pc_names = [f'PC{i + 1}' for i in range(self.pcs.shape[1])]
             except Exception as e:
                 raise ValueError(f"Error calculating PCs: {e}")
@@ -521,7 +521,7 @@ class GWASPipeline:
         if calculate_kinship:
             try:
                 self.log("   Calculating Kinship matrix...")
-                self.kinship = MVP_K_VanRaden(self.genotype_matrix, verbose=False)
+                self.kinship = PANICLE_K_VanRaden(self.genotype_matrix, verbose=False)
                 self.log(f"   Kinship shape: {self.kinship.shape}")
             except Exception as e:
                 raise ValueError(f"Error calculating kinship: {e}")
@@ -650,7 +650,7 @@ class GWASPipeline:
                  try: 
                      self.log("   Running FarmCPU Resampling (Sequential)...")
                      runs = fc_params.get('resampling_runs', 100)
-                     res = MVP_FarmCPUResampling(
+                     res = PANICLE_FarmCPUResampling(
                          phe=y_sub, geno=g_sub, map_data=self.geno_map, CV=cov_sub,
                          runs=runs,
                          trait_name=trait_name,
@@ -716,7 +716,7 @@ class GWASPipeline:
         y_final = np.column_stack([
              np.arange(mask.sum()), # Dummy IDs for internal solvers usually ok, or use real strings?
              # Solvers expect [ID, Val] usually. 
-             # MVP_GLM expects n x 2.
+             # PANICLE_GLM expects n x 2.
              y_vals[mask]
         ])
         

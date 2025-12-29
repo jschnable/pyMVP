@@ -1,14 +1,21 @@
 # Changelog
 
-All notable changes to pyMVP will be documented in this file.
+All notable changes to PANICLE will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] - 2025-01-XX (Unreleased)
 
+### Changed
+- **Package rebranded from pyMVP to PANICLE** (Python Algorithms for Nucleotide-phenotype Inference and Chromosome-wide Locus Evaluation)
+- All `MVP_*` functions renamed to `PANICLE_*` (e.g., `MVP_GLM` → `PANICLE_GLM`)
+- Package name changed from `pymvp` to `panicle` in imports
+- Cache file extensions changed from `.pymvp.*` to `.panicle.*`
+- CLI command renamed from `pymvp-cache-genotype` to `panicle-cache-genotype`
+
 ### Added
-- Initial public release of pyMVP
+- Initial public release of PANICLE
 - Core GWAS methods: GLM, MLM, FarmCPU, BLINK
 - **Hybrid MLM method** combining Wald test screening with LRT refinement
   - 2-3% runtime overhead vs standard MLM
@@ -29,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - QQ plots with genomic inflation factor
   - Results comparison plots
 - Command-line interface via `scripts/run_GWAS.py`
-- Binary genotype caching tool: `pymvp-cache-genotype`
+- Binary genotype caching tool: `panicle-cache-genotype`
 
 ### Documentation
 - Complete API reference for all classes and functions
@@ -50,4 +57,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Core: numpy, scipy, pandas, h5py, tables, statsmodels, scikit-learn, matplotlib, seaborn, tqdm, numba
 - Optional: cyvcf2 (VCF support), bed-reader (PLINK support)
 
-[0.1.0]: https://github.com/jschnable/pyMVP/releases/tag/v0.1.0
+[0.1.0]: https://github.com/jschnable/PANICLE/releases/tag/v0.1.0

@@ -9,8 +9,8 @@ from typing import Optional, Union
 import numpy as np
 
 from ..utils.data_types import GenotypeMatrix, AssociationResults
-from ..matrix.kinship_loco import MVP_K_VanRaden_LOCO, LocoKinship, _extract_chromosomes, _group_markers_by_chrom
-from .mlm import MVP_MLM
+from ..matrix.kinship_loco import PANICLE_K_VanRaden_LOCO, LocoKinship, _extract_chromosomes, _group_markers_by_chrom
+from .mlm import PANICLE_MLM
 
 
 def _subset_genotypes(geno: Union[GenotypeMatrix, np.ndarray],
@@ -21,7 +21,7 @@ def _subset_genotypes(geno: Union[GenotypeMatrix, np.ndarray],
     return geno[:, indices]
 
 
-def MVP_MLM_LOCO(phe: np.ndarray,
+def PANICLE_MLM_LOCO(phe: np.ndarray,
                  geno: Union[GenotypeMatrix, np.ndarray],
                  map_data,
                  loco_kinship: Optional[LocoKinship] = None,
@@ -42,7 +42,7 @@ def MVP_MLM_LOCO(phe: np.ndarray,
     chrom_groups = _group_markers_by_chrom(chrom_values)
 
     if loco_kinship is None:
-        loco_kinship = MVP_K_VanRaden_LOCO(geno, map_data, maxLine=maxLine, verbose=verbose)
+        loco_kinship = PANICLE_K_VanRaden_LOCO(geno, map_data, maxLine=maxLine, verbose=verbose)
 
     effects = np.zeros(n_markers, dtype=np.float64)
     std_errors = np.zeros(n_markers, dtype=np.float64)
@@ -65,7 +65,7 @@ def MVP_MLM_LOCO(phe: np.ndarray,
         eigenK = loco_kinship.get_eigen(chrom)
         K_loco = loco_kinship.get_loco(chrom)
 
-        res = MVP_MLM(
+        res = PANICLE_MLM(
             phe=phe,
             geno=geno_subset,
             K=K_loco,

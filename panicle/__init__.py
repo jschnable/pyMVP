@@ -1,0 +1,48 @@
+"""
+PANICLE: Python Algorithms for Nucleotide-phenotype Inference and
+Chromosome-wide Locus Evaluation
+
+A comprehensive, memory-efficient, and parallel-accelerated
+genome-wide association study (GWAS) tool.
+Based on the original rMVP package design.
+"""
+
+import os
+import warnings
+
+# Suppress OpenMP deprecation warnings that occur with Numba parallel processing
+# This is a known issue with newer OpenMP versions and Numba's parallel features
+# The warning is cosmetic and does not affect functionality
+os.environ.setdefault('KMP_WARNINGS', 'off')
+
+# Filter out the specific OpenMP deprecation warning
+warnings.filterwarnings('ignore', message='.*omp_set_nested.*deprecated.*')
+warnings.filterwarnings('ignore', category=UserWarning, message='.*omp_set_nested.*')
+
+__version__ = "0.1.0"
+__author__ = "PANICLE Development Team"
+
+from .core.mvp import PANICLE
+from .data.converters import PANICLE_Data
+from .matrix.kinship import PANICLE_K_VanRaden, PANICLE_K_IBS
+from .matrix.pca import PANICLE_PCA
+from .association.glm import PANICLE_GLM
+from .association.mlm import PANICLE_MLM
+from .association.farmcpu import PANICLE_FarmCPU
+from .association.blink import PANICLE_BLINK
+from .association.farmcpu_resampling import PANICLE_FarmCPUResampling
+from .visualization.manhattan import PANICLE_Report
+
+__all__ = [
+    'PANICLE',
+    'PANICLE_Data',
+    'PANICLE_K_VanRaden',
+    'PANICLE_K_IBS',
+    'PANICLE_PCA',
+    'PANICLE_GLM',
+    'PANICLE_MLM',
+    'PANICLE_FarmCPU',
+    'PANICLE_BLINK',
+    'PANICLE_FarmCPUResampling',
+    'PANICLE_Report'
+]

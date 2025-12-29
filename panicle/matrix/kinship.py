@@ -7,7 +7,7 @@ from typing import Optional, Union, Tuple
 from ..utils.data_types import GenotypeMatrix, KinshipMatrix
 import warnings
 
-def MVP_K_VanRaden(M: Union[GenotypeMatrix, np.ndarray], 
+def PANICLE_K_VanRaden(M: Union[GenotypeMatrix, np.ndarray], 
                    marker_freq: Optional[np.ndarray] = None,
                    maxLine: int = 5000, 
                    cpu: int = 1,
@@ -133,7 +133,7 @@ def MVP_K_VanRaden(M: Union[GenotypeMatrix, np.ndarray],
     return kinship_matrix
 
 
-def MVP_K_IBS(M: Union[GenotypeMatrix, np.ndarray], 
+def PANICLE_K_IBS(M: Union[GenotypeMatrix, np.ndarray], 
               maxLine: int = 5000,
               verbose: bool = True) -> KinshipMatrix:
     """Identity by State (IBS) kinship matrix calculation

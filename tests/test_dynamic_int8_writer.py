@@ -1,6 +1,6 @@
 import numpy as np
 
-from pymvp.data.load_genotype_vcf import _DynamicInt8MatrixWriter
+from panicle.data.load_genotype_vcf import _DynamicInt8MatrixWriter
 
 
 def test_dynamic_int8_writer_finalize_preserves_columns():

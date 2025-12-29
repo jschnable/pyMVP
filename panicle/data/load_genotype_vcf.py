@@ -333,9 +333,9 @@ def load_genotype_vcf(
     # Backend selection: prefer builtin for VCF text, require cyvcf2 for BCF.
     # --- CACHING LOGIC START ---
     cache_base = str(vcf_path)
-    cache_geno = cache_base + '.pymvp.geno.npy'
-    cache_ind = cache_base + '.pymvp.ind.txt'
-    cache_map = cache_base + '.pymvp.map.csv'
+    cache_geno = cache_base + '.panicle.geno.npy'
+    cache_ind = cache_base + '.panicle.ind.txt'
+    cache_map = cache_base + '.panicle.map.csv'
     
     # Check if cache exists and is fresh
     try:
@@ -836,7 +836,7 @@ def load_genotype_vcf(
     # --- CACHING LOGIC SAVE START ---
     try:
         # Save only if successful
-        print(f"   [Cache] Saving binary cache to {cache_base}.pymvp.*")
+        print(f"   [Cache] Saving binary cache to {cache_base}.panicle.*")
         np.save(cache_geno, geno)
         
         with open(cache_ind, 'w') as f:

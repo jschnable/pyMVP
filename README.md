@@ -1,15 +1,16 @@
-# pyMVP: Python Based GWAS Pipeline
+# PANICLE: Python Algorithms for Nucleotide-phenotype Inference and Chromosome-wide Locus Evaluation
 
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-pyMVP is a high-performance **Python package for Genome Wide Association Studies (GWAS)**. It implements **GLM** (General Linear Model), **MLM** (Mixed Linear Model, with optional LOCO), **Hybrid MLM** (Wald screen + LRT refinement), **FarmCPU**, **BLINK**, and **FarmCPU Resampling (RMIP)**, optimized for speed and huge datasets.
+PANICLE is a high-performance **Python package for Genome Wide Association Studies (GWAS)**. It implements **GLM** (General Linear Model), **MLM** (Mixed Linear Model, with optional LOCO), **Hybrid MLM** (Wald screen + LRT refinement), **FarmCPU**, **BLINK**, and **FarmCPU Resampling (RMIP)**, optimized for speed and huge datasets.
 
 It features a **vectorized VCF loader**, **automatic binary caching**, **parallel execution**, and **decimated plotting**, making it significantly faster than unoptimized implementations while maintaining the flexibility of Python.
 
 ## Key Features
 
 *   **Algorithms**: GLM, MLM (LOCO when a map is available), Hybrid MLM (`MLM_Hybrid`), FarmCPU, BLINK, FarmCPUResampling (RMIP).
+    * **LOCO** (Leave-One-Chromosome-Out) builds the kinship matrix while excluding the current chromosome to reduce proximal contamination.
 *   **High Performance**:
     *   **Vectorized Loading**: `cyvcf2` + NumPy optimization (~26x faster VCF loading).
     *   **Binary Caching**: First run caches genotypes; subsequent runs load instantly (~1.5s).
@@ -25,8 +26,8 @@ It features a **vectorized VCF loader**, **automatic binary caching**, **paralle
 Requires Python 3.7+.
 
 ```bash
-git clone https://github.com/jschnable/pyMVP.git
-cd pyMVP
+git clone https://github.com/jschnable/PANICLE.git
+cd PANICLE
 pip install -e .
 ```
 
@@ -81,10 +82,10 @@ Other useful filters:
 
 ## Python API Usage
 
-The recommended way to integrate pyMVP into your scripts or Jupyter Notebooks is via the `GWASPipeline` class.
+The recommended way to integrate PANICLE into your scripts or Jupyter Notebooks is via the `GWASPipeline` class.
 
 ```python
-from pymvp.pipelines.gwas import GWASPipeline
+from panicle.pipelines.gwas import GWASPipeline
 
 # 1. Initialize
 pipeline = GWASPipeline(output_dir="./results")
@@ -135,13 +136,13 @@ Recommended for numeric genotype matrices and for LOCO-based methods like `MLM_H
 
 Average wall-clock time (1,000 samples, 250,000 markers, M3 Pro CPU):
 
-| Method  | pyMVP | rMVP (R) |
-|---------|-------|----------|
-| GLM     | 0.6s  | 4.5s     |
-| MLM     | 7.8s  | 21.9s    |
-| FarmCPU | 8.9s  | 20.5s    |
+| Method  | PANICLE | rMVP (R) |
+|---------|---------|----------|
+| GLM     | 0.6s    | 4.5s     |
+| MLM     | 7.8s    | 21.9s    |
+| FarmCPU | 8.9s    | 20.5s    |
 
-*Note: pyMVP optimized implementation (v2.0) is typically 2-4x faster than rMVP.*
+*Note: PANICLE's optimized implementation is typically 2-4x faster than rMVP.*
 
 ## License
 
