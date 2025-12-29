@@ -3,8 +3,8 @@ import pytest
 import numpy as np
 from scipy import stats
 from pymvp.association.glm import MVP_GLM
-from pymvp.association.mlm import MVP_MLM
-from pymvp.matrix.kinship import MVP_K_VanRaden
+import pandas as pd
+from pymvp.association.mlm_loco import MVP_MLM_LOCO
 
 def test_glm_statistical_correctness():
     """Verify GLM p-values against standard scipy.stats regression"""
@@ -77,10 +77,13 @@ def test_mlm_returns_reasonable_values():
     y = np.random.randn(n)
     phe = np.column_stack([np.arange(n), y])
     
-    # Kinship
-    K = MVP_K_VanRaden(geno)
-    
-    res = MVP_MLM(phe, geno, K=K, verbose=False)
+    map_df = pd.DataFrame({
+        'SNP': [f'SNP{i:04d}' for i in range(m)],
+        'CHROM': [f'Chr{(i % 5) + 1:02d}' for i in range(m)],
+        'POS': np.arange(m) + 1
+    })
+
+    res = MVP_MLM_LOCO(phe, geno, map_data=map_df, verbose=False)
     
     assert len(res.pvalues) == m
     assert np.all(res.pvalues >= 0) and np.all(res.pvalues <= 1)

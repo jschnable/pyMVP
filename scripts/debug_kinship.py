@@ -112,12 +112,12 @@ def main():
     # 7. Run MLM fully
     print("\nRunning Full MLM to Reproduce Warnings...")
     y_sub, g_sub, cov_sub, k_sub = pipeline._prepare_trait_data(TRAIT)
-    from pymvp.association.mlm import MVP_MLM
+    from pymvp.association.mlm_loco import MVP_MLM_LOCO
     
     # Calculate EigenK manually if needed or let MLM do it
     # MLM calculates it if not passed.
     try:
-        res = MVP_MLM(y_sub, g_sub, K=k_sub, CV=cov_sub, verbose=True)
+        res = MVP_MLM_LOCO(y_sub, g_sub, map_data=pipeline.geno_map, CV=cov_sub, verbose=True)
         print("MLM Completed Successfully.")
     except Exception as e:
         print(f"MLM Failed: {e}")

@@ -398,7 +398,7 @@ def create_manhattan_plot(pvalues: np.ndarray,
 
     # Set labels and formatting
     ax.set_xlabel('Chromosome', fontsize=12)
-    ax.set_ylabel('-log₁₀(P-value)', fontsize=12)
+    ax.set_ylabel(r'$-\log_{10}(P)$', fontsize=12)
 
     # Set title only if provided and not empty
     if title and title.strip():
@@ -702,8 +702,8 @@ def create_qq_plot(pvalues: np.ndarray,
     # Calculate lambda (genomic inflation factor) using shared utility
     lambda_gc = genomic_inflation_factor(observed_pvals)
 
-    ax.set_xlabel('Expected -log₁₀(P-value)')
-    ax.set_ylabel('Observed -log₁₀(P-value)')
+    ax.set_xlabel(r'Expected $-\log_{10}(P)$')
+    ax.set_ylabel(r'Observed $-\log_{10}(P)$')
     ax.set_title(f'{title}\nλ = {lambda_gc:.3f}')
     ax.grid(True, alpha=0.3)
     ax.legend()
@@ -749,9 +749,9 @@ def create_pvalue_density_plot(pvalues: np.ndarray,
     # Histogram of -log10 p-values
     log_pvals = -np.log10(valid_pvals)
     ax2.hist(log_pvals, bins=50, density=True, alpha=0.7, color='lightcoral', edgecolor='black')
-    ax2.set_xlabel('-log₁₀(P-value)')
+    ax2.set_xlabel(r'$-\log_{10}(P)$')
     ax2.set_ylabel('Density')
-    ax2.set_title('-log₁₀(P-value) Distribution')
+    ax2.set_title(r'$-\log_{10}(P)$ Distribution')
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -861,7 +861,7 @@ def create_multi_panel_manhattan(results_dict: Dict,
         if len(valid_pvalues) == 0:
             ax.text(0.5, 0.5, f'No valid p-values for {method_name}',
                    ha='center', va='center', transform=ax.transAxes)
-            ax.set_ylabel(f'{method_name}\n-log₁₀(P)', fontsize=10)
+            ax.set_ylabel(f'{method_name}\n' + r'$-\log_{10}(P)$', fontsize=10)
             continue
         
         # Convert p-values to -log10 scale
@@ -890,11 +890,11 @@ def create_multi_panel_manhattan(results_dict: Dict,
         # Add significance threshold
         if threshold > 0:
             threshold_line = -np.log10(threshold)
-            ax.axhline(y=threshold_line, color='red', linestyle='--', 
+            ax.axhline(y=threshold_line, color='red', linestyle='--',
                       alpha=0.8, linewidth=1.5)
-        
+
         # Set y-label with method name
-        ax.set_ylabel(f'{method_name}\n-log₁₀(P)', fontsize=10)
+        ax.set_ylabel(f'{method_name}\n' + r'$-\log_{10}(P)$', fontsize=10)
         
         # Only show x-axis label on bottom plot
         if i == n_methods - 1:

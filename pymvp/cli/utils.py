@@ -79,10 +79,16 @@ def parse_args():
                        help="Outputs to generate")
 
     # Loader options (simplified subset)
-    parser.add_argument("--drop-monomorphic", action='store_true')
+    parser.add_argument("--drop-monomorphic", action='store_true', dest='drop_monomorphic',
+                       help="Drop monomorphic markers (now default behavior, kept for backward compatibility)")
+    parser.add_argument("--keep-monomorphic", action='store_false', dest='drop_monomorphic',
+                       help="Keep monomorphic markers (override default)")
     parser.add_argument("--max-missing", type=float, default=1.0)
     parser.add_argument("--min-maf", type=float, default=0.0)
     parser.add_argument("--snps-only", action='store_true')
     parser.add_argument("--no-split-multiallelic", action='store_true')
+
+    # Set defaults
+    parser.set_defaults(drop_monomorphic=True)
 
     return parser.parse_args()

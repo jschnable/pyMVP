@@ -56,9 +56,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/pyMVP"
-Repository = "https://github.com/your-org/pyMVP"
-Issues = "https://github.com/your-org/pyMVP/issues"
+Homepage = "https://github.com/jschnable/pyMVP"
+Repository = "https://github.com/jschnable/pyMVP"
+Documentation = "https://github.com/jschnable/pyMVP/tree/master/docs"
+Issues = "https://github.com/jschnable/pyMVP/issues"
+Changelog = "https://github.com/jschnable/pyMVP/blob/master/CHANGELOG.md"
 
 [project.scripts]
 pymvp-cache-genotype = "pymvp.tools.convert_genotype:main"

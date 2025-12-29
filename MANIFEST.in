@@ -1,0 +1,29 @@
+# Include documentation
+include README.md
+include LICENSE
+include CHANGELOG.md
+
+# Include documentation directory
+recursive-include docs *.md *.pdf *.ipynb *.png *.jpg
+prune docs/__pycache__
+
+# Include example scripts
+recursive-include examples *.py *.md *.csv *.txt
+prune examples/__pycache__
+
+# Include scripts
+recursive-include scripts *.py
+prune scripts/__pycache__
+
+# Exclude test data and large files
+exclude sorghum_data/*
+exclude sorghum_results*/*
+exclude .gitignore
+
+# Exclude development files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.npy
+global-exclude *.npz

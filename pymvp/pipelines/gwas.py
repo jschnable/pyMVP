@@ -31,13 +31,16 @@ from ..association.farmcpu_resampling import (
 )
 from ..association.glm import MVP_GLM
 from ..association.mlm import MVP_MLM
+from ..association.mlm_loco import MVP_MLM_LOCO
 from ..association.farmcpu import MVP_FarmCPU
 from ..association.blink import MVP_BLINK
 from ..matrix.pca import MVP_PCA
 from ..matrix.kinship import MVP_K_VanRaden
 from ..visualization.manhattan import MVP_Report
+from ..association.hybrid_mlm import MVP_MLM_Hybrid
+
 # Helper function for parallel execution
-def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, max_iterations, base_threshold, n_markers):
+def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, hybrid_params, max_iterations, base_threshold, n_markers):
     """Worker function to run a single GWAS method in a separate process."""
     try:
         if method == 'GLM':
@@ -46,9 +49,18 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             return ('GLM', res, lambda_gc, None)
 
         elif method == 'MLM':
-            if k_sub is None:
-                return ('MLM', None, None, "Kinship matrix missing")
-            res = MVP_MLM(phe=y_sub, geno=g_sub, CV=cov_sub, K=k_sub, verbose=False)
+            if map_data is None:
+                if k_sub is None:
+                    return ('MLM', None, None, "Kinship matrix missing")
+                res = MVP_MLM(phe=y_sub, geno=g_sub, CV=cov_sub, K=k_sub, verbose=False)
+            else:
+                res = MVP_MLM_LOCO(
+                    phe=y_sub,
+                    geno=g_sub,
+                    map_data=map_data,
+                    CV=cov_sub,
+                    verbose=False,
+                )
             lambda_gc = genomic_inflation_factor(res.pvalues)
             return ('MLM', res, lambda_gc, None)
 
@@ -69,7 +81,7 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             lambda_gc = genomic_inflation_factor(res.pvalues)
             return ('BLINK', res, lambda_gc, None)
             
-        elif method == 'FARMCPU_RESAMPLING':
+        elif method == 'FarmCPUResampling':
             # Resampling is usually heavy and might output files directly or need special handling
             runs = fc_params.get('resampling_runs', 100)
             # trait_name is needed? Not passed here.
@@ -77,7 +89,22 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             # It's better to keep resampling sequential if complex, or pass trait_name.
             # Let's support it if trivial.
             # MVP_FarmCPUResampling requires trait_name. 
+            # MVP_FarmCPUResampling requires trait_name. 
             pass
+
+        elif method == 'HybridMLM':
+            if map_data is None:
+                return ('HybridMLM', None, None, "Genotype map missing")
+
+            h_params = hybrid_params or {}
+            res = MVP_MLM_Hybrid(
+                phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
+                screen_threshold=h_params.get('screen_threshold', 1e-4),
+                maxLine=h_params.get('max_line', 1000),
+                verbose=False
+            )
+            lambda_gc = genomic_inflation_factor(res.pvalues)
+            return ('HybridMLM', res, lambda_gc, None)
 
         return (method, None, None, f"Unknown method {method}")
 
@@ -94,22 +121,76 @@ OUTPUT_CHOICES: Tuple[str, ...] = (
 
 class GWASPipeline:
     """
-    A comprehensive pipeline for Genome-Wide Association Studies.
-    
-    This class manages the lifecycle of a GWAS analysis, including:
-    1. Data Loading (Genotype, Phenotype, Map, Covariates)
-    2. Quality Control & Alignment
-    3. Population Structure (PCA, Kinship)
-    4. Association Testing (GLM, MLM, FarmCPU, BLINK)
-    5. Result Summarization & Visualization
+    High-level pipeline for Genome-Wide Association Studies (GWAS).
+
+    This class provides a complete workflow for GWAS analysis, handling data loading,
+    sample alignment, population structure correction, association testing, and
+    result visualization.
+
+    Typical workflow:
+        1. Initialize pipeline with output directory
+        2. Load phenotype, genotype, and optional covariate data
+        3. Align samples across datasets
+        4. Compute population structure (PCs and/or kinship matrix)
+        5. Run association analysis with chosen method(s)
+        6. Results are automatically saved to output directory
+
+    Attributes:
+        genotype_matrix (GenotypeMatrix): Aligned genotype data (n_individuals × n_markers)
+        geno_map (GenotypeMap): Genetic map with SNP information (ID, CHROM, POS)
+        phenotype_df (DataFrame): Aligned phenotype data with 'ID' column + trait columns
+        covariate_df (DataFrame): External covariates (if loaded)
+        pcs (ndarray): Principal components (n_individuals × n_pcs)
+        pc_names (list): Names of PC columns ['PC1', 'PC2', ...]
+        kinship (ndarray): Kinship matrix (n_individuals × n_individuals)
+        output_dir (Path): Output directory for results
+        effective_tests_info (dict): Effective number of independent tests (if computed)
+
+    Example:
+        >>> from pymvp.pipelines.gwas import GWASPipeline
+        >>>
+        >>> # Initialize pipeline
+        >>> pipeline = GWASPipeline(output_dir='./my_gwas')
+        >>>
+        >>> # Load data
+        >>> pipeline.load_data(
+        ...     phenotype_file='phenotypes.csv',
+        ...     genotype_file='genotypes.vcf.gz'
+        ... )
+        >>>
+        >>> # Align samples
+        >>> pipeline.align_samples()
+        >>>
+        >>> # Compute population structure
+        >>> pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
+        >>>
+        >>> # Run GWAS
+        >>> pipeline.run_analysis(
+        ...     traits=['Height', 'FloweringTime'],
+        ...     methods=['GLM', 'MLM']
+        ... )
+        >>>
+        >>> # Results saved to ./my_gwas/
+
+    See Also:
+        docs/quickstart.md: Quick start guide
+        docs/api_reference.md: Complete API documentation
+        examples/: Example scripts
     """
-    
+
     def __init__(self, output_dir: str = "./GWAS_results"):
         """
         Initialize the GWAS Pipeline.
-        
+
+        Creates output directory if it doesn't exist and initializes all data
+        storage attributes to None/empty.
+
         Args:
-            output_dir: Directory where results and plots will be saved.
+            output_dir (str): Directory where results and plots will be saved.
+                            Default: './GWAS_results'
+
+        Example:
+            >>> pipeline = GWASPipeline(output_dir='./my_analysis')
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +227,7 @@ class GWASPipeline:
         else:
             self.log(f"{step_name}...")
 
-    def load_data(self, 
+    def load_data(self,
                   phenotype_file: str,
                   genotype_file: str,
                   map_file: Optional[str] = None,
@@ -157,7 +238,68 @@ class GWASPipeline:
                   covariate_id_column: str = 'ID',
                   loader_kwargs: Optional[Dict[str, Any]] = None):
         """
-        Load and validate input data files.
+        Load and validate phenotype, genotype, and optional covariate data.
+
+        This method loads all input files and performs basic validation. It sets the
+        genotype_matrix, phenotype_df, geno_map, and optionally covariate_df attributes.
+
+        Args:
+            phenotype_file (str): Path to phenotype CSV file. First column must be 'ID'
+                                or individual identifiers, remaining columns are traits.
+            genotype_file (str): Path to genotype file. Supported formats:
+                                - VCF/VCF.GZ: Standard variant call format
+                                - HapMap: TASSEL HapMap format
+                                - Plink: Binary plink (.bed/.bim/.fam)
+            map_file (str, optional): Path to genetic map file to override map from
+                                    genotype file. Default: None (use genotype file map)
+            genotype_format (str, optional): Genotype file format ('vcf', 'hapmap', 'plink').
+                                           Auto-detected if None. Default: None
+            trait_columns (list, optional): Which phenotype columns to load. If None,
+                                          loads all numeric columns. Default: None
+            covariate_file (str, optional): Path to external covariate CSV file with
+                                          'ID' column. Default: None
+            covariate_columns (list, optional): Which covariate columns to use. If None,
+                                              uses all columns except ID. Default: None
+            covariate_id_column (str): Column name for individual IDs in covariate file.
+                                     Default: 'ID'
+            loader_kwargs (dict, optional): Additional arguments for genotype loader:
+                - compute_effective_tests (bool): Calculate M_eff (Li et al. 2012)
+                - effective_test_kwargs (dict): Parameters for effective test calculation
+
+        Sets:
+            self.phenotype_df: DataFrame with 'ID' column + trait columns
+            self.genotype_matrix: GenotypeMatrix (n_individuals × n_markers)
+            self.geno_map: GenotypeMap with SNP information
+            self.individual_ids: List of individual IDs from genotype file
+            self.covariate_df: DataFrame with covariates (if covariate_file provided)
+            self.effective_tests_info: Dict with M_eff if computed
+
+        Raises:
+            ValueError: If files cannot be loaded or validated
+
+        Example:
+            >>> pipeline.load_data(
+            ...     phenotype_file='phenos.csv',
+            ...     genotype_file='genos.vcf.gz'
+            ... )
+
+            >>> # With covariates
+            >>> pipeline.load_data(
+            ...     phenotype_file='phenos.csv',
+            ...     genotype_file='genos.vcf.gz',
+            ...     covariate_file='fields.csv',
+            ...     covariate_columns=['Field', 'Year']
+            ... )
+
+            >>> # With effective tests
+            >>> pipeline.load_data(
+            ...     phenotype_file='phenos.csv',
+            ...     genotype_file='genos.vcf.gz',
+            ...     loader_kwargs={'compute_effective_tests': True}
+            ... )
+
+        Note:
+            Call align_samples() after load_data() to match individuals across datasets.
         """
         step_start = time.time()
         self.log_step("Step 1: Loading and validating input data")
@@ -247,7 +389,37 @@ class GWASPipeline:
         self.log_step("Data loading", step_start)
 
     def align_samples(self):
-        """Match individuals between phenotype, genotype, and covariates."""
+        """
+        Match and align individuals between phenotype, genotype, and covariate datasets.
+
+        This method identifies the intersection of individuals present in all loaded
+        datasets and subsets each dataset to include only common individuals. This
+        ensures all subsequent analyses use the same set of individuals.
+
+        Requires:
+            - load_data() must have been called first
+
+        Sets:
+            Updates self.phenotype_df, self.genotype_matrix, and self.covariate_df
+            to contain only matched individuals in the same order.
+
+        Raises:
+            ValueError: If load_data() hasn't been called
+            ValueError: If no common individuals found between datasets
+
+        Example:
+            >>> pipeline.load_data('phenos.csv', 'genos.vcf.gz')
+            >>> pipeline.align_samples()
+            # Output:
+            #    Original phenotypes: 1000
+            #    Original genotypes: 800
+            #    Matched Intersection: 750
+
+        Note:
+            - Sample matching is case-sensitive and requires exact ID matches
+            - If no overlap exists, an error is raised
+            - This is a required step before running association analyses
+        """
         if self.phenotype_df is None or self.genotype_matrix is None:
             raise ValueError("Data not loaded. Call load_data() first.")
 
@@ -284,7 +456,48 @@ class GWASPipeline:
         self.log_step("Individual matching", step_start)
 
     def compute_population_structure(self, n_pcs: int = 3, calculate_kinship: bool = True):
-        """Calculate PCA and Kinship."""
+        """
+        Calculate principal components and/or kinship matrix for population structure correction.
+
+        This method computes:
+        1. Principal components (PCs) from genotype data for use as covariates
+        2. Kinship matrix using VanRaden (2008) method for random effects
+
+        Principal components help control for population stratification by including
+        them as fixed-effect covariates. The kinship matrix accounts for sample
+        relatedness in mixed linear models.
+
+        Args:
+            n_pcs (int): Number of principal components to compute. Set to 0 to skip PCA.
+                       Default: 3
+            calculate_kinship (bool): Whether to calculate kinship matrix. Required for
+                                    FarmCPU and BLINK methods. Default: True
+
+        Sets:
+            self.pcs: ndarray of shape (n_individuals, n_pcs) if n_pcs > 0
+            self.pc_names: List of PC column names ['PC1', 'PC2', ...]
+            self.kinship: ndarray of shape (n_individuals, n_individuals) if calculate_kinship=True
+
+        Raises:
+            ValueError: If genotype data not loaded (call load_data() and align_samples() first)
+
+        Example:
+            >>> # Compute 5 PCs and kinship
+            >>> pipeline.compute_population_structure(n_pcs=5, calculate_kinship=True)
+
+            >>> # Only compute kinship (no PCA)
+            >>> pipeline.compute_population_structure(n_pcs=0, calculate_kinship=True)
+
+            >>> # Only compute PCs (for GLM with covariate correction)
+            >>> pipeline.compute_population_structure(n_pcs=3, calculate_kinship=False)
+
+        Note:
+            - PCs are automatically used as covariates in subsequent run_analysis() calls
+            - PCs are combined with any external covariates loaded via covariate_file
+            - Kinship calculation uses VanRaden (2008) method: K = XX' / m
+            - MLM and Hybrid MLM now use LOCO kinship internally and do not require this matrix
+            - Recommended to use 3-10 PCs depending on population structure complexity
+        """
         if self.genotype_matrix is None:
              raise ValueError("Genotype data missing.")
         
@@ -326,6 +539,7 @@ class GWASPipeline:
                      max_genotype_dosage: float = 2.0,
                      farmcpu_params: Optional[Dict] = None,
                      blink_params: Optional[Dict] = None,
+                     hybrid_params: Optional[Dict] = None,
                      outputs: List[str] = list(OUTPUT_CHOICES)):
         """
         Run GWAS analysis for specified traits and methods.
@@ -334,6 +548,10 @@ class GWASPipeline:
             raise ValueError("Data not loaded.")
 
         self.log_step("Step 4: Running GWAS analysis")
+
+        # Normalize method names (allow user-friendly aliases)
+        # 'MLM_Hybrid' is the documented name, 'HybridMLM' is the internal name
+        methods = [m if m != 'MLM_Hybrid' else 'HybridMLM' for m in methods]
 
         # 1. Trait Selection
         available_traits = [c for c in self.phenotype_df.columns if c != 'ID' and pd.api.types.is_numeric_dtype(self.phenotype_df[c])]
@@ -393,10 +611,12 @@ class GWASPipeline:
             if 'GLM' in methods: parallel_methods.append('GLM')
             if 'MLM' in methods: parallel_methods.append('MLM')
             if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
+            if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
             if 'BLINK' in methods: parallel_methods.append('BLINK')
+            if 'HybridMLM' in methods: parallel_methods.append('HybridMLM')
             
             # Resampling usually handled separately or sequentially due to complexity
-            run_resampling = 'FARMCPU_RESAMPLING' in methods
+            run_resampling = 'FarmCPUResampling' in methods
 
             self.log(f"   Running parallel analysis for: {parallel_methods}")
             
@@ -407,7 +627,7 @@ class GWASPipeline:
                         method, 
                         y_sub, g_sub, cov_sub, k_sub, 
                         self.geno_map, 
-                        fc_params, blk_params, 
+                        fc_params, blk_params, hybrid_params,
                         max_iterations, base_threshold, n_markers
                     ): method for method in parallel_methods
                 }
@@ -440,6 +660,10 @@ class GWASPipeline:
                      self.log(f"   Resampling identified {len(res.entries)} markers.")
                  except Exception as e:
                      self.log(f"   FarmCPU Resampling Failed: {e}")
+
+            # Convert internal method names back to user-friendly documented names
+            if 'HybridMLM' in method_results:
+                method_results['MLM_Hybrid'] = method_results.pop('HybridMLM')
 
             # Save and Report for this trait
             trait_summary = self._save_trait_results(

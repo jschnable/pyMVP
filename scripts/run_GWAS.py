@@ -8,8 +8,64 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pymvp.cli.utils import parse_args, normalize_outputs
+from pymvp.cli.utils import parse_args
 from pymvp.pipelines.gwas import GWASPipeline
+
+OUTPUT_CHOICES = (
+    'all_marker_pvalues',
+    'significant_marker_pvalues',
+    'manhattan',
+    'qq',
+)
+
+
+def normalize_outputs(outputs):
+    """Normalize output selections with comma splitting and deduplication."""
+    if not outputs:
+        return list(OUTPUT_CHOICES)
+
+    normalized = []
+    seen = set()
+    for item in outputs:
+        for part in str(item).split(','):
+            part = part.strip().lower()
+            if not part:
+                continue
+            if part not in OUTPUT_CHOICES:
+                raise ValueError(f"Invalid output choice: {part}")
+            if part not in seen:
+                normalized.append(part)
+                seen.add(part)
+
+    return normalized if normalized else list(OUTPUT_CHOICES)
+
+
+class FarmCPUResamplingProgressReporter:
+    """Lightweight progress reporter for FarmCPU resampling runs."""
+
+    def __init__(self, trait_name: str, total_runs: int):
+        self.trait_name = trait_name
+        self.total_runs = total_runs
+        self._started = False
+
+    def __call__(self, run_idx: int, total_runs: int, elapsed_seconds: float) -> None:
+        if not self._started:
+            print(f"[{self.trait_name}] started resampling ({total_runs} runs)")
+            self._started = True
+
+        if run_idx >= total_runs:
+            print(f"[{self.trait_name}] finished resampling in {elapsed_seconds:.0f}s")
+            return
+
+        threshold = max(5, int(0.1 * total_runs))
+        if run_idx >= threshold:
+            remaining = max(total_runs - run_idx, 0)
+            avg_per_run = elapsed_seconds / max(run_idx, 1)
+            eta = remaining * avg_per_run
+            print(
+                f"[{self.trait_name}] progress {run_idx}/{total_runs} "
+                f"(ETA {eta:.0f}s)"
+            )
 
 def main():
     args = parse_args()
@@ -49,13 +105,40 @@ def main():
     pipeline.compute_population_structure(n_pcs=args.n_pcs)
     
     # 4. Run Analysis
-    methods = [m.strip().upper().replace('-', '_') for m in args.methods.split(',')]
-    # Normalize method names
+    # The original code had a comma-separated string for methods.
+    # The instruction implies a change to individual boolean flags for methods.
+    # Assuming `parse_args` has been updated to include these flags.
+    methods = []
+    if args.glm: methods.append('GLM')
+    if args.mlm: methods.append('MLM')
+    if args.farmcpu: methods.append('FarmCPU') # Assuming this exists
+    if args.resampling: methods.append('FarmCPUResampling') # New method flag
+    
+    # If args.methods is still used as a fallback or for other methods not covered by flags
+    if args.methods:
+        for m in args.methods.split(','):
+            method_name = m.strip().upper().replace('-', '_')
+            if method_name == 'FARMCPURESAMPLING':
+                method_name = 'FarmCPUResampling' # Normalize to the new name
+            elif method_name == 'FARMCPU':
+                method_name = 'FarmCPU' # Normalize if needed
+            # Add other normalizations if necessary
+            if method_name not in methods: # Avoid duplicates if both flags and string are used
+                methods.append(method_name)
+
+    # Normalize method names (this block replaces the old normalization logic)
     valid_methods = []
     for m in methods:
-        if m == 'FARMCPURESAMPLING': m = 'FARMCPU_RESAMPLING'
-        valid_methods.append(m)
-        
+        # The instruction was to rename 'FARMCPU_RESAMPLING' to 'FarmCPUResampling'.
+        # If the input method was 'FARMCPURESAMPLING' (old string format), it should become 'FarmCPUResampling'.
+        # If the input method was 'FarmCPUResampling' (from new flag), it's already correct.
+        if m.upper() == 'FARMCPURESAMPLING': # Handle both old string format and potential uppercase from other sources
+            valid_methods.append('FarmCPUResampling')
+        elif m.upper() == 'FARMCPU':
+            valid_methods.append('FarmCPU')
+        else:
+            valid_methods.append(m) # Keep other methods as is
+
     outputs = normalize_outputs(args.outputs)
     
     pipeline.run_analysis(

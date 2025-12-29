@@ -11,6 +11,7 @@ import warnings
 from ..utils.data_types import Phenotype, GenotypeMatrix, GenotypeMap, KinshipMatrix, AssociationResults
 from ..association.glm import MVP_GLM
 from ..association.mlm import MVP_MLM
+from ..association.mlm_loco import MVP_MLM_LOCO
 from ..association.farmcpu import MVP_FarmCPU
 from ..association.blink import MVP_BLINK
 from ..association.farmcpu_resampling import MVP_FarmCPUResampling
@@ -249,37 +250,36 @@ def MVP(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
         
         # Run MLM
         if "MLM" in method:
-            if kinship_matrix is None:
-                warnings.warn("MLM requires kinship matrix. Skipping MLM analysis.")
-            else:
-                if verbose:
-                    print("\nRunning MLM analysis...")
-                
-                mlm_start = time.time()
-                mlm_results = MVP_MLM(
-                    phe=phenotype_array,
-                    geno=genotype,
-                    K=kinship_matrix,
-                    CV=CV,
-                    vc_method=vc_method,
-                    maxLine=maxLine,
-                    cpu=ncpus,
-                    verbose=verbose
-                )
-                mlm_time = time.time() - mlm_start
-                
-                analysis_results['results']['MLM'] = mlm_results
-                analysis_results['summary']['methods_run'].append('MLM')
-                analysis_results['summary']['runtime']['MLM'] = mlm_time
-                
-                # Count significant markers
-                mlm_pvals = mlm_results.to_numpy()[:, 2]
-                n_sig = np.sum(mlm_pvals < threshold)
-                analysis_results['summary']['significant_markers']['MLM'] = n_sig
-                
-                if verbose:
-                    print(f"MLM analysis complete ({mlm_time:.2f}s)")
-                    print(f"  Significant markers (p < {threshold}): {n_sig}")
+            if verbose:
+                print("\nRunning MLM analysis...")
+
+            mlm_start = time.time()
+            if K is not None and verbose:
+                warnings.warn("Provided kinship matrix is ignored; MLM now uses LOCO kinship.")
+            mlm_results = MVP_MLM_LOCO(
+                phe=phenotype_array,
+                geno=genotype,
+                map_data=genetic_map,
+                CV=CV,
+                vc_method=vc_method,
+                maxLine=maxLine,
+                cpu=ncpus,
+                verbose=verbose
+            )
+            mlm_time = time.time() - mlm_start
+
+            analysis_results['results']['MLM'] = mlm_results
+            analysis_results['summary']['methods_run'].append('MLM')
+            analysis_results['summary']['runtime']['MLM'] = mlm_time
+
+            # Count significant markers
+            mlm_pvals = mlm_results.to_numpy()[:, 2]
+            n_sig = np.sum(mlm_pvals < threshold)
+            analysis_results['summary']['significant_markers']['MLM'] = n_sig
+
+            if verbose:
+                print(f"MLM analysis complete ({mlm_time:.2f}s)")
+                print(f"  Significant markers (p < {threshold}): {n_sig}")
         
         # Run FarmCPU
         if "FarmCPU" in method:

@@ -244,7 +244,7 @@ def MVP_MLM(phe: np.ndarray,
         K: Kinship matrix (n_individuals × n_individuals)
         eigenK: Pre-computed eigendecomposition of K
         CV: Covariate matrix (n_individuals × n_covariates), optional
-        vc_method: Variance component estimation method ["BRENT", "EMMA", "HE"]
+        vc_method: Variance component estimation method ["BRENT"]
         maxLine: Batch size for processing markers (larger for vectorization)
         cpu: Number of CPU threads for parallel processing
         verbose: Print progress information
@@ -360,10 +360,6 @@ def MVP_MLM(phe: np.ndarray,
     
     if vc_method.upper() == "BRENT":
         delta_hat, vg_hat, ve_hat = estimate_variance_components_brent(y_transformed, X_transformed, eigenvals, verbose)
-    elif vc_method.upper() == "EMMA":
-        delta_hat, vg_hat, ve_hat = estimate_variance_components_emma(y_transformed, X_transformed, eigenvals, verbose)
-    elif vc_method.upper() == "HE":
-        delta_hat, vg_hat, ve_hat = estimate_variance_components_he(y_transformed, X_transformed, eigenvals, verbose)
     else:
         raise ValueError(f"Unknown variance component method: {vc_method}")
     
@@ -448,7 +444,8 @@ def MVP_MLM(phe: np.ndarray,
 def estimate_variance_components_brent(y: np.ndarray, 
                                      X: np.ndarray, 
                                      eigenvals: np.ndarray,
-                                     verbose: bool = False) -> Tuple[float, float, float]:
+                                     verbose: bool = False,
+                                     use_ml: bool = False) -> Tuple[float, float, float]:
     """Exact rMVP variance component estimation
     
     Args:
@@ -456,59 +453,17 @@ def estimate_variance_components_brent(y: np.ndarray,
         X: Transformed covariate matrix (MUST be in eigenspace U'X)
         eigenvals: Eigenvalues of kinship matrix (already floored at 1e-6)
         verbose: Print optimization progress
+        use_ml: If True, use ML likelihood (vs REML) for optimization
     
     Returns:
         Tuple (delta_hat, vg_hat, ve_hat) where delta = ve/vg (rMVP convention)
     """
     
+    # Wrapper for optimization that keeps arguments cleaner
     def neg_reml_likelihood(h2):
-        """REML NEGATIVE log-likelihood to minimize (exact rMVP formula)"""
-        n = len(y)
-        r = 0  # Assuming no missing eigenvalues removed
-        p = X.shape[1]
-        
-        # Apply eigenvalue floor like rMVP (1e-6) 
-        eig_safe = np.maximum(eigenvals, 1e-6)
-        
-        # Variance matrix in eigenspace: V₀ᵦ = h²σ + (1-h²)𝟙
-        V0b = h2 * eig_safe + (1.0 - h2) * np.ones_like(eig_safe)
-        V0bi = 1.0 / V0b
-        
-        # Check for numerical stability
-        if np.any(V0b <= 0):
-            return np.inf
-        
-        # Fixed effects computation
-        ViX = V0bi[:, np.newaxis] * X  # V⁻¹X
-        XViX = X.T @ ViX  # X'V⁻¹X
-        
-        try:
-            XViX_inv = np.linalg.solve(XViX, np.eye(XViX.shape[0]))  # (X'V⁻¹X)⁻¹
-            log_det_XViX_inv = np.log(np.linalg.det(XViX_inv))  # log|(X'V⁻¹X)⁻¹|
-        except (np.linalg.LinAlgError, ValueError):
-            return np.inf
-        
-        # REML residuals: P₀y = V⁻¹y - V⁻¹X(X'V⁻¹X)⁻¹X'V⁻¹y
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            Viy = V0bi * y  # V⁻¹y
-            P0y = Viy - ViX @ (XViX_inv @ (ViX.T @ y))  # REML residuals
-        yP0y = np.dot(P0y, y)  # y'P₀y
-        
-        # Check for numerical issues
-        if yP0y <= 0:
-            return np.inf
-        
-        # REML likelihood components
-        log_V0b_sum = np.sum(np.log(V0b))  # sum(log(V₀ᵦ))
-        df = n - r - p  # Degrees of freedom
-        
-        # The NEGATIVE log-likelihood rMVP minimizes
-        # Formula: 0.5 * [sum(log(V₀ᵦ)) + log|(X'V⁻¹X)⁻¹| + (n-r-p)*log(y'P₀y) + (n-r-p)*(1-log(n-r-p))]
-        neg_loglik = 0.5 * (log_V0b_sum + log_det_XViX_inv + 
-                           df * np.log(yP0y) + df * (1.0 - np.log(df)))
-        
-        return neg_loglik  # Return positive value to minimize
+        return _calculate_neg_reml_likelihood(h2, y, X, eigenvals)
+    def neg_ml_likelihood(h2):
+        return _calculate_neg_ml_likelihood(h2, y, X, eigenvals)
     
     # Optimize heritability h² ∈ [0,1] like rMVP
     from scipy import optimize
@@ -518,7 +473,7 @@ def estimate_variance_components_brent(y: np.ndarray,
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             result = optimize.minimize_scalar(
-                neg_reml_likelihood, 
+                neg_ml_likelihood if use_ml else neg_reml_likelihood, 
                 bounds=(0.001, 0.999),  # h² ∈ [0,1] with small margins for numerical stability
                 method='bounded',
                 options={'xatol': 1.22e-4, 'maxiter': 500}  # rMVP tolerance
@@ -583,93 +538,108 @@ def estimate_variance_components_brent(y: np.ndarray,
     return delta_hat, vg_hat, ve_hat
 
 
-def estimate_variance_components_emma(y: np.ndarray, 
-                                    X: np.ndarray, 
-                                    eigenvals: np.ndarray,
-                                    verbose: bool = False) -> Tuple[float, float, float]:
-    """Estimate variance components using EMMA method
+def _calculate_neg_reml_likelihood(h2: float, y: np.ndarray, X: np.ndarray, eigenvals: np.ndarray) -> float:
+    """Calculate REML NEGATIVE log-likelihood for a given heritability h2
     
     Args:
-        y: Transformed phenotype vector
-        X: Transformed covariate matrix
+        h2: Heritability (variance explained by kinship)
+        y: Transformed phenotype vector (U'y)
+        X: Transformed covariate matrix (U'X)
         eigenvals: Eigenvalues of kinship matrix
-        verbose: Print progress
         
     Returns:
-        Tuple (delta_hat, vg_hat, ve_hat) with delta = ve/vg
+        Negative REML log-likelihood (to minimize)
     """
-    # EMMA uses a simplified estimation approach
-    # This is a placeholder implementation
-    return estimate_variance_components_brent(y, X, eigenvals, verbose)
-
-
-def estimate_variance_components_he(y: np.ndarray, 
-                                  X: np.ndarray, 
-                                  eigenvals: np.ndarray,
-                                  verbose: bool = False) -> Tuple[float, float, float]:
-    """Estimate variance components using Haseman-Elston method
-    
-    Args:
-        y: Transformed phenotype vector
-        X: Transformed covariate matrix
-        eigenvals: Eigenvalues of kinship matrix
-        verbose: Print progress
-        
-    Returns:
-        Tuple (delta_hat, vg_hat, ve_hat) with delta = ve/vg
-    """
-    # HE method uses method of moments estimation
-    # This is a simplified implementation
     n = len(y)
+    r = 0  # Assuming no missing eigenvalues removed
+    p = X.shape[1]
     
-    # Simple moment-based estimation
+    # Apply eigenvalue floor like rMVP (1e-6) 
+    eig_safe = np.maximum(eigenvals, 1e-6)
+    
+    # Variance matrix in eigenspace: V₀ᵦ = h²σ + (1-h²)𝟙
+    V0b = h2 * eig_safe + (1.0 - h2) * np.ones_like(eig_safe)
+    V0bi = 1.0 / V0b
+    
+    # Check for numerical stability
+    if np.any(V0b <= 0):
+        return np.inf
+    
+    # Fixed effects computation
+    ViX = V0bi[:, np.newaxis] * X  # V⁻¹X
+    XViX = X.T @ ViX  # X'V⁻¹X
+    
     try:
-        # Remove mean effect
-        if X.shape[1] > 0:
-            beta = np.linalg.lstsq(X, y, rcond=None)[0]
-            residuals = y - X @ beta
-        else:
-            residuals = y - np.mean(y)
-        
-        var_y = np.var(residuals, ddof=1)
-        mean_eigenval = np.mean(eigenvals)
-        
-        # Simple moment-based estimator (placeholder)
-        delta = max(1e-6, 1.0)  # neutral default
-        
-    except:
-        delta = 1.0
+        XViX_inv = np.linalg.solve(XViX, np.eye(XViX.shape[0]))  # (X'V⁻¹X)⁻¹
+        log_det_XViX_inv = np.log(np.linalg.det(XViX_inv))  # log|(X'V⁻¹X)⁻¹|
+    except (np.linalg.LinAlgError, ValueError):
+        return np.inf
     
-    # Rough vg/ve estimates from residual variance
-    vg_hat = var_y if 'var_y' in locals() else 1.0
-    ve_hat = delta * vg_hat
-    return delta, vg_hat, ve_hat
+    # REML residuals: P₀y = V⁻¹y - V⁻¹X(X'V⁻¹X)⁻¹X'V⁻¹y
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        Viy = V0bi * y  # V⁻¹y
+        P0y = Viy - ViX @ (XViX_inv @ (ViX.T @ y))  # REML residuals
+    yP0y = np.dot(P0y, y)  # y'P₀y
+    
+    # Check for numerical issues
+    if yP0y <= 0:
+        return np.inf
+    
+    # REML likelihood components
+    log_V0b_sum = np.sum(np.log(V0b))  # sum(log(V₀ᵦ))
+    df = n - r - p  # Degrees of freedom
+    
+    # The NEGATIVE log-likelihood rMVP minimizes
+    # Formula: 0.5 * [sum(log(V₀ᵦ)) + log|(X'V⁻¹X)⁻¹| + (n-r-p)*log(y'P₀y) + (n-r-p)*(1-log(n-r-p))]
+    neg_loglik = 0.5 * (log_V0b_sum + log_det_XViX_inv + 
+                       df * np.log(yP0y) + df * (1.0 - np.log(df)))
+    
+    return neg_loglik
 
 
-def fit_single_marker_mlm(y: np.ndarray, 
-                         X: np.ndarray, 
-                         g: np.ndarray, 
-                         eigenvals: np.ndarray, 
-                         delta: float,
-                         vg: float) -> Tuple[float, float, float]:
-    """Legacy single marker fitting function (kept for backward compatibility)"""
+def _calculate_neg_ml_likelihood(h2: float, y: np.ndarray, X: np.ndarray, eigenvals: np.ndarray) -> float:
+    """Calculate ML NEGATIVE log-likelihood for a given heritability h2
     
-    # Use the optimized batch processing for single marker
-    G_batch = g.reshape(-1, 1)  # Single marker as batch
-    weights = 1.0 / (np.maximum(eigenvals, 1e-6) + delta)
-    
-    # Use optimized functions
-    batch_UXWUX, batch_UXWy, batch_UXWUs, batch_UsWUs, batch_UsWy = compute_batch_crossproducts_jit(
-        y, X, G_batch, weights
-    )
-    
+    This profiles out beta and sigma^2; constants cancel in LRT differences.
+    """
     n = len(y)
-    q0 = X.shape[1]
+    eig_safe = np.maximum(eigenvals, 1e-6)
     
-    effects, std_errors, t_stats, dfs = process_batch_effects_jit(
-        batch_UXWUX, batch_UXWy, batch_UXWUs, batch_UsWUs, batch_UsWy, vg, n, q0
-    )
+    V0b = h2 * eig_safe + (1.0 - h2) * np.ones_like(eig_safe)
+    V0bi = np.nan_to_num(1.0 / V0b, nan=np.inf, posinf=np.inf, neginf=np.inf)
     
-    pvalues = compute_fast_pvalues(t_stats, dfs)
+    if np.any(V0b <= 0) or not np.all(np.isfinite(V0bi)):
+        return np.inf
     
-    return float(effects[0]), float(std_errors[0]), float(pvalues[0])
+    ViX = V0bi[:, np.newaxis] * X
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        XViX = X.T @ ViX
+    
+    try:
+        XViX_inv = np.linalg.solve(XViX, np.eye(XViX.shape[0]))
+    except (np.linalg.LinAlgError, ValueError):
+        return np.inf
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        Viy = V0bi * y
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            P0y = Viy - ViX @ (XViX_inv @ (ViX.T @ y))
+    yP0y = np.dot(P0y, y)
+    
+    if yP0y <= 0:
+        return np.inf
+    
+    log_V0b_sum = np.sum(np.log(V0b))
+    neg_loglik = 0.5 * (log_V0b_sum + n * np.log(yP0y / max(1, n)))
+    
+    return neg_loglik
+
+
+def estimate_variance_components_emma(*args, **kwargs):
+    raise NotImplementedError("EMMA variance component estimation has been removed; use vc_method='BRENT'.")
+
+
+def estimate_variance_components_he(*args, **kwargs):
+    raise NotImplementedError("HE variance component estimation has been removed; use vc_method='BRENT'.")
