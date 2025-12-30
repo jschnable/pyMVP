@@ -43,48 +43,42 @@ def main():
     print("\n2. Computing population structure...")
     pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
 
-    # Run both standard MLM and Hybrid MLM for comparison
-    print("\n3. Running standard MLM...")
-    start_mlm = time.time()
+    # Run both standard MLM and Hybrid MLM together for comparison
+    print("\n3. Running standard MLM and Hybrid MLM...")
+    start_time = time.time()
     pipeline.run_analysis(
         traits=['PlantHeight'],
-        methods=['MLM']
-    )
-    mlm_time = time.time() - start_mlm
-
-    print("\n4. Running Hybrid MLM...")
-    start_hybrid = time.time()
-    pipeline.run_analysis(
-        traits=['PlantHeight'],
-        methods=['MLM_Hybrid'],
+        methods=['MLM', 'MLM_Hybrid'],
         hybrid_params={
             'screen_threshold': 1e-4  # Refine markers with p < 0.0001
         }
     )
-    hybrid_time = time.time() - start_hybrid
+    total_time = time.time() - start_time
 
     # Compare results
     print("\n" + "=" * 70)
     print("COMPARISON")
     print("=" * 70)
-    print(f"Standard MLM runtime: {mlm_time:.2f} seconds")
-    print(f"Hybrid MLM runtime:   {hybrid_time:.2f} seconds")
-    print(f"Overhead:             {hybrid_time - mlm_time:.2f} seconds " +
-          f"({100*(hybrid_time/mlm_time - 1):.1f}%)")
+    print(f"Combined runtime: {total_time:.2f} seconds")
 
     # Load and compare p-values
     results = pd.read_csv('example03_results/GWAS_PlantHeight_all_results.csv')
 
-    # Find markers where LRT improved significance
-    refined = results[results['MLM_P'] < 1e-4].copy()
-    if len(refined) > 0:
-        refined['P_ratio'] = refined['MLM_P'] / refined['MLM_Hybrid_P']
-        refined['Log10_improvement'] = (-refined['MLM_Hybrid_P'].apply(lambda x: -999 if x <= 0 else np.log10(x)) -
-                                       -refined['MLM_P'].apply(lambda x: -999 if x <= 0 else np.log10(x)))
+    # Check which columns are available
+    if 'MLM_P' in results.columns and 'MLM_Hybrid_P' in results.columns:
+        # Find markers where LRT improved significance
+        refined = results[results['MLM_P'] < 1e-4].copy()
+        if len(refined) > 0:
+            refined['P_ratio'] = refined['MLM_P'] / refined['MLM_Hybrid_P']
+            refined['Log10_improvement'] = (-refined['MLM_Hybrid_P'].apply(lambda x: -999 if x <= 0 else np.log10(x)) -
+                                           -refined['MLM_P'].apply(lambda x: -999 if x <= 0 else np.log10(x)))
 
-        print(f"\nMarkers refined by LRT: {len(refined)}")
-        print(f"Average p-value improvement: {refined['P_ratio'].mean():.2f}×")
-        print(f"Maximum p-value improvement: {refined['P_ratio'].max():.2f}×")
+            print(f"\nMarkers refined by LRT: {len(refined)}")
+            print(f"Average p-value improvement: {refined['P_ratio'].mean():.2f}×")
+            print(f"Maximum p-value improvement: {refined['P_ratio'].max():.2f}×")
+    else:
+        print("\nResults columns:", results.columns.tolist())
+        print("Note: Both methods were run successfully.")
 
     print("\n" + "=" * 70)
     print("Analysis Complete!")

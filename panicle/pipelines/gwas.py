@@ -798,7 +798,7 @@ class GWASPipeline:
                     if 'manhattan' in outputs: plot_types.append('manhattan')
                     if 'qq' in outputs: plot_types.append('qq')
                     
-                    report = MVP_Report(
+                    report = PANICLE_Report(
                         results=Res, map_data=self.geno_map,
                         output_prefix=str(self.output_dir / f"GWAS_{trait_name}_{method}"),
                         plot_types=plot_types,
