@@ -22,28 +22,17 @@ Welcome to the PANICLE documentation! This guide will help you perform genome-wi
   - Working with output in Python/R
 
 ### Tutorials & Examples
-- **[Example Scripts](../examples/README.md)** - Runnable example code
+- **[Sorghum GWAS Tutorial](sorghum_gwas_tutorial.ipynb)** - Interactive Jupyter notebook
+  - Complete GWAS workflow with real sorghum data (725 samples, 170K markers)
+  - Demonstrates GLM, MLM, FarmCPU, and BLINK methods
+  - Visualizations and result interpretation
+
+- **[Example Scripts](../examples/README.md)** - Runnable Python scripts
   - 01: Basic GWAS with GLM
   - 02: MLM with population structure
   - 03: Hybrid MLM for increased power
   - 04: Including covariates (flowering time example)
   - 05: Reading and analyzing results
-
-- **[Hybrid MLM Demo](hybrid_mlm_demo.ipynb)** - Interactive Jupyter notebook
-  - Complete walkthrough with real sorghum data
-  - Comparing Wald and LRT methods
-  - Visualizations and interpretation
-
-- **[Hybrid MLM Report](hybrid_mlm_report.pdf)** - PDF report example
-  - Professional results presentation
-  - Methods explanation
-  - Runtime comparisons
-
-### Advanced Topics
-- **[Hybrid MLM Walkthrough](hybrid_mlm_walkthrough.md)** - Deep dive into Hybrid MLM
-  - Algorithm details
-  - Implementation notes
-  - Verification results
 
 ## Quick Links
 
@@ -177,8 +166,8 @@ PANICLE: A Python package for efficient multivariate GWAS analysis
 
 ## See Also
 
-- [Hybrid MLM Demo README](README_hybrid_demo.md) - Hybrid MLM demonstration materials
-- [Algorithm Documentation](algorithms.md) - Algorithm details (if available)
-- GitHub Repository - Source code and issues
+- [Example Scripts](../examples/README.md) - Runnable example code with test data
+- [Main README](../README.md) - Project overview and algorithm descriptions
+- [GitHub Repository](https://github.com/jschnable/PANICLE) - Source code and issues
 
 ---

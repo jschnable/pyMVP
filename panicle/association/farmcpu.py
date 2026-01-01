@@ -220,7 +220,7 @@ def PANICLE_FarmCPU(phe: np.ndarray,
     if verbose:
         print("Current loop: 1 out of maximum of {0}".format(maxLoop))
         print("Step 1: Running initial GLM (candidate scan)...")
-    glm_results_initial = MVP_GLM(
+    glm_results_initial = PANICLE_GLM(
         phe=phe,
         geno=genotype,
         CV=current_covariates,
@@ -347,7 +347,7 @@ def PANICLE_FarmCPU(phe: np.ndarray,
 
         # Step 5: Re-scan all SNPs with updated covariates to refresh P for next loop
         # This mirrors rMVP's FarmCPU.LM step
-        rescan = MVP_GLM(
+        rescan = PANICLE_GLM(
             phe=phe,
             geno=genotype,
             CV=current_covariates,
@@ -403,7 +403,7 @@ def PANICLE_FarmCPU(phe: np.ndarray,
         print(f"Using {len(selected_qtns)} selected QTNs as covariates")
     
     # Run final GLM with selected QTNs as covariates to get GWAS results
-    final_results = MVP_GLM(
+    final_results = PANICLE_GLM(
         phe=phe,
         geno=genotype,
         CV=current_covariates,
@@ -465,8 +465,8 @@ def PANICLE_FarmCPU(phe: np.ndarray,
         print(f"Selected pseudo-QTNs: {selected_qtns}")
 
     # Expose latest selection for debugging/testing utilities
-    MVP_FarmCPU.last_selected_qtns = selected_qtns.copy()
-    MVP_FarmCPU.last_iteration_details = iteration_results
+    PANICLE_FarmCPU.last_selected_qtns = selected_qtns.copy()
+    PANICLE_FarmCPU.last_iteration_details = iteration_results
 
     return final_results
 

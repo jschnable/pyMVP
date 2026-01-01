@@ -276,11 +276,11 @@ pipeline.run_analysis(
 
 ## Next Steps
 
-- **See examples/**: More detailed example scripts
-- **See docs/api_reference.md**: Complete API documentation
-- **See docs/output_files.md**: Detailed output format specifications
-- **See docs/hybrid_mlm_walkthrough.md**: Learn about the Hybrid MLM method
-- **See docs/hybrid_mlm_demo.ipynb**: Interactive tutorial with real data
+- **Try the [Sorghum GWAS Tutorial](sorghum_gwas_tutorial.ipynb)**: Interactive Jupyter notebook with real data
+- **See [examples/](../examples/)**: More detailed example scripts with test data
+- **See [api_reference.md](api_reference.md)**: Complete API documentation
+- **See [output_files.md](output_files.md)**: Detailed output format specifications
+- **See [README.md](../README.md)**: Algorithm descriptions and benchmarks
 
 ## Getting Help
 

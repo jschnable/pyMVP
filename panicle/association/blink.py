@@ -80,8 +80,8 @@ def PANICLE_BLINK(
         qtn_threshold: Optional ceiling on pseudo QTN selection threshold (applied to iterations > 2)
         cut_off: Significance level used for Bonferroni/FDR thresholding in iteration 2
         fdr_cut: If True, use FDR-based cutoff for iteration 2 (matches GAPIT Blink)
-        maxLine: Batch size for MVP_GLM streaming
-        cpu: Number of CPU cores (forwarded to MVP_GLM)
+        maxLine: Batch size for PANICLE_GLM streaming
+        cpu: Number of CPU cores (forwarded to PANICLE_GLM)
         max_genotype_dosage: Maximum genotype dosage used when computing allele
             frequencies/MAF (default 2.0 for diploids)
         verbose: Print progress information
@@ -98,6 +98,7 @@ def PANICLE_BLINK(
         raise ValueError("BLINK currently requires complete trait observations")
 
     genotype_array, major_alleles = _ensure_numpy_genotype(geno)
+    geno_is_imputed = isinstance(geno, GenotypeMatrix) and geno.is_imputed
     n_individuals, n_markers_total = genotype_array.shape
 
     if trait_values.shape[0] != n_individuals:
@@ -119,6 +120,13 @@ def PANICLE_BLINK(
     major_filtered = (
         major_alleles[filtered_indices] if major_alleles is not None else None
     )
+    glm_geno: Union[GenotypeMatrix, np.ndarray] = geno_filtered
+    if geno_is_imputed:
+        glm_geno = GenotypeMatrix(
+            geno_filtered,
+            precompute_alleles=False,
+            is_imputed=True,
+        )
     map_filtered = map_df.loc[filtered_indices].reset_index(drop=True)
     chrom_values, pos_values = _precompute_map_coordinates(map_filtered)
     map_filtered_map = GenotypeMap(map_filtered)
@@ -266,9 +274,9 @@ def PANICLE_BLINK(
                 n_qtns = len(seq_qtns)
                 print(f"  Assembled covariates: {n_base} base + {n_qtns} QTNs = {current_covariates.shape[1] if current_covariates is not None else 0} total")
         
-        glm_results = MVP_GLM(
+        glm_results = PANICLE_GLM(
             phe=phe,
-            geno=geno_filtered,
+            geno=glm_geno,
             CV=current_covariates,
             maxLine=maxLine,
             cpu=cpu,
@@ -670,6 +678,7 @@ def _select_and_refine_qtns(
         base_covariates,
         bic_method=bic_method,
         fill_value=fill_value,
+        iteration=iteration,
         verbose=verbose,
     )
 
@@ -751,6 +760,7 @@ def _bic_model_selection(
     *,
     bic_method: str,
     fill_value: float,
+    iteration: Optional[int] = None,
     verbose: bool = False,
 ) -> Tuple[List[int], np.ndarray]:
     """
@@ -796,7 +806,13 @@ def _bic_model_selection(
                 print(f"    Skipping position {pos}: singular design matrix")
             continue
 
-        bic_val, stats_matrix = _compute_bic_statistics(design, trait_values)
+        bic_val, stats_matrix = _compute_bic_statistics(
+            design,
+            trait_values,
+            iteration=iteration,
+            pos=pos,
+            verbose=verbose,
+        )
         BICv[idx] = bic_val
 
         if stats_matrix.size:
@@ -998,16 +1014,83 @@ def _build_design_matrix(
     return X
 
 
-def _compute_bic_statistics(X: np.ndarray, y: np.ndarray) -> Tuple[float, np.ndarray]:
+def _compute_bic_statistics(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    iteration: Optional[int] = None,
+    pos: Optional[int] = None,
+    verbose: bool = False,
+) -> Tuple[float, np.ndarray]:
     n, k = X.shape
     XtX = X.T @ X
+    if verbose:
+        iter_label = f"{iteration}" if iteration is not None else "?"
+        pos_label = f", pos={pos}" if pos is not None else ""
+        cond_val = np.linalg.cond(XtX)
+        print(f"  Iteration {iter_label}{pos_label}: cond(XtX) = {cond_val:.2e}, X.shape = {X.shape}")
     try:
         XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
     except np.linalg.LinAlgError:
         return np.inf, np.array([])
 
     beta = XtX_inv @ (X.T @ y)
-    residuals = y - X @ beta
+    # NOTE: Some Accelerate builds (NumPy 2.0 arm64) raise spurious FPE flags on matmul.
+    # Compute under a local errstate and validate the result instead of crashing.
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        Xbeta = X @ beta
+    if verbose:
+        print(
+            "  X: shape={shape}, min={min:.2e}, max={max:.2e}".format(
+                shape=X.shape,
+                min=np.min(X),
+                max=np.max(X),
+            )
+        )
+        if X.size > 0:
+            last_col = X[:, -1]
+            unique_vals = np.unique(last_col)
+            if unique_vals.size <= 10:
+                uniq_repr = np.array2string(unique_vals, precision=3, separator=", ")
+            else:
+                uniq_repr = f"{unique_vals.size} unique"
+            print(
+                "  X[:,-1]: min={min:.2e}, max={max:.2e}, mean={mean:.2e}, std={std:.2e}, uniq={uniq}".format(
+                    min=np.min(last_col),
+                    max=np.max(last_col),
+                    mean=np.mean(last_col),
+                    std=np.std(last_col),
+                    uniq=uniq_repr,
+                )
+            )
+        print(
+            "  y: shape={shape}, min={min:.2e}, max={max:.2e}".format(
+                shape=y.shape,
+                min=np.min(y),
+                max=np.max(y),
+            )
+        )
+        print(
+            "  beta: shape={shape}, min={min:.2e}, max={max:.2e}".format(
+                shape=beta.shape,
+                min=np.min(beta),
+                max=np.max(beta),
+            )
+        )
+        print(
+            "  X @ beta: min={min:.2e}, max={max:.2e}".format(
+                min=np.min(Xbeta),
+                max=np.max(Xbeta),
+            )
+        )
+        residuals_preview = y - Xbeta
+        print(
+            "  residuals would be: min={min:.2e}, max={max:.2e}".format(
+                min=np.min(residuals_preview),
+                max=np.max(residuals_preview),
+            )
+        )
+    residuals = y - Xbeta
     df = n - k
     if df <= 0:
         return np.inf, np.array([])
@@ -1146,7 +1229,6 @@ def _apply_substitution(
     initial_pvalues: Optional[np.ndarray],
 ) -> None:
     if not qtn_history:
-        print("    DEBUG substitution: No QTN history to process")
         return
     method = method_sub.lower()
     if method not in {"onsite", "reward", "penalty", "mean", "median"}:
@@ -1155,9 +1237,7 @@ def _apply_substitution(
 
     total_qtns = sum(len(history) for history in qtn_history.values())
     if total_qtns == 0:
-        print("    DEBUG substitution: History contains no entries")
         return
-    print(f"    DEBUG substitution: Processing {total_qtns} history entries with method '{method}'")
 
     for marker_idx, history in qtn_history.items():
         if not history:

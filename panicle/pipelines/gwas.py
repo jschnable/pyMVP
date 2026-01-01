@@ -434,8 +434,7 @@ class GWASPipeline:
 
         # Update Pipeline State
         self.phenotype_df = matched_phenotype
-        matched_genotype_data = self.genotype_matrix[matched_indices, :]
-        self.genotype_matrix = GenotypeMatrix(matched_genotype_data)
+        self.genotype_matrix = self.genotype_matrix.subset_individuals(matched_indices)
         
         self.log(f"   Original phenotypes: {summary['n_phenotype_original']}")
         self.log(f"   Original genotypes: {summary['n_genotype_original']}")
@@ -727,14 +726,14 @@ class GWASPipeline:
         # Let's fix y_final to match expectation: [ID, Value]
         # Using simple numeric IDs 0..N-1 is safest for internal matrix math unless IDs are used for output
         y_final[:, 0] = np.arange(mask.sum())
-        
-        g_final = self.genotype_matrix[mask, :]
-        
+
+        idx = np.where(mask)[0]
+        g_final = self.genotype_matrix.subset_individuals(idx)
+
         cov_final = full_cov[mask, :] if full_cov is not None else None
         
         k_final = None
         if self.kinship is not None:
-             idx = np.where(mask)[0]
              k_final = self.kinship[np.ix_(idx, idx)]
              
         return y_final, g_final, cov_final, k_final

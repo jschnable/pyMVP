@@ -285,17 +285,17 @@ results = PANICLE_MLM(
 
 ### `PANICLE_MLM_Hybrid()`
 
-Hybrid MLM: Wald test screening + LRT refinement for top hits.
+Hybrid MLM: LOCO Wald test screening + LRT refinement for top hits.
 
 ```python
 from panicle.association.hybrid_mlm import PANICLE_MLM_Hybrid
 
 results = PANICLE_MLM_Hybrid(
-    phe,
-    geno,
-    K,
-    eigenK=None,
-    CV=None,
+    phe,                    # Phenotype array (n × 2)
+    geno,                   # Genotype matrix (n × m)
+    map_data,               # Genetic map (required for LOCO)
+    loco_kinship=None,      # Pre-computed LOCO kinship (optional)
+    CV=None,                # Covariates (n × p)
     screen_threshold=1e-4,  # P-value cutoff for LRT refinement
     maxLine=1000,
     cpu=1,
@@ -304,6 +304,10 @@ results = PANICLE_MLM_Hybrid(
 ```
 
 **Returns:** `AssociationResults` with LRT-refined p-values for markers passing screen
+
+**Notes:**
+- Requires `map_data` with chromosome information for LOCO kinship
+- If `loco_kinship` is not provided, it will be computed automatically
 
 ---
 
@@ -315,12 +319,18 @@ Fixed and random model Circulating Probability Unification.
 from panicle.association.farmcpu import PANICLE_FarmCPU
 
 results = PANICLE_FarmCPU(
-    phe,
-    geno,
-    map_data,      # Genetic map (SNP, Chr, Pos)
-    CV=None,
-    maxLoop=10,    # Maximum iterations
-    method='FaST-LMM',
+    phe,                    # Phenotype array (n × 2)
+    geno,                   # Genotype matrix (n × m)
+    map_data,               # Genetic map (SNP, Chr, Pos)
+    CV=None,                # Covariates (n × p)
+    maxLoop=10,             # Maximum iterations
+    p_threshold=0.05,       # P-value threshold for QTN selection
+    QTN_threshold=0.01,     # Threshold for QTN optimization
+    bin_size=None,          # Bin sizes for multi-scale binning (default: [5e5, 5e6, 5e7])
+    method_bin='static',    # Binning method
+    maxLine=5000,           # Batch size
+    cpu=1,                  # Number of CPU cores
+    reward_method='min',    # Substitution method for pseudo-QTNs
     verbose=True
 )
 ```
@@ -337,11 +347,16 @@ Bayesian-information and Linkage-disequilibrium Iteratively Nested Keyway.
 from panicle.association.blink import PANICLE_BLINK
 
 results = PANICLE_BLINK(
-    phe,
-    geno,
-    map_data,
-    CV=None,
-    maxLoop=10,
+    phe,                    # Phenotype array (n × 2)
+    geno,                   # Genotype matrix (n × m)
+    map_data,               # Genetic map (SNP, Chr, Pos)
+    CV=None,                # Covariates (n × p)
+    maxLoop=10,             # Maximum iterations
+    converge=1.0,           # Jaccard similarity threshold for convergence
+    ld_threshold=0.7,       # LD threshold for pruning
+    bic_method='naive',     # BIC evaluation strategy
+    method_sub='reward',    # Substitution method for pseudo-QTNs
+    p_threshold=None,       # P-value threshold (auto-calculated if None)
     verbose=True
 )
 ```
@@ -383,6 +398,18 @@ geno_matrix, individual_ids, geno_map = load_genotype_file(
 ```
 
 **Returns:** Tuple of (GenotypeMatrix, list of IDs, GenotypeMap)
+
+Best practice when aligning samples manually:
+
+```python
+from panicle.data.loaders import match_individuals
+
+aligned_pheno, _, sample_indices, _ = match_individuals(
+    phenotype_df=phenotype_df,
+    individual_ids=individual_ids
+)
+geno_matrix = geno_matrix.subset_individuals(sample_indices)
+```
 
 ---
 
@@ -496,6 +523,7 @@ print(results.effects)
 Wrapper around genotype data (usually memory-mapped):
 
 ```python
+import numpy as np
 from panicle.utils.data_types import GenotypeMatrix
 
 geno = GenotypeMatrix(data_array)
@@ -504,8 +532,14 @@ geno = GenotypeMatrix(data_array)
 geno.n_individuals  # Number of samples
 geno.n_markers      # Number of markers
 
-# Indexing
+# Indexing (returns a numpy array)
 subset = geno[0:10, :]  # First 10 individuals, all markers
+
+# Best practice: keep GenotypeMatrix when subsetting individuals
+subset_geno = geno.subset_individuals(range(10))
+
+# Fetch non-contiguous markers with imputation handled
+marker_block = geno.get_columns_imputed([0, 10, 20], dtype=np.float32)
 ```
 
 ---
@@ -549,4 +583,4 @@ sig_indices = results.pvalues < 0.05/len(results.pvalues)
 - [Quick Start Guide](quickstart.md)
 - [Output File Formats](output_files.md)
 - [Examples](../examples/)
-- [Hybrid MLM Tutorial](hybrid_mlm_demo.ipynb)
+- [Main README](../README.md) - Algorithm descriptions and benchmarks

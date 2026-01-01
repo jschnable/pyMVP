@@ -32,7 +32,8 @@ from panicle.utils.data_types import GenotypeMatrix, AssociationResults
 
 
 def _impute_numpy_batch_major_allele(batch: np.ndarray,
-                                     fill_value: Optional[float] = None) -> np.ndarray:
+                                     fill_value: Optional[float] = None,
+                                     dtype: np.dtype = np.float64) -> np.ndarray:
     """Impute -9/NaN values for a numpy genotype batch.
 
     Args:
@@ -40,24 +41,26 @@ def _impute_numpy_batch_major_allele(batch: np.ndarray,
         fill_value: Optional constant used to replace missing values. When
             provided, this overrides the major-allele strategy used by rMVP
             for backwards compatibility with legacy FarmCPU behaviour.
+        dtype: Output dtype for the returned array.
     """
-    G = batch.astype(np.float64, copy=True)
+    out_dtype = np.dtype(dtype)
+    G = np.array(batch, dtype=out_dtype, copy=True)
     missing = (G == -9) | np.isnan(G)
     if not missing.any():
         return G
 
     if fill_value is not None:
-        G[missing] = float(fill_value)
+        G[missing] = out_dtype.type(fill_value)
         return G
 
     # Default behaviour: impute with per-SNP major allele (matches rMVP C++ helpers)
     with np.errstate(invalid="ignore"):
-        c0 = np.nansum((G == 0).astype(np.float64), axis=0)
-        c1 = np.nansum((G == 1).astype(np.float64), axis=0)
-        c2 = np.nansum((G == 2).astype(np.float64), axis=0)
+        c0 = np.sum(G == 0, axis=0, dtype=np.int32)
+        c1 = np.sum(G == 1, axis=0, dtype=np.int32)
+        c2 = np.sum(G == 2, axis=0, dtype=np.int32)
     counts = np.stack([c0, c1, c2], axis=0)
     maj_idx = np.argmax(counts, axis=0)
-    maj_vals = maj_idx.astype(np.float64)
+    maj_vals = maj_idx.astype(out_dtype)
 
     # Columns containing unexpected genotype codes fallback to unique counts
     valid_set_mask = (G == 0) | (G == 1) | (G == 2) | missing
@@ -72,8 +75,8 @@ def _impute_numpy_batch_major_allele(batch: np.ndarray,
                 vals, cnts = np.unique(non_missing, return_counts=True)
                 maj = vals[int(np.argmax(cnts))]
             else:
-                maj = 0.0
-            maj_vals[j] = float(maj)
+                maj = out_dtype.type(0.0)
+            maj_vals[j] = out_dtype.type(maj)
 
     G[missing] = np.broadcast_to(maj_vals, G.shape)[missing]
     return G
@@ -108,7 +111,7 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
     # Extract phenotype vector y
     if not isinstance(phe, np.ndarray) or phe.shape[1] != 2:
         raise ValueError("Phenotype must be numpy array with 2 columns [ID, trait_value]")
-    y = phe[:, 1].astype(np.float64)
+    y = phe[:, 1].astype(np.float32)
 
     # Dimensions and genotype accessor
     if isinstance(geno, GenotypeMatrix):
@@ -124,24 +127,32 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
     if CV is not None:
         if CV.shape[0] != n:
             raise ValueError("Covariate matrix must have same number of rows as phenotypes")
-        X = np.column_stack([np.ones(n), CV])
+        CV_f32 = np.asarray(CV, dtype=np.float32)
+        X = np.column_stack([np.ones(n, dtype=np.float32), CV_f32])
     else:
-        X = np.ones((n, 1))
+        X = np.ones((n, 1), dtype=np.float32)
 
-    X = np.asfortranarray(X, dtype=np.float64)
+    X = np.ascontiguousarray(X, dtype=np.float32)
+    XT = X.T
 
     # Suppress warnings for expected numerical issues in initial covariate setup
     # These are properly handled by try-except and validity checks
     with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-        XtX = X.T @ X
+        XtX = XT @ X
         try:
             iXX = np.linalg.inv(XtX)
         except np.linalg.LinAlgError:
             iXX = np.linalg.pinv(XtX, rcond=1e-10)
-        xy = X.T @ y
+        xy = XT @ y
         beta_cov = iXX @ xy
         yy = float(y @ y)
     p = X.shape[1]
+    iXX = iXX.astype(np.float32, copy=False)
+    xy = xy.astype(np.float32, copy=False)
+    beta_cov = beta_cov.astype(np.float32, copy=False)
+    xy_f64 = xy.astype(np.float64, copy=False)
+    beta_cov_f64 = beta_cov.astype(np.float64, copy=False)
+    yy_f64 = float(yy)
 
     df_full = int(n - p - 1)
     df_reduced = int(n - p)
@@ -156,21 +167,45 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
     for start in range(0, m, batch_size):
         end = min(start + batch_size, m)
         if use_gm:
-            G = geno.get_batch_imputed(start, end, fill_value=missing_fill_value)
+            if geno.is_imputed:
+                # Fast path for pre-imputed caches: skip missing checks entirely.
+                G = geno.get_batch_imputed(
+                    start,
+                    end,
+                    fill_value=None,
+                    dtype=np.float32,
+                )
+            else:
+                G = geno.get_batch_imputed(
+                    start,
+                    end,
+                    fill_value=missing_fill_value,
+                    dtype=np.float32,
+                )
         else:
-            G = _impute_numpy_batch_major_allele(geno[:, start:end], fill_value=missing_fill_value)
+            G = _impute_numpy_batch_major_allele(
+                geno[:, start:end],
+                fill_value=missing_fill_value,
+                dtype=np.float32,
+            )
 
         # Suppress warnings for expected numerical issues in matrix operations
         # These are properly handled by validity checks below
         with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            xs = X.T @ G                      # shape (p, b)
+            xs = XT @ G                       # shape (p, b)
+            xst = xs.T                        # shape (b, p)
             sy = G.T @ y                      # shape (b,)
             ss = np.sum(G * G, axis=0)        # shape (b,)
 
-            B21 = xs.T @ iXX                  # shape (b, p)
-            tmp = sy - (xs.T @ beta_cov)      # shape (b,)
-            t2 = np.einsum('ij,ij->i', B21, xs.T)
+            B21 = xst @ iXX                   # shape (b, p)
+            tmp = sy - (xst @ beta_cov)       # shape (b,)
+            t2 = np.einsum('ij,ij->i', B21, xst)
             B22 = ss - t2
+
+        B21 = B21.astype(np.float64)
+        tmp = tmp.astype(np.float64)
+        B22 = B22.astype(np.float64)
+        sy = sy.astype(np.float64)
 
         valid = B22 > 1e-8
         invB22 = np.zeros_like(B22)
@@ -179,12 +214,12 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         beta_marker = invB22 * tmp
 
         with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            beta_cov_new = beta_cov[np.newaxis, :] - (beta_marker[:, np.newaxis] * B21)
-            rhs_cov = beta_cov_new @ xy
+            beta_cov_new = beta_cov_f64[np.newaxis, :] - (beta_marker[:, np.newaxis] * B21)
+            rhs_cov = beta_cov_new @ xy_f64
         df_array = np.full_like(B22, df_full, dtype=float)
         df_array[~valid] = df_reduced
 
-        ve = (yy - (rhs_cov + beta_marker * sy)) / df_array
+        ve = (yy_f64 - (rhs_cov + beta_marker * sy)) / df_array
         ve = np.maximum(ve, 0.0)
         se_marker = np.sqrt(ve * invB22)
 

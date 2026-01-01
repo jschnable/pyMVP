@@ -3,23 +3,17 @@
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-PANICLE is a high-performance **Python package for Genome Wide Association Studies (GWAS)**. It implements **GLM** (General Linear Model), **MLM** (Mixed Linear Model, with optional LOCO), **Hybrid MLM** (Wald screen + LRT refinement), **FarmCPU**, **BLINK**, and **FarmCPU Resampling (RMIP)**, optimized for speed and huge datasets.
-
-It features a **vectorized VCF loader**, **automatic binary caching**, **parallel execution**, and **decimated plotting**, making it significantly faster than unoptimized implementations while maintaining the flexibility of Python.
+PANICLE is a **Python package for Genome Wide Association Studies (GWAS)**. It implements GLM, MLM, FarmCPU, and BLINK. PANICLE seeks to achieve speeds comparable or better to other implementations while supporting multiple input data formats, providing multiple quality of life features (native effect marker number testing, leave one chromosome out MLM, calculation of resampling model inclusion probabilities, etc), and allowing modern GWAS algorithms to be natively integrated into python-based analysis and data analysis pipelines and ecosystems.
 
 ## Key Features
 
-*   **Algorithms**: GLM, MLM (LOCO when a map is available), Hybrid MLM (`MLM_Hybrid`), FarmCPU, BLINK, FarmCPUResampling (RMIP).
-    * **LOCO** (Leave-One-Chromosome-Out) builds the kinship matrix while excluding the current chromosome to reduce proximal contamination.
-*   **High Performance**:
-    *   **Vectorized Loading**: `cyvcf2` + NumPy optimization (~26x faster VCF loading).
-    *   **Binary Caching**: First run caches genotypes; subsequent runs load instantly (~1.5s).
-    *   **Parallel Processing**: Concurrent execution of GWAS methods across traits.
+*   **Multiple Algorithms**: GLM, MLM, FarmCPU, BLINK
+*   **Optmizied Performance**:
+    *   **Vectorized Loading**: Optional optimized loading via `cyvcf2` (~26x faster VCF loading).
+    *   **Binary Caching**: Option to cache genotype data in binary during an initial run, speeds future runs dramatically.
     *   **Decimated Plotting**: Fast Manhattan plots via smart point downsampling.
-*   **Data Support**: VCF/BCF, PLINK, HapMap, CSV/TSV.
-*   **Automatic Population Structure**: Step-wise PCA and Kinship matrix calculation (VanRaden).
-*   **Robustness**: Graceful handling of missing data and numerical instability.
-*   **Hybrid MLM**: Two-stage Wald screen + LRT refinement for top hits.
+*   **Supported Genotype Formats**: VCF/BCF, PLINK, HapMap, CSV/TSV.
+*   **Robustness**: Graceful handling of missing data.
 
 ## Installation
 
@@ -36,9 +30,26 @@ pip install -e .
 pip install -e .[all]
 ```
 
+### Dependencies
+
+**Core dependencies** (installed automatically):
+- `numpy` ≥1.19.0
+- `scipy` ≥1.6.0
+- `pandas` ≥1.2.0
+- `numba` ≥0.50.0 (JIT compilation for performance)
+- `scikit-learn` ≥0.24.0 (includes joblib for parallel processing)
+- `matplotlib` ≥3.3.0, `seaborn` ≥0.11.0 (plotting)
+- `statsmodels` ≥0.12.0
+- `h5py` ≥3.0.0, `tables` ≥3.6.0 (HDF5 support)
+- `tqdm` ≥4.60.0 (progress bars)
+
+**Optional dependencies**:
+- `cyvcf2` ≥0.30.0 — Fast VCF/BCF parsing (~26x faster than pure Python)
+- `bed-reader` ≥1.0.0 — PLINK .bed/.bim/.fam format support
+
 ## CLI Usage (Quick Start)
 
-The `run_GWAS.py` script provides a powerful command-line interface for batch processing.
+The `run_GWAS.py` script provides a command-line interface for batch processing.
 
 ```bash
 python scripts/run_GWAS.py \
@@ -52,7 +63,7 @@ python scripts/run_GWAS.py \
   --output ./results
 ```
 
-### Important Parameters
+### Parameters
 
 | Argument | Description | Default |
 | :--- | :--- | :--- |
@@ -82,7 +93,7 @@ Other useful filters:
 
 ## Python API Usage
 
-The recommended way to integrate PANICLE into your scripts or Jupyter Notebooks is via the `GWASPipeline` class.
+Integrate PANICLE into scripts or Jupyter Notebooks is via the `GWASPipeline` class.
 
 ```python
 from panicle.pipelines.gwas import GWASPipeline
@@ -118,35 +129,154 @@ CSV or TSV files with an **ID column** (e.g., `ID`, `Taxa`, `Sample`) and numeri
 
 ### Genotype
 *   **VCF/BCF**: `.vcf`, `.vcf.gz`, `.bcf` (Preferred for performance).
-*   **CSV/TSV**: Numeric matrix (rows=samples, cols=markers).
+*   **CSV/TSV**: Numeric matrix (rows=samples, cols=markers) + genetic map file with `SNP`, `CHROM`, and `POS` columns (case-insensitive aliases like `Chr`, `Pos` are accepted).
 *   **PLINK**: `.bed` + `.bim` + `.fam`.
 *   **HapMap**: `.hmp.txt`.
 
-### Genetic Map (Optional but recommended)
-CSV/TSV with `SNP`, `CHROM`, and `POS` columns (case-insensitive aliases like `Chr`, `Pos` are accepted).
-Recommended for numeric genotype matrices and for LOCO-based methods like `MLM_Hybrid`.
+## Tips
 
-## Performance Tips
+1.  **Effective Tests**: Use `--compute-effective-tests` to calculate a less stringent, more accurate Bonferroni threshold based on marker linkage (`Me`).
+2.  **Parallelism**: By default, methods run in parallel. Ensure you have enough RAM for the number of concurrent processes (Dataset size × Threads).
+3.  **Genotype Subsetting**: If you align or filter samples manually, use `GenotypeMatrix.subset_individuals(...)` to preserve pre-imputed fast paths.
 
-1.  **First Run**: The first run on a large VCF takes longer (to parse and cache). **Subsequent runs** will use the `.npy` sidecar cache automatically and be extremely fast.
-2.  **Effective Tests**: Use `--compute-effective-tests` to calculate a less stringent, more accurate Bonferroni threshold based on marker linkage (`Me`).
-3.  **Parallelism**: By default, methods run in parallel. Ensure you have enough RAM for the number of concurrent processes (Dataset size × Threads).
+## Documentation & Examples
+
+### Documentation
+
+Detailed documentation is available in the [`docs/`](docs/) directory:
+
+- **[Quick Start Guide](docs/quickstart.md)** - Get up and running in 5 minutes
+- **[API Reference](docs/api_reference.md)** - Complete API documentation for all functions and classes
+- **[Output Files](docs/output_files.md)** - Understanding result file formats and columns
+
+### Interactive Tutorial
+
+- **[Sorghum GWAS Tutorial](docs/sorghum_gwas_tutorial.ipynb)** - Jupyter notebook with complete GWAS workflow using real sorghum data (725 samples, 170K markers)
+
+### Example Scripts
+
+The [`examples/`](examples/) directory contains runnable example scripts with included test data:
+
+| Example | Description |
+|---------|-------------|
+| [01_basic_gwas.py](examples/01_basic_gwas.py) | Simplest GWAS with GLM |
+| [02_mlm_with_structure.py](examples/02_mlm_with_structure.py) | MLM with population structure correction |
+| [03_hybrid_mlm.py](examples/03_hybrid_mlm.py) | Hybrid MLM (Wald + LRT) for accurate p-values |
+| [04_with_covariates.py](examples/04_with_covariates.py) | Including external covariates |
+| [05_reading_results.py](examples/05_reading_results.py) | Analyzing and visualizing results |
+
+Run any example:
+```bash
+cd examples
+python 01_basic_gwas.py
+```
+
+## Algorithms
+
+### GLM
+
+General Linear Model for fast single-marker association testing. Uses the Frisch-Waugh-Lovell (FWL) theorem combined with QR decomposition for computational efficiency. The algorithm residualizes the phenotype and genotypes against the covariate matrix (PCs + intercept), then computes per-marker regression statistics in vectorized batches. Missing genotypes are imputed to the per-SNP major allele, matching rMVP behavior. GLM is the fastest method and serves as the workhorse for initial genome scans in both FarmCPU and BLINK.
+
+### MLM
+
+Mixed Linear Model accounting for population structure and cryptic relatedness via a kinship matrix. The model is: y = Xβ + gα + u + e, where u ~ N(0, σ²_g K) captures polygenic effects.
+
+**Key design decisions:**
+- **LOCO by default**: Leave-One-Chromosome-Out kinship avoids proximal contamination (testing a marker against a kinship matrix that includes that marker), increasing power to detect true associations.
+- **Eigenspace transformation**: Data is transformed via eigendecomposition of the kinship matrix, converting the correlated mixed model into an equivalent weighted least squares problem.
+- **REML variance components**: Heritability (h²) is estimated using Brent's method optimization of the REML likelihood, matching rMVP's approach.
+- **Wald test**: Uses fast Wald statistics by default. For markers near significance thresholds, consider MLM_Hybrid for more accurate p-values.
+- **Performance optimizations**: Numba JIT compilation for critical numerical operations; optional multi-core parallel batch processing via joblib.
+
+**MLM_Hybrid** extends MLM with a two-phase approach: (1) fast Wald screening of all markers, (2) Likelihood Ratio Test (LRT) refinement for markers passing a screening threshold (default p < 1e-4). LRT re-estimates variance components per marker and provides more accurate p-values near genome-wide significance thresholds.
+
+### FarmCPU
+
+Fixed and random model Circulating Probability Unification. FarmCPU iteratively alternates between a fixed-effect model (GLM) and random-effect model to identify associated markers while controlling for polygenic background.
+
+**Algorithm:**
+1. **Initial GLM scan**: Test all markers; identify candidates below threshold
+2. **Multi-scale binning**: Select representative QTNs using static binning at three scales (500KB, 5MB, 50MB) to capture associations at different LD extents
+3. **LD pruning**: Remove redundant QTNs with high correlation (r > 0.7) within chromosomes
+4. **Covariate updating**: Add selected pseudo-QTNs as fixed-effect covariates
+5. **Iterate**: Re-scan all markers with updated model; repeat until QTN set converges
+
+**Key design decisions:**
+- **Bound on QTN count**: Maximum pseudo-QTNs per iteration is √n / √log₁₀(n), preventing model overfitting
+- **Reward substitution**: Final p-values for pseudo-QTNs use the minimum p-value observed across all iterations (more conservative than single-iteration estimates)
+- **rMVP compatibility**: Binning, thresholding, and early-stop logic match rMVP for reproducibility
+
+FarmCPU Citation: Liu, X., Huang, M., Fan, B., Buckler, E. S., & Zhang, Z. (2016). Iterative usage of fixed and random effect models for powerful and efficient genome-wide association studies. _PLoS genetics_, _12_(2), e1005767.
+
+### BLINK
+
+Bayesian-information and Linkage-disequilibrium Iteratively Nested Keyway. BLINK builds on FarmCPU's iterative framework but uses BIC-based model selection to optimize the pseudo-QTN set.
+
+**Algorithm:**
+1. **GLM scan**: Identify candidate markers below a significance threshold
+2. **LD pruning**: Block-based LD removal (mirrors GAPIT's Blink.LDRemoveBlock)
+3. **BIC model selection**: Evaluate nested models with increasing numbers of QTNs; select the model minimizing BIC
+4. **Covariate updating**: Include BIC-selected QTNs as covariates
+5. **Iterate**: Repeat until Jaccard similarity between consecutive QTN sets exceeds convergence threshold (default 1.0 = identical sets)
+
+**Key design decisions:**
+- **BIC strategies**: Multiple evaluation schemes (naive, even, lg, ln, fixed) control the positions tested during forward selection, trading thoroughness for speed
+- **FDR option**: Iteration-2 threshold can use FDR-based cutoff instead of Bonferroni
+- **Union preservation**: QTNs from previous iterations are preserved through the union step, ensuring stability across iterations
+- **Substitution methods**: Final pseudo-QTN statistics can use reward (min p), penalty (max p), mean, median, or onsite strategies
+
+Blink Citation: Huang, M., Liu, X., Zhou, Y., Summers, R. M., & Zhang, Z. (2019). BLINK: a package for the next level of genome-wide association studies with both individuals and markers in the millions. _Gigascience_, _8_(2), giy154.
+
+### Effective Marker Number Estimates
+
+A python based implementation of the effective marker number estimation method implemented in GEC. Accounts for linkage disequilibrium between markers to provide a less conservative multiple testing correction than standard Bonferroni.
+
+GEC citation: Li MX, Yeung JM, Cherny SS, Sham PC. Evaluating the effective numbers of independent tests and significant p-value thresholds in commercial genotyping arrays and public imputation reference datasets. Hum Genet. 2012 May;131(5):747-56.
 
 ## Benchmarks
 
-Average wall-clock time (1,000 samples, 250,000 markers, M3 Pro CPU):
+Benchmarks run on sorghum diversity panel data (862 samples, 5,751,024 markers) on Apple M3 Pro.
 
-| Method  | PANICLE | rMVP (R) |
-|---------|---------|----------|
-| GLM     | 0.6s    | 4.5s     |
-| MLM     | 7.8s    | 21.9s    |
-| FarmCPU | 8.9s    | 20.5s    |
+### Data Loading
 
-*Note: PANICLE's optimized implementation is typically 2-4x faster than rMVP.*
+Data loading is shared across all algorithms (cached VCF, large dataset):
+
+| Step                | Time    |
+|---------------------|---------|
+| Genotype loading    | 1.42s   |
+| Phenotype loading   | 0.005s  |
+| Sample alignment    | 8.42s   |
+| PCA (3 components)  | 1.47s   |
+| **Total**           | **11.31s**|
+
+*Note: First run includes VCF parsing; subsequent runs use binary cache.*
+
+### Analysis Times
+
+Time to run each algorithm (excludes data loading and result writing):
+
+| Method      | Time    | Notes                              |
+|-------------|---------|------------------------------------|
+| GLM         | 5.77s   | ~997K markers/second (5M markers)  |
+| MLM (LOCO)  | 20.63s  | + 13.34s kinship computation       |
+| MLM_Hybrid  | 22.82s  | + 13.34s kinship computation       |
+| FarmCPU     | 83.63s  | 10 max iterations                  |
+| BLINK       | 54.64s  | 10 max iterations                  |
+
+### Scaling by Marker Count
+
+Performance scaling with 862 samples at varying marker densities (SAP large dataset).
+Timings include cached data loading, sample alignment, PCA, and (for MLM/MLM_Hybrid) LOCO kinship.
+
+| Markers    | GLM     | MLM     | MLM_Hybrid | FarmCPU  | BLINK   |
+|------------|---------|---------|------------|----------|---------|
+| 50,000     | 11.50s  | 12.13s  | 11.75s     | 12.15s   | 11.83s  |
+| 500,000    | 11.98s  | 14.36s  | 14.08s     | 18.44s   | 15.16s  |
+| 5,000,000  | 18.31s  | 41.68s  | 43.42s     | 86.34s   | 54.50s  |
 
 ## License
 
 Distributed under the MIT license. See [LICENSE](LICENSE).
 
 ---
-**Disclaimer:** This is an independent Python implementation inspired by [rMVP](https://github.com/xiaolei-lab/rMVP) and [BLINK](https://doi.org/10.1093/gigascience/giy154).
+**Disclaimer:** This is an independent Python implementation of algorithms drawn from [rMVP](https://github.com/xiaolei-lab/rMVP) and [BLINK](https://doi.org/10.1093/gigascience/giy154). Any errors are mine alone.

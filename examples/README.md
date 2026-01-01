@@ -159,7 +159,7 @@ pipeline.run_analysis(
 - Read the [Quick Start Guide](../docs/quickstart.md)
 - See [API Reference](../docs/api_reference.md) for detailed documentation
 - Check [Output Files](../docs/output_files.md) for file format specifications
-- Try the interactive [Jupyter notebook](../docs/hybrid_mlm_demo.ipynb)
+- See the [Main README](../README.md) for algorithm descriptions and benchmarks
 
 ## Getting Help
 

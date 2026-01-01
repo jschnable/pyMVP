@@ -332,10 +332,11 @@ def load_genotype_vcf(
 
     # Backend selection: prefer builtin for VCF text, require cyvcf2 for BCF.
     # --- CACHING LOGIC START ---
+    # Cache version 2: pre-imputes missing values (-9) at cache time for faster downstream
     cache_base = str(vcf_path)
-    cache_geno = cache_base + '.panicle.geno.npy'
-    cache_ind = cache_base + '.panicle.ind.txt'
-    cache_map = cache_base + '.panicle.map.csv'
+    cache_geno = cache_base + '.panicle.v2.geno.npy'
+    cache_ind = cache_base + '.panicle.v2.ind.txt'
+    cache_map = cache_base + '.panicle.v2.map.csv'
     
     # Check if cache exists and is fresh
     try:
@@ -360,13 +361,11 @@ def load_genotype_vcf(
                     
                 # Load Map
                 geno_map = pd.read_csv(cache_map)
-                
-                # Return compatible types
-                if hasattr(geno_matrix, 'files'): # .npz? no, .npy
-                    pass
-                
+
+                # Mark that this data is from v2 cache (pre-imputed, no -9 values)
+                geno_map.attrs['is_imputed'] = True
+
                 # If memmapped, we return it as is. GenotypeMatrix handles it.
-                # However, this function is supposed to return np.ndarray.
                 return geno_matrix, individual_ids, geno_map
     except Exception as e:
         print(f"   [Cache] Failed to load cache: {e}")
@@ -835,8 +834,33 @@ def load_genotype_vcf(
 
     # --- CACHING LOGIC SAVE START ---
     try:
+        # Impute missing values (-9) before caching
+        # This avoids repeated -9 checks in downstream kinship/MLM code
+        missing_mask = (geno == MISSING)
+        n_missing = missing_mask.sum()
+        if n_missing > 0:
+            print(f"   [Cache] Imputing {n_missing:,} missing values ({100*n_missing/geno.size:.2f}%)...")
+            # Vectorized major allele computation per marker
+            n_individuals, n_markers = geno.shape
+
+            # Count occurrences of 0, 1, 2 per marker (excluding -9)
+            counts_0 = np.sum((geno == 0), axis=0)
+            counts_1 = np.sum((geno == 1), axis=0)
+            counts_2 = np.sum((geno == 2), axis=0)
+
+            # Stack counts and find argmax (major allele index)
+            counts = np.stack([counts_0, counts_1, counts_2], axis=0)  # shape (3, n_markers)
+            major_alleles = np.argmax(counts, axis=0).astype(geno.dtype)  # 0, 1, or 2
+
+            # Broadcast major alleles to missing positions
+            # geno[missing_mask] = major_alleles broadcasted
+            major_broadcast = np.broadcast_to(major_alleles, geno.shape)
+            geno[missing_mask] = major_broadcast[missing_mask]
+
+            print(f"   [Cache] Imputation complete")
+
         # Save only if successful
-        print(f"   [Cache] Saving binary cache to {cache_base}.panicle.*")
+        print(f"   [Cache] Saving binary cache to {cache_base}.panicle.v2.*")
         np.save(cache_geno, geno)
         
         with open(cache_ind, 'w') as f:

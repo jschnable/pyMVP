@@ -426,7 +426,9 @@ def load_genotype_file(filepath: Union[str, Path],
         geno_np, individual_ids, geno_map_df = _load_genotype_vcf(str(filepath), **kwargs)
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
+        # Check if data was loaded from v2 cache (pre-imputed)
+        is_imputed = getattr(geno_map_df, 'attrs', {}).get('is_imputed', False)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles, is_imputed=is_imputed)
         geno_map = GenotypeMap(
             geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df)
         )

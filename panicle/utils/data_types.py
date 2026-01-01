@@ -119,11 +119,12 @@ class GenotypeMatrix:
     Includes pre-computed major alleles for efficient missing data imputation.
     """
     
-    def __init__(self, data: Union[np.ndarray, str, Path], 
+    def __init__(self, data: Union[np.ndarray, str, Path],
                  shape: Optional[Tuple[int, int]] = None,
                  dtype: np.dtype = np.int8,
-                 precompute_alleles: bool = True):
-        
+                 precompute_alleles: bool = True,
+                 is_imputed: bool = False):
+
         if isinstance(data, np.memmap):
             self._data = data
             self._is_memmap = True
@@ -138,11 +139,16 @@ class GenotypeMatrix:
             self._is_memmap = True
         else:
             raise ValueError("Data must be array or file path")
-        
+
+        # Track if data has been pre-imputed (no -9 values)
+        # This allows downstream code to skip -9 checks for faster processing
+        self._is_imputed = is_imputed
+
         # Pre-compute major alleles for efficient imputation
         self._major_alleles = None
         self._missing_masks = None
-        if precompute_alleles:
+        # Skip precompute when data is already imputed (no -9 values).
+        if precompute_alleles and not self._is_imputed:
             self._precompute_major_alleles()
     
     @property
@@ -159,7 +165,15 @@ class GenotypeMatrix:
     def n_markers(self) -> int:
         """Number of markers"""
         return self.shape[1]
-    
+
+    @property
+    def is_imputed(self) -> bool:
+        """Whether missing values (-9) have been pre-imputed.
+
+        When True, downstream code can skip -9 checks for faster processing.
+        """
+        return self._is_imputed
+
     def __getitem__(self, key):
         """Support array indexing"""
         return self._data[key]
@@ -175,6 +189,32 @@ class GenotypeMatrix:
     def get_batch(self, marker_start: int, marker_end: int) -> np.ndarray:
         """Get batch of markers for efficient processing"""
         return self._data[:, marker_start:marker_end]
+
+    def subset_individuals(
+        self,
+        indices: Union[np.ndarray, list],
+        *,
+        precompute_alleles: Optional[bool] = None,
+    ) -> "GenotypeMatrix":
+        """Return a GenotypeMatrix restricted to a subset of individuals.
+
+        Preserves the is_imputed flag so downstream code can use fast paths
+        when genotypes are already imputed.
+        """
+        if isinstance(indices, list):
+            indices = np.asarray(indices)
+        if isinstance(indices, np.ndarray) and indices.dtype == bool:
+            indexer = indices
+        else:
+            indexer = np.asarray(indices, dtype=int)
+        subset = self._data[indexer, :]
+        if precompute_alleles is None:
+            precompute_alleles = not self._is_imputed
+        return GenotypeMatrix(
+            subset,
+            precompute_alleles=precompute_alleles,
+            is_imputed=self._is_imputed,
+        )
     
     def calculate_allele_frequencies(
         self,
@@ -265,20 +305,29 @@ class GenotypeMatrix:
                 major_vals[completely_missing] = 0
             self._major_alleles[start:end] = major_vals
     
-    def get_marker_imputed(self, marker_idx: int, *, fill_value: Optional[float] = None) -> np.ndarray:
+    def get_marker_imputed(self,
+                           marker_idx: int,
+                           *,
+                           fill_value: Optional[float] = None,
+                           dtype: np.dtype = np.float64) -> np.ndarray:
         """Get genotypes for a specific marker with optional missing-data imputation."""
-        marker = self._data[:, marker_idx].copy().astype(np.float64)
+        out_dtype = np.dtype(dtype)
+        if self._is_imputed:
+            # Fast path: data contains no missing values, so skip mask checks.
+            return self._data[:, marker_idx].astype(out_dtype, copy=True)
+
+        marker = self._data[:, marker_idx].astype(out_dtype, copy=True)
 
         missing_mask = (marker == -9) | np.isnan(marker)
         if not missing_mask.any():
             return marker
 
         if fill_value is not None:
-            marker[missing_mask] = float(fill_value)
+            marker[missing_mask] = out_dtype.type(fill_value)
         elif self._major_alleles is not None:
-            marker[missing_mask] = self._major_alleles[marker_idx]
+            marker[missing_mask] = out_dtype.type(self._major_alleles[marker_idx])
         else:
-            marker[missing_mask] = 0.0
+            marker[missing_mask] = out_dtype.type(0.0)
 
         return marker
 
@@ -286,7 +335,8 @@ class GenotypeMatrix:
                           marker_start: int,
                           marker_end: int,
                           *,
-                          fill_value: Optional[float] = None) -> np.ndarray:
+                          fill_value: Optional[float] = None,
+                          dtype: np.dtype = np.float64) -> np.ndarray:
         """Get batch of markers with missing data imputed.
 
         Args:
@@ -294,8 +344,14 @@ class GenotypeMatrix:
             marker_end: Exclusive end index
             fill_value: Optional constant to impute missing genotypes.
                 If None, the pre-computed major allele is used (rMVP default).
+            dtype: Output dtype for the returned array (default float64).
         """
-        batch = self._data[:, marker_start:marker_end].copy().astype(np.float64)
+        out_dtype = np.dtype(dtype)
+        if self._is_imputed:
+            # Fast path: pre-imputed data, no missing checks needed.
+            return self._data[:, marker_start:marker_end].astype(out_dtype, copy=True)
+
+        batch = self._data[:, marker_start:marker_end].astype(out_dtype, copy=True)
 
         if batch.size == 0:
             return batch
@@ -305,28 +361,34 @@ class GenotypeMatrix:
             return batch
 
         if fill_value is not None:
-            batch[missing_mask] = float(fill_value)
+            batch[missing_mask] = out_dtype.type(fill_value)
         elif self._major_alleles is not None:
-            fill_vals = self._major_alleles[marker_start:marker_end].astype(np.float64)
+            fill_vals = self._major_alleles[marker_start:marker_end].astype(out_dtype, copy=False)
             batch[missing_mask] = np.broadcast_to(fill_vals, batch.shape)[missing_mask]
         else:
-            batch[missing_mask] = 0.0
+            batch[missing_mask] = out_dtype.type(0.0)
 
         return batch
 
     def get_columns_imputed(self,
                              indices: Union[np.ndarray, list],
                              *,
-                             fill_value: Optional[float] = None) -> np.ndarray:
+                             fill_value: Optional[float] = None,
+                             dtype: np.dtype = np.float64) -> np.ndarray:
         """Get arbitrary marker columns with missing data imputed.
 
         Optimized for fetching non-contiguous SNPs (e.g., pseudo-QTNs) in one call.
-        Returns a float64 array of shape (n_individuals, len(indices)).
+        Returns an array of shape (n_individuals, len(indices)) with requested dtype.
         """
         if isinstance(indices, list):
             indices = np.array(indices, dtype=int)
+        out_dtype = np.dtype(dtype)
+        if self._is_imputed:
+            # Fast path: pre-imputed data, no missing checks needed.
+            return self._data[:, indices].astype(out_dtype, copy=True)
+
         # Slice and copy to ensure we don't mutate underlying storage
-        batch = self._data[:, indices].copy().astype(np.float64)
+        batch = self._data[:, indices].astype(out_dtype, copy=True)
 
         if batch.size == 0:
             return batch
@@ -336,12 +398,12 @@ class GenotypeMatrix:
             return batch
 
         if fill_value is not None:
-            batch[missing_mask] = float(fill_value)
+            batch[missing_mask] = out_dtype.type(fill_value)
         elif self._major_alleles is not None:
-            fill_vals = self._major_alleles[indices].astype(np.float64)
+            fill_vals = self._major_alleles[indices].astype(out_dtype, copy=False)
             batch[missing_mask] = np.broadcast_to(fill_vals, batch.shape)[missing_mask]
         else:
-            batch[missing_mask] = 0.0
+            batch[missing_mask] = out_dtype.type(0.0)
 
         return batch
     
