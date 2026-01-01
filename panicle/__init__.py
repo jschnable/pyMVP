@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore', message='.*omp_set_nested.*deprecated.*')
 warnings.filterwarnings('ignore', category=UserWarning, message='.*omp_set_nested.*')
 
 __version__ = "0.1.0"
-__author__ = "PANICLE Development Team"
+__author__ = "James C. Schnable"
 
 from .core.mvp import PANICLE
 from .data.converters import PANICLE_Data

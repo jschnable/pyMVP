@@ -7,18 +7,17 @@ name = "panicle"
 version = "0.1.0"
 description = "PANICLE: Python Algorithms for Nucleotide-phenotype Inference and Chromosome-wide Locus Evaluation - A comprehensive GWAS pipeline with Numba JIT acceleration"
 authors = [
-    {name = "PANICLE Development Team"}
+    {name = "James C. Schnable", email = "james.schnable@gmail.com"}
 ]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.7"
+requires-python = ">=3.9"
+keywords = ["GWAS", "genomics", "bioinformatics", "genetics", "SNP", "association", "QTL", "phenotype"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research", 
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8", 
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -31,12 +30,7 @@ dependencies = [
     "scipy>=1.6.0",
     "pandas>=1.2.0",
     "h5py>=3.0.0",
-    "tables>=3.6.0",
-    "statsmodels>=0.12.0",
-    "scikit-learn>=0.24.0",
     "matplotlib>=3.3.0",
-    "seaborn>=0.11.0",
-    "tqdm>=4.60.0",
     "numba>=0.50.0",
     "cyvcf2>=0.30.0",
 ]
@@ -46,9 +40,14 @@ dependencies = [
 plink = [
     "bed-reader>=1.0.0",
 ]
-# Convenience extra to pull in all optional loaders
+# Parallel processing support
+parallel = [
+    "joblib>=1.0.0",
+]
+# Convenience extra to pull in all optional packages
 all = [
     "bed-reader>=1.0.0",
+    "joblib>=1.0.0",
 ]
 
 [project.urls]

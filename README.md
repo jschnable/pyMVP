@@ -1,6 +1,6 @@
 # PANICLE: Python Algorithms for Nucleotide-phenotype Inference and Chromosome-wide Locus Evaluation
 
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 PANICLE is a **Python package for Genome Wide Association Studies (GWAS)**. It implements GLM, MLM, FarmCPU, and BLINK. PANICLE seeks to achieve speeds comparable or better to other implementations while supporting multiple input data formats, providing multiple quality of life features (native effect marker number testing, leave one chromosome out MLM, calculation of resampling model inclusion probabilities, etc), and allowing modern GWAS algorithms to be natively integrated into python-based data analysis pipelines and ecosystems.
@@ -8,16 +8,12 @@ PANICLE is a **Python package for Genome Wide Association Studies (GWAS)**. It i
 ## Key Features
 
 *   **Multiple Algorithms**: GLM, MLM, FarmCPU, BLINK
-*   **Optmizied Performance**:
-    *   **Vectorized Loading**: Optional optimized loading via `cyvcf2` (~26x faster VCF loading).
-    *   **Binary Caching**: Option to cache genotype data in binary during an initial run, speeds future runs dramatically.
-    *   **Decimated Plotting**: Fast Manhattan plots via smart point downsampling.
-*   **Supported Genotype Formats**: VCF/BCF, PLINK, HapMap, CSV/TSV.
+*   **Supported Genotype Formats**: VCF/BCF, PLINK, HapMap, CSV/TSV with optional caching of genotype data in binary during initial run (speeds future data loading dramatically).
 *   **Robustness**: Graceful handling of missing data.
 
 ## Installation
 
-Requires Python 3.7+.
+Requires Python 3.9+.
 
 ```bash
 git clone https://github.com/jschnable/PANICLE.git
@@ -36,16 +32,14 @@ pip install -e .[all]
 - `numpy` ≥1.19.0
 - `scipy` ≥1.6.0
 - `pandas` ≥1.2.0
+- `h5py` ≥3.0.0 (HDF5 support)
+- `matplotlib` ≥3.3.0 (plotting)
 - `numba` ≥0.50.0 (JIT compilation for performance)
-- `scikit-learn` ≥0.24.0 (includes joblib for parallel processing)
-- `matplotlib` ≥3.3.0, `seaborn` ≥0.11.0 (plotting)
-- `statsmodels` ≥0.12.0
-- `h5py` ≥3.0.0, `tables` ≥3.6.0 (HDF5 support)
-- `tqdm` ≥4.60.0 (progress bars)
+- `cyvcf2` ≥0.30.0 (fast VCF/BCF parsing)
 
 **Optional dependencies**:
-- `cyvcf2` ≥0.30.0 — Fast VCF/BCF parsing (~26x faster than pure Python)
-- `bed-reader` ≥1.0.0 — PLINK .bed/.bim/.fam format support
+- `bed-reader` ≥1.0.0 — PLINK .bed/.bim/.fam format support (`pip install panicle[plink]`)
+- `joblib` ≥1.0.0 — Parallel processing for LOCO methods (`pip install panicle[parallel]`)
 
 ## CLI Usage (Quick Start)
 
@@ -56,7 +50,7 @@ python scripts/run_GWAS.py \
   --phenotype data/phenotype.csv \
   --genotype data/genotypes.vcf.gz \
   --traits Trait1,Trait2 \
-  --methods GLM,MLM,MLM_Hybrid \
+  --methods GLM,MLM,FarmCPU,BLINK \
   --n-pcs 5 \
   --compute-effective-tests \
   --outputs manhattan qq significant_marker_pvalues \
@@ -252,4 +246,4 @@ Timings include cached data loading, sample alignment, PCA, and kinship calcs (w
 Distributed under the MIT license. See [LICENSE](LICENSE).
 
 ---
-**Disclaimer:** This is an independent Python implementation of algorithms developed by others. Any errors are mine alone.
+**Disclaimer:** This is an independent Python implementation of algorithms developed by others. Any errors are mine alone. -James
