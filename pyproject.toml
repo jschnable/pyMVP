@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.19.0",
-    "scipy>=1.6.0", 
+    "scipy>=1.6.0",
     "pandas>=1.2.0",
     "h5py>=3.0.0",
     "tables>=3.6.0",
@@ -38,21 +38,17 @@ dependencies = [
     "seaborn>=0.11.0",
     "tqdm>=4.60.0",
     "numba>=0.50.0",
+    "cyvcf2>=0.30.0",
 ]
 
 [project.optional-dependencies]
-# Faster VCF parsing and required for .bcf files
-vcf = [
-    "cyvcf2>=0.30.0",
-]
-# PLINK .bed support  
+# PLINK .bed support
 plink = [
     "bed-reader>=1.0.0",
 ]
 # Convenience extra to pull in all optional loaders
 all = [
-    "cyvcf2>=0.30.0",
-    "bed-reader>=1.0.0", 
+    "bed-reader>=1.0.0",
 ]
 
 [project.urls]
