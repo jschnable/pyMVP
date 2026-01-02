@@ -15,6 +15,39 @@ from ..utils.data_types import AssociationResults, GenotypeMap
 from ..association.farmcpu_resampling import FarmCPUResamplingResults
 from ..utils.stats import genomic_inflation_factor
 
+def _format_threshold_label(threshold: float,
+                            alpha: Optional[float],
+                            n_tests: Optional[float],
+                            source: Optional[str]) -> Optional[str]:
+    """Human-readable label for the significance line."""
+    if threshold is None or threshold <= 0:
+        return None
+    if alpha is None or n_tests is None or not np.isfinite(n_tests):
+        return f"Threshold p={threshold:.2g}"
+    src = (source or "").lower()
+    if src.startswith("eff"):
+        basis = "effective markers"
+    elif src.startswith("mark"):
+        basis = "markers"
+    else:
+        basis = src if src else "markers"
+    return f"α={alpha:g} ({basis}: n={n_tests:g})"
+
+
+def _compute_marker_gap_y(ax, data_span: float, point_size: float) -> float:
+    """Estimate a small vertical gap based on marker size and axis height."""
+    fig = ax.figure
+    height_px = fig.get_size_inches()[1] * fig.dpi if fig and fig.dpi else 800.0
+    data_span = max(data_span, 1e-6)
+    data_per_px = data_span / max(height_px, 1.0)
+
+    # Scatter size is in points^2; approximate a diameter in points
+    marker_diam_points = max(np.sqrt(point_size), 4.0)
+    marker_diam_px = marker_diam_points * (fig.dpi / 72.0 if fig and fig.dpi else 1.0)
+
+    gap = marker_diam_px * data_per_px
+    return max(gap, 0.02)  # Ensure a minimal visible gap
+
 def PANICLE_Report(results: Union[AssociationResults, Dict],
                map_data: Optional[GenotypeMap] = None,
                threshold: float = 5e-8,
@@ -25,6 +58,9 @@ def PANICLE_Report(results: Union[AssociationResults, Dict],
                figsize: Tuple[int, int] = (8, 4),
                colors: Optional[List[str]] = None,
                point_size: float = 12.0,
+               threshold_alpha: Optional[float] = None,
+               threshold_n_tests: Optional[float] = None,
+               threshold_source: Optional[str] = None,
                verbose: bool = True,
                save_plots: bool = True,
                true_qtns: Optional[List[str]] = None,
@@ -91,8 +127,11 @@ def PANICLE_Report(results: Union[AssociationResults, Dict],
             results_dict=results_dict,
             map_data=map_data,
             threshold=threshold,
+            threshold_alpha=threshold_alpha,
+            threshold_n_tests=threshold_n_tests,
+            threshold_source=threshold_source,
             true_qtns=true_qtns,
-            figsize=(12, 4 * len(results_dict)),
+            figsize=(6, 2 * len(results_dict)),
             colors=colors,
             point_size=point_size
         )
@@ -268,6 +307,9 @@ def PANICLE_Report(results: Union[AssociationResults, Dict],
                 pvalues=valid_pvalues,
                 map_data=map_data,
                 threshold=threshold,
+                threshold_alpha=threshold_alpha,
+                threshold_n_tests=threshold_n_tests,
+                threshold_source=threshold_source,
                 suggestive_threshold=0,  # Disable suggestive threshold
                 title="",  # Remove title
                 figsize=figsize,
@@ -341,6 +383,9 @@ def PANICLE_Report(results: Union[AssociationResults, Dict],
 def create_manhattan_plot(pvalues: np.ndarray,
                          map_data: Optional[GenotypeMap] = None,
                          threshold: float = 5e-8,
+                         threshold_alpha: Optional[float] = None,
+                         threshold_n_tests: Optional[float] = None,
+                         threshold_source: Optional[str] = None,
                          suggestive_threshold: float = 1e-5,
                          title: str = "Manhattan Plot",
                          figsize: Tuple[int, int] = (12, 6),
@@ -393,17 +438,31 @@ def create_manhattan_plot(pvalues: np.ndarray,
     # Add only significance threshold (no suggestive threshold)
     if threshold > 0:
         threshold_line = -np.log10(threshold)
-        ax.axhline(y=threshold_line, color='red', linestyle='--', alpha=0.8, linewidth=1.5)
+        line_label = _format_threshold_label(threshold, threshold_alpha, threshold_n_tests, threshold_source)
+        ax.axhline(y=threshold_line, color='red', linestyle='--', alpha=0.8, linewidth=1.5,
+                   label=line_label if line_label else None)
 
     # Set labels and formatting
     ax.set_xlabel('Chromosome', fontsize=12)
     ax.set_ylabel(r'$-\log_{10}(P)$', fontsize=12)
+
+    # Set y-limits with a small negative gap for breathing room
+    finite_vals = log_pvalues[np.isfinite(log_pvalues)]
+    y_max = float(np.max(finite_vals)) if finite_vals.size else 1.0
+    if threshold > 0:
+        y_max = max(y_max, threshold_line)
+    y_gap = _compute_marker_gap_y(ax, y_max if y_max > 0 else 1.0, point_size)
+    ax.set_ylim(bottom=-y_gap)
 
     # Set title only if provided and not empty
     if title and title.strip():
         ax.set_title(title)
 
     # Remove grid (no gray grid marks)
+
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(loc='best', fontsize=8)
 
     plt.tight_layout()
     return fig
@@ -522,6 +581,30 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
     unique_chromosomes = np.unique(chromosomes)
     unique_chromosomes = sorted(unique_chromosomes, key=_natural_sort_key)
 
+    # Estimate a visible gap between chromosomes (and at the ends)
+    chrom_lengths: List[float] = []
+    for chrom in unique_chromosomes:
+        chrom_mask = chromosomes == chrom
+        if not np.any(chrom_mask):
+            continue
+        chrom_pos = positions[np.where(chrom_mask)[0]]
+        if chrom_pos.size == 0:
+            continue
+        min_pos = np.min(chrom_pos)
+        max_pos = np.max(chrom_pos)
+        length = (max_pos - min_pos) / 1e6 if max_pos > min_pos else 1.0
+        chrom_lengths.append(length)
+    median_len = float(np.median(chrom_lengths)) if chrom_lengths else 1.0
+    total_length = float(np.sum(chrom_lengths)) if chrom_lengths else float(len(unique_chromosomes))
+
+    # Approximate how many data units correspond to a marker diameter on screen
+    fig = ax.figure
+    width_px = fig.get_size_inches()[0] * fig.dpi if fig and fig.dpi else 1200.0
+    data_per_px = total_length / max(width_px, 1.0)
+    marker_diam_points = max(np.sqrt(point_size), 4.0)  # s is in points^2
+    marker_diam_px = marker_diam_points * fig.dpi / 72.0 if fig and fig.dpi else marker_diam_points
+    gap = max(marker_diam_px * data_per_px, 0.01 * median_len)
+
     # Default colors
     if colors is None:
         colors = ['#1f77b4', '#ff7f0e']  # Blue, Orange alternating
@@ -531,7 +614,8 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
     tick_positions = []
     tick_labels = []
 
-    current_pos = 0
+    current_pos = gap  # start with a minimal gap on the left to mirror inter-chromosome spacing
+    max_position = 0.0
     highlight_kwargs = highlight_kwargs or {}
     if highlight_mask is not None and highlight_mask.shape != log_pvalues.shape:
         raise ValueError("highlight_mask must match the shape of the plotted values")
@@ -561,7 +645,7 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
             norm_positions = np.zeros_like(chrom_positions)
             chrom_length = 1.0
 
-        # Add to cumulative position (no gaps)
+        # Add to cumulative position with a small gap between chromosomes
         plot_positions = current_pos + norm_positions
         cumulative_pos[indices_ordered] = plot_positions
 
@@ -615,7 +699,8 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
         tick_positions.append(current_pos + chrom_length / 2)
         tick_labels.append(str(chrom))
 
-        current_pos += chrom_length  # No gap between chromosomes
+        max_position = max(max_position, np.max(plot_positions) if plot_positions.size else current_pos)
+        current_pos += chrom_length + gap  # Advance with a small gap before next chromosome
 
     # Highlight true QTNs if provided
     if true_qtns is not None and map_data is not None:
@@ -645,6 +730,12 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels)
     ax.set_xlabel('Chromosome', fontsize=12)
+    ax.set_xlim(0, max_position + gap)
+    ax.margins(x=0)  # remove extra whitespace beyond explicit gaps
+    ax.set_ylim(bottom=0)
+    for spine in ('top', 'right'):
+        if spine in ax.spines:
+            ax.spines[spine].set_visible(False)
 
 
 def plot_manhattan_sequential(ax, log_pvalues: np.ndarray, point_size: float = 3.0):
@@ -653,6 +744,14 @@ def plot_manhattan_sequential(ax, log_pvalues: np.ndarray, point_size: float = 3
     positions = np.arange(len(log_pvalues))
     ax.scatter(positions, log_pvalues, c='blue', s=point_size, alpha=0.8, edgecolors='none')
     ax.set_xlabel('Chromosome', fontsize=12)
+    ax.margins(x=0)
+    finite_vals = log_pvalues[np.isfinite(log_pvalues)]
+    y_max = float(np.max(finite_vals)) if finite_vals.size else 1.0
+    y_gap = _compute_marker_gap_y(ax, y_max if y_max > 0 else 1.0, point_size)
+    ax.set_ylim(bottom=-y_gap)
+    for spine in ('top', 'right'):
+        if spine in ax.spines:
+            ax.spines[spine].set_visible(False)
 
 
 def create_qq_plot(pvalues: np.ndarray,
@@ -813,8 +912,11 @@ def calculate_gwas_summary(pvalues: np.ndarray,
 def create_multi_panel_manhattan(results_dict: Dict,
                                 map_data: Optional[GenotypeMap] = None,
                                 threshold: float = 5e-8,
+                                threshold_alpha: Optional[float] = None,
+                                threshold_n_tests: Optional[float] = None,
+                                threshold_source: Optional[str] = None,
                                 true_qtns: Optional[List[str]] = None,
-                                figsize: Tuple[int, int] = (12, 12),
+                                figsize: Tuple[int, int] = (6, 6),
                                 colors: Optional[List[str]] = None,
                                 point_size: float = 8.0) -> plt.Figure:
     """Create multi-panel Manhattan plot showing results from multiple GWAS methods
@@ -840,6 +942,7 @@ def create_multi_panel_manhattan(results_dict: Dict,
         axes = [axes]
     
     method_names = list(results_dict.keys())
+    threshold_label = _format_threshold_label(threshold, threshold_alpha, threshold_n_tests, threshold_source)
     
     for i, (method_name, result_obj) in enumerate(results_dict.items()):
         ax = axes[i]
@@ -889,19 +992,38 @@ def create_multi_panel_manhattan(results_dict: Dict,
         # Add significance threshold
         if threshold > 0:
             threshold_line = -np.log10(threshold)
+            line_label = threshold_label if i == 0 else None
             ax.axhline(y=threshold_line, color='red', linestyle='--',
-                      alpha=0.8, linewidth=1.5)
+                      alpha=0.8, linewidth=1.5, label=line_label)
 
-        # Set y-label with method name
-        ax.set_ylabel(f'{method_name}\n' + r'$-\log_{10}(P)$', fontsize=10)
+        # Set y-label and method title
+        ax.set_ylabel(r'$-\log_{10}(P)$', fontsize=10)
+        ax.set_title(method_name, fontsize=11, pad=6)
         
         # Only show x-axis label on bottom plot
         if i == n_methods - 1:
             ax.set_xlabel('Chromosome', fontsize=12)
-        
-        # Add method name as title for top plot only
-        if i == 0 and true_qtns is not None:
-            ax.set_title('GWAS Results with True QTNs Highlighted', fontsize=12, pad=10)
+        else:
+            ax.set_xlabel('')
+            ax.tick_params(labelbottom=False, bottom=False)
+            ax.set_xticklabels([])
+
+        # Add a small negative gap on y-axis
+        finite_vals = log_pvalues[np.isfinite(log_pvalues)]
+        y_max = float(np.max(finite_vals)) if finite_vals.size else 1.0
+        if threshold > 0:
+            y_max = max(y_max, threshold_line)
+        y_gap = _compute_marker_gap_y(ax, y_max if y_max > 0 else 1.0, point_size)
+        ax.set_ylim(bottom=-y_gap)
     
+    # Add legend only once (top axis) if labels exist
+    handles, labels = axes[0].get_legend_handles_labels()
+    if labels:
+        axes[0].legend(loc='best', fontsize=8)
+
+    # Add a figure-level title if highlighting QTNs
+    if true_qtns is not None:
+        plt.suptitle('GWAS Results with True QTNs Highlighted', fontsize=12, y=1.02)
+
     plt.tight_layout()
     return fig

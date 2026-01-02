@@ -40,7 +40,7 @@ from ..visualization.manhattan import PANICLE_Report
 from ..association.hybrid_mlm import PANICLE_MLM_Hybrid
 
 # Helper function for parallel execution
-def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, hybrid_params, max_iterations, base_threshold, n_markers):
+def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, hybrid_params, max_iterations, base_threshold, n_markers, n_eff=None, alpha=0.05):
     """Worker function to run a single GWAS method in a separate process."""
     try:
         if method == 'GLM':
@@ -65,10 +65,22 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             return ('MLM', res, lambda_gc, None)
 
         elif method == 'FARMCPU':
-            fc_p = fc_params.get('p_threshold', base_threshold if base_threshold else 0.05 / n_markers)
+            # Pass alpha values (uncorrected) - FarmCPU applies multiple testing correction internally
+            fc_p = fc_params.get('p_threshold', alpha)  # Alpha level, e.g., 0.05
+            fc_qtn = fc_params.get('QTN_threshold', 0.01)  # Alpha for QTN selection, e.g., 0.01
+            fc_bin = fc_params.get('bin_size')
+            fc_method_bin = fc_params.get('method_bin', 'static')
+            fc_converge = fc_params.get('converge', 1.0)
             res = PANICLE_FarmCPU(
                 phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
-                maxLoop=max_iterations, verbose=False
+                maxLoop=max_iterations,
+                p_threshold=fc_p,
+                QTN_threshold=fc_qtn,
+                n_eff=n_eff,  # Pass effective tests for multiple testing correction
+                converge=fc_converge,
+                bin_size=fc_bin,
+                method_bin=fc_method_bin,
+                verbose=False
             )
             lambda_gc = genomic_inflation_factor(res.pvalues)
             return ('FarmCPU', res, lambda_gc, None)
@@ -568,18 +580,22 @@ class GWASPipeline:
         # 2. Bonferroni / Thresholding Logic
         n_markers = self.genotype_matrix.n_markers
         bonferroni_denom = float(n_markers)
+        threshold_source = "markers"
         
         if significance is not None:
              base_threshold = significance
              self.log(f"   Using fixed significance threshold: {base_threshold}")
              effective_tests_count = float('nan') # User override
+             threshold_source = "fixed"
         else:
              # Logic to choose denominator
              if n_eff:
                  bonferroni_denom = float(n_eff)
+                 threshold_source = "effective"
              elif use_effective_tests and self.effective_tests_info and self.effective_tests_info.get("Me"):
                  bonferroni_denom = float(self.effective_tests_info["Me"])
                  self.log(f"   Using effective tests (Me={bonferroni_denom}) for Bonferroni.")
+                 threshold_source = "effective"
              
              base_threshold = alpha / max(bonferroni_denom, 1.0)
              effective_tests_count = bonferroni_denom
@@ -604,30 +620,60 @@ class GWASPipeline:
             # Setup params for FarmCPU/BLINK
             fc_params = farmcpu_params or {}
             blk_params = blink_params or {}
-            
+            method_thresholds: Dict[str, float] = {}
+            method_threshold_sources: Dict[str, str] = {}
+
+            # Determine effective tests for multiple testing correction (needed for FarmCPU thresholds)
+            effective_n = None
+            if use_effective_tests and self.effective_tests_info and self.effective_tests_info.get("Me"):
+                effective_n = int(self.effective_tests_info["Me"])
+            elif n_eff:
+                effective_n = n_eff
+
             # Identify parallelizable methods
             parallel_methods = []
             if 'GLM' in methods: parallel_methods.append('GLM')
             if 'MLM' in methods: parallel_methods.append('MLM')
             if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
-            if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
             if 'BLINK' in methods: parallel_methods.append('BLINK')
             if 'HybridMLM' in methods: parallel_methods.append('HybridMLM')
-            
+
+            # Track method-specific thresholds for plotting/reporting
+            # Note: Keys must match the result names returned from parallel workers
+            # (e.g., 'FarmCPU' not 'FARMCPU', 'BLINK' not 'blink')
+            if 'FARMCPU' in methods:
+                fc_qtn_alpha = fc_params.get('QTN_threshold', 0.01)
+                # FarmCPU applies multiple testing correction internally
+                # Use the same denominator for reporting consistency
+                fc_n_tests = effective_n if effective_n else n_markers
+                fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
+                method_thresholds['FarmCPU'] = fc_qtn_corrected  # Match worker return name
+                method_threshold_sources['FarmCPU'] = 'FarmCPU QTN threshold'
+            if 'BLINK' in methods:
+                method_thresholds['BLINK'] = base_threshold
+                method_threshold_sources['BLINK'] = threshold_source
+            if 'GLM' in methods:
+                method_thresholds['GLM'] = base_threshold
+                method_threshold_sources['GLM'] = threshold_source
+            if 'MLM' in methods:
+                method_thresholds['MLM'] = base_threshold
+                method_threshold_sources['MLM'] = threshold_source
+
             # Resampling usually handled separately or sequentially due to complexity
             run_resampling = 'FarmCPUResampling' in methods
 
             self.log(f"   Running parallel analysis for: {parallel_methods}")
-            
+
             with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, len(parallel_methods))) as executor:
                 future_to_method = {
                     executor.submit(
-                        _run_single_method, 
-                        method, 
-                        y_sub, g_sub, cov_sub, k_sub, 
-                        self.geno_map, 
+                        _run_single_method,
+                        method,
+                        y_sub, g_sub, cov_sub, k_sub,
+                        self.geno_map,
                         fc_params, blk_params, hybrid_params,
-                        max_iterations, base_threshold, n_markers
+                        max_iterations, base_threshold, n_markers,
+                        effective_n, alpha  # Pass n_eff and alpha for FarmCPU
                     ): method for method in parallel_methods
                 }
                 
@@ -668,7 +714,9 @@ class GWASPipeline:
             trait_summary = self._save_trait_results(
                 trait_name, method_results, 
                 base_threshold, alpha, effective_tests_count, 
-                max_genotype_dosage, outputs
+                max_genotype_dosage, outputs, threshold_source,
+                method_thresholds=method_thresholds,
+                method_threshold_sources=method_threshold_sources
             )
             summary_rows.extend(trait_summary)
 
@@ -738,7 +786,7 @@ class GWASPipeline:
              
         return y_final, g_final, cov_final, k_final
 
-    def _save_trait_results(self, trait_name, results, threshold, alpha, n_tests, max_dosage, outputs):
+    def _save_trait_results(self, trait_name, results, threshold, alpha, n_tests, max_dosage, outputs, threshold_source, method_thresholds=None, method_threshold_sources=None):
         """Internal helper to save tables and plots"""
         
         summary_data = []
@@ -755,6 +803,11 @@ class GWASPipeline:
         sig_snps = []
         
         for method, Res in results.items():
+            method_threshold = (method_thresholds or {}).get(method, threshold)
+            method_source = (method_threshold_sources or {}).get(method, threshold_source)
+            method_alpha = alpha if method_threshold == threshold else None
+            method_n_tests = n_tests if method_threshold == threshold else float('nan')
+
             if isinstance(Res, FarmCPUResamplingResults):
                 # Handle Resampling
                 res_file = self.output_dir / f"GWAS_{trait_name}_{method}_RMIP.csv"
@@ -776,13 +829,13 @@ class GWASPipeline:
             all_res_df[f'{method}_Effect'] = Res.effects
             
             # Check significance
-            hits = Res.pvalues <= threshold
+            hits = Res.pvalues <= method_threshold
             n_sig = hits.sum()
             
             summary_data.append({
                 'Trait': trait_name, 'Method': method,
                 'Significant_Hits': n_sig,
-                'Threshold': threshold
+                'Threshold': method_threshold
             })
             
             if n_sig > 0:
@@ -801,7 +854,10 @@ class GWASPipeline:
                         results=Res, map_data=self.geno_map,
                         output_prefix=str(self.output_dir / f"GWAS_{trait_name}_{method}"),
                         plot_types=plot_types,
-                        threshold=threshold,
+                        threshold=method_threshold,
+                        threshold_alpha=method_alpha,
+                        threshold_n_tests=method_n_tests,
+                        threshold_source=method_source,
                         verbose=False,
                         save_plots=True
                     )

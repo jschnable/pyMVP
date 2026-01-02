@@ -40,6 +40,36 @@ def normalize_outputs(outputs):
     return normalized if normalized else list(OUTPUT_CHOICES)
 
 
+def normalize_methods(methods):
+    """Normalize method names to pipeline-supported identifiers."""
+    if not methods:
+        return []
+
+    aliases = {
+        "GLM": "GLM",
+        "MLM": "MLM",
+        "FARMCPU": "FARMCPU",
+        "FARMCPU_RESAMPLING": "FarmCPUResampling",
+        "FARMCPURESAMPLING": "FarmCPUResampling",
+        "RESAMPLING": "FarmCPUResampling",
+        "BLINK": "BLINK",
+        "HYBRIDMLM": "HybridMLM",
+        "MLM_HYBRID": "HybridMLM",
+    }
+
+    normalized = []
+    seen = set()
+    for m in methods:
+        key = str(m).replace('-', '_').replace(' ', '_').strip().upper()
+        if not key:
+            continue
+        method = aliases.get(key, key)
+        if method not in seen:
+            normalized.append(method)
+            seen.add(method)
+    return normalized
+
+
 class FarmCPUResamplingProgressReporter:
     """Lightweight progress reporter for FarmCPU resampling runs."""
 
@@ -69,6 +99,12 @@ class FarmCPUResamplingProgressReporter:
 
 def main():
     args = parse_args()
+
+    # Backward compatibility: older CLI definitions may not include method flags
+    # Default them to False so downstream logic can fall back to --methods.
+    for flag in ("glm", "mlm", "farmcpu", "resampling"):
+        if not hasattr(args, flag):
+            setattr(args, flag, False)
     
     # Initialize Pipeline
     pipeline = GWASPipeline(output_dir=args.output)
@@ -105,40 +141,18 @@ def main():
     pipeline.compute_population_structure(n_pcs=args.n_pcs)
     
     # 4. Run Analysis
-    # The original code had a comma-separated string for methods.
-    # The instruction implies a change to individual boolean flags for methods.
-    # Assuming `parse_args` has been updated to include these flags.
     methods = []
     if args.glm: methods.append('GLM')
     if args.mlm: methods.append('MLM')
-    if args.farmcpu: methods.append('FarmCPU') # Assuming this exists
-    if args.resampling: methods.append('FarmCPUResampling') # New method flag
+    if args.farmcpu: methods.append('FARMCPU')
+    if args.resampling: methods.append('FarmCPUResampling')
     
     # If args.methods is still used as a fallback or for other methods not covered by flags
     if args.methods:
-        for m in args.methods.split(','):
-            method_name = m.strip().upper().replace('-', '_')
-            if method_name == 'FARMCPURESAMPLING':
-                method_name = 'FarmCPUResampling' # Normalize to the new name
-            elif method_name == 'FARMCPU':
-                method_name = 'FarmCPU' # Normalize if needed
-            # Add other normalizations if necessary
-            if method_name not in methods: # Avoid duplicates if both flags and string are used
-                methods.append(method_name)
+        methods.extend([m for m in args.methods.split(',') if m.strip()])
 
-    # Normalize method names (this block replaces the old normalization logic)
-    valid_methods = []
-    for m in methods:
-        # The instruction was to rename 'FARMCPU_RESAMPLING' to 'FarmCPUResampling'.
-        # If the input method was 'FARMCPURESAMPLING' (old string format), it should become 'FarmCPUResampling'.
-        # If the input method was 'FarmCPUResampling' (from new flag), it's already correct.
-        if m.upper() == 'FARMCPURESAMPLING': # Handle both old string format and potential uppercase from other sources
-            valid_methods.append('FarmCPUResampling')
-        elif m.upper() == 'FARMCPU':
-            valid_methods.append('FarmCPU')
-        else:
-            valid_methods.append(m) # Keep other methods as is
-
+    valid_methods = normalize_methods(methods)
+    
     outputs = normalize_outputs(args.outputs)
     
     pipeline.run_analysis(

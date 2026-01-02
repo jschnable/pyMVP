@@ -1,966 +1,1054 @@
 """
-FarmCPU (Fixed and random model Circulating Probability Unification) for GWAS analysis
+FarmCPU (Fixed and random model Circulating Probability Unification) for GWAS.
+
+This module provides the PANICLE_FarmCPU function which implements an iterative
+multi-locus GWAS method that combines GLM and MLM approaches.
+
+Based on the rMVP R implementation by Xiaolei Liu and Zhiwu Zhang.
+
+Memory Efficiency Notes:
+------------------------
+This implementation is optimized for large datasets (5M+ markers):
+
+1. Streaming genotype processing: Genotype data is processed in batches via GLM,
+   avoiding the need to load the entire matrix into memory. Memory-mapped
+   GenotypeMatrix objects are preserved without materialization.
+
+2. Efficient binning: The _farmcpu_specify function uses in-place operations
+   to minimize temporary array allocations.
+
+3. Memory requirements scale with:
+   - P-values array: O(n_markers) float64 (~40MB per 5M markers)
+   - Effects/SE arrays: O(n_markers) float64 each
+   - Temporary sorting arrays: O(n_markers) during binning
+   - Pseudo-QTN genotypes: O(n_individuals × n_qtns) - typically small
+
+For 5M markers with 10k individuals, expect ~200-400MB working memory
+(vs 200GB+ in the unoptimized version that pre-loaded all genotypes).
 """
 
+from typing import Optional, Union, List, Tuple, Dict, Any
 import numpy as np
-import time
-from typing import Optional, Union, List, Tuple, Dict, Sequence
-from scipy import stats
+from scipy import linalg
+
 from ..utils.data_types import GenotypeMatrix, GenotypeMap, AssociationResults
-from ..utils.perf import warn_if_potential_single_thread_blas
 from .glm import PANICLE_GLM
-from .mlm import PANICLE_MLM
-import warnings
 
 # rMVP preprocessing replaces missing genotypes (-9/NA) with the heterozygote dosage (1).
 # Use the same fill value so that GLM/FarmCPU statistics remain comparable.
 MISSING_FILL_VALUE = 1.0
 
-# Check for JIT availability
-try:
-    import numba
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
+
+def _numeric_chromosomes(chrom_series: "pd.Series") -> np.ndarray:
+    """Convert chromosome labels to numeric values (preserve relative ordering)."""
+    import pandas as pd  # local import to avoid hard dependency at import time
+
+    if np.issubdtype(chrom_series.dtype, np.number):
+        return chrom_series.to_numpy(dtype=float, copy=False)
+
+    chrom_as_str = chrom_series.astype(str)
+    chrom_order = sorted(chrom_as_str.unique(), key=lambda val: (len(val), val))
+    chrom_lookup = {val: float(idx) for idx, val in enumerate(chrom_order)}
+    return chrom_as_str.map(chrom_lookup).to_numpy(dtype=float)
 
 
-class FarmCPUTimer:
-    """Timer class to track FarmCPU performance"""
-    
-    def __init__(self):
-        self.timings = {}
-        self.step_timings = []
-        self.iteration_timings = []
-        
-    def start(self, step_name: str):
-        """Start timing a step"""
-        if step_name not in self.timings:
-            self.timings[step_name] = []
-        self.start_time = time.time()
-        self.current_step = step_name
-        
-    def end(self, step_name: str = None):
-        """End timing a step"""
-        if step_name is None:
-            step_name = self.current_step
-        elapsed = time.time() - self.start_time
-        self.timings[step_name].append(elapsed)
-        return elapsed
-    
-    def get_summary(self) -> Dict:
-        """Get timing summary statistics"""
-        summary = {}
-        for step, times in self.timings.items():
-            if times:
-                summary[step] = {
-                    'total_time': sum(times),
-                    'mean_time': np.mean(times),
-                    'count': len(times),
-                    'min_time': np.min(times),
-                    'max_time': np.max(times)
-                }
-        return summary
-    
-    def print_summary(self):
-        """Print detailed timing summary"""
-        print("\n" + "="*60)
-        print("🕐 FarmCPU PERFORMANCE TIMING REPORT")
-        print("="*60)
-        
-        summary = self.get_summary()
-        total_runtime = sum(sum(times) for times in self.timings.values())
-        
-        print(f"📊 Total Runtime: {total_runtime:.3f} seconds")
-        print(f"🔄 Iterations: {len(self.iteration_timings)}")
-        if self.iteration_timings:
-            print(f"⏱️  Average per iteration: {np.mean(self.iteration_timings):.3f} seconds")
-        
-        print("\n📋 Step-by-step breakdown:")
-        print("-" * 60)
-        
-        for step, stats in sorted(summary.items(), key=lambda x: x[1]['total_time'], reverse=True):
-            pct = (stats['total_time'] / total_runtime) * 100
-            print(f"{step:25s} | {stats['total_time']:8.3f}s ({pct:5.1f}%) | "
-                  f"{stats['count']:3d} calls | avg: {stats['mean_time']:6.3f}s")
-        
-        print("-" * 60)
+# =============================================================================
+# Data Structure Documentation
+# =============================================================================
+#
+# GenotypeMatrix:
+#     Memory-efficient genotype matrix with lazy loading support.
+#     - Shape: (n_individuals, n_markers)
+#     - Dtype: typically int8 for storage, converts to float for computation
+#     - Missing values: encoded as -9, imputed via major allele by default
+#     - Key properties:
+#         .shape -> (n_individuals, n_markers)
+#         .n_individuals -> int
+#         .n_markers -> int
+#         .is_imputed -> bool (whether -9 values have been pre-imputed)
+#     - Key methods:
+#         .get_marker(idx) -> np.ndarray of shape (n_individuals,)
+#         .get_batch(start, end) -> np.ndarray of shape (n_individuals, end-start)
+#         .get_marker_imputed(idx, dtype=np.float64) -> imputed marker as float
+#         .get_batch_imputed(start, end, dtype=np.float64) -> imputed batch
+#         .get_columns_imputed(indices) -> arbitrary columns with imputation
+#         .subset_individuals(indices) -> new GenotypeMatrix for subset
+#
+# GenotypeMap:
+#     SNP map information with chromosome and position data.
+#     - Required columns in underlying DataFrame: ['SNP', 'CHROM', 'POS']
+#     - Optional columns: 'REF', 'ALT'
+#     - Key properties:
+#         .snp_ids -> pd.Series of SNP identifiers
+#         .chromosomes -> pd.Series of chromosome values
+#         .positions -> pd.Series of physical positions (bp)
+#         .n_markers -> int
+#     - Key methods:
+#         .to_dataframe() -> pd.DataFrame copy
+#         .with_metadata(**kwargs) -> new GenotypeMap with additional metadata
+#     - Metadata dictionary (.metadata) can store arbitrary key-value pairs
+#
+# AssociationResults:
+#     GWAS association results container.
+#     - Attributes:
+#         .effects -> np.ndarray of effect sizes (beta coefficients)
+#         .se -> np.ndarray of standard errors
+#         .pvalues -> np.ndarray of p-values
+#         .snp_map -> Optional[GenotypeMap] for SNP annotations
+#         .n_markers -> int
+#     - Key methods:
+#         .to_dataframe() -> pd.DataFrame with columns:
+#             If snp_map provided: ['SNP', 'Chr', 'Pos', 'Effect', 'SE', 'P-value']
+#             Otherwise: ['Effect', 'SE', 'P-value']
+#         .to_numpy() -> np.ndarray of shape (n_markers, 3) [Effect, SE, P-value]
+#
+# =============================================================================
+# PANICLE_GLM Documentation
+# =============================================================================
+#
+# PANICLE_GLM(phe, geno, CV=None, maxLine=5000, cpu=1, verbose=True,
+#             impute_missing=True, major_alleles=None, missing_fill_value=1.0)
+#
+# General Linear Model for GWAS using optimized FWL+QR algorithm.
+#
+# Inputs:
+#     phe: np.ndarray
+#         Phenotype array of shape (n_individuals, 2)
+#         Column 0: Individual IDs (can be string or numeric)
+#         Column 1: Trait values (numeric)
+#
+#     geno: Union[GenotypeMatrix, np.ndarray]
+#         Genotype matrix of shape (n_individuals, n_markers)
+#         Values typically 0, 1, 2 representing allele dosage
+#         Missing values encoded as -9
+#
+#     CV: Optional[np.ndarray]
+#         Covariate matrix of shape (n_individuals, n_covariates)
+#         Does NOT include intercept (added internally)
+#         Can include PCs, population structure, experimental covariates
+#         If None, only intercept is used
+#
+#     maxLine: int
+#         Batch size for processing markers (default 5000)
+#         Larger values use more memory but may be faster
+#
+#     cpu: int
+#         Unused, kept for API compatibility
+#
+#     verbose: bool
+#         Print progress information
+#
+#     missing_fill_value: float
+#         Value to impute for missing genotypes (default 1.0 = heterozygote)
+#
+# Output:
+#     AssociationResults object containing:
+#         .effects: Effect sizes (beta) for each marker
+#         .se: Standard errors for each effect
+#         .pvalues: P-values from t-test for each marker
+#         .snp_map: None (not set by GLM, must be added separately)
+#
+# =============================================================================
+
+
+def _validate_genotype(
+    geno: Union[GenotypeMatrix, np.ndarray],
+    verbose: bool = True
+) -> Union[GenotypeMatrix, np.ndarray]:
+    """Validate genotype input without loading entire matrix into memory.
+
+    For large datasets (5M+ markers), we avoid pre-loading the entire matrix.
+    The GLM already handles batched imputation efficiently via get_batch_imputed().
+
+    Args:
+        geno: Input genotype matrix (GenotypeMatrix or numpy array)
+        verbose: Print progress information
+
+    Returns:
+        The validated genotype matrix (unchanged for GenotypeMatrix,
+        wrapped for numpy arrays if needed)
+    """
+    if isinstance(geno, GenotypeMatrix):
+        # Keep memory-mapped/lazy-loaded data as-is
+        # GLM will handle batched imputation efficiently
+        if verbose and not geno.is_imputed:
+            print("FarmCPU: Using streaming mode for genotype processing (memory-efficient)")
+        return geno
+
+    elif isinstance(geno, np.ndarray):
+        # For numpy arrays, wrap in GenotypeMatrix for consistent interface
+        # but don't copy or transform - let GLM handle imputation in batches
+        if verbose:
+            print("FarmCPU: Wrapping numpy array in GenotypeMatrix interface")
+        # precompute_alleles=False avoids scanning entire matrix
+        return GenotypeMatrix(geno, is_imputed=False, precompute_alleles=False)
+
+    raise ValueError("Unsupported genotype type")
+
+def _farmcpu_specify(
+    map_data: GenotypeMap,
+    P: np.ndarray,
+    bin_size: int,
+    inclosure_size: int,
+    max_bp: float = 1e10
+) -> np.ndarray:
+    """Identify representative SNPs from genomic bins.
+
+    Memory-optimized strategy for 5M+ markers:
+    1. Create bin IDs directly from chromosome/position
+    2. Use argsort with composite key to find best SNP per bin
+    3. Avoid creating large intermediate column_stack arrays
+
+    Args:
+        map_data: SNP map with chromosome and position info
+        P: P-values for all markers
+        bin_size: Size of genomic bins in base pairs
+        inclosure_size: Maximum number of bins to select
+        max_bp: Maximum base pairs for creating unique IDs
+
+    Returns:
+        Indices of selected pseudo-QTNs
+    """
+    chromosomes = _numeric_chromosomes(map_data.chromosomes)
+    positions = map_data.positions.values.astype(np.float64)
+    n_markers = len(P)
+
+    # Create bin IDs directly (avoid intermediate snp_ids array)
+    # bin_id = floor((position + chromosome * max_bp) / bin_size)
+    bin_ids = np.floor((positions + chromosomes * max_bp) / bin_size).astype(np.int64)
+
+    # Sort indices by (bin_id, p-value) - lexsort uses last key as primary
+    # This avoids creating a large (n_markers, 3) intermediate array
+    sort_idx = np.lexsort((P, bin_ids))
+
+    # Get sorted bin IDs to find unique bins
+    sorted_bins = bin_ids[sort_idx]
+
+    # Find first occurrence of each bin (which has lowest p-value due to sort)
+    # Use diff to find where bins change - more memory efficient than np.unique
+    bin_changes = np.concatenate([[True], np.diff(sorted_bins) != 0])
+    first_indices = np.where(bin_changes)[0]
+
+    # Get original marker indices for representatives
+    representative_indices = sort_idx[first_indices]
+    representative_pvals = P[representative_indices]
+
+    # Select top inclosure_size bins by p-value
+    n_bins = len(representative_indices)
+    n_select = min(inclosure_size, n_bins)
+
+    if n_select == 0:
+        return np.array([], dtype=int)
+
+    if n_select >= n_bins:
+        # Need all bins, just return them (no sorting needed for selection)
+        return representative_indices.copy()
+
+    # Use argpartition for O(n) top-k selection instead of O(n log n) full sort
+    # argpartition puts the k smallest elements in the first k positions (unordered)
+    top_k_idx = np.argpartition(representative_pvals, n_select)[:n_select]
+    return representative_indices[top_k_idx].copy()
+
+
+def _farmcpu_remove(
+    geno: Union[GenotypeMatrix, np.ndarray],
+    map_data: GenotypeMap,
+    seq_qtn: np.ndarray,
+    seq_qtn_p: np.ndarray,
+    threshold: float = 0.7,
+    max_samples: int = 100000
+) -> Tuple[Optional[np.ndarray], np.ndarray]:
+    """Remove pseudo-QTNs that are highly correlated (LD pruning).
+
+    Args:
+        geno: Genotype matrix (n_individuals × n_markers)
+        map_data: SNP map information
+        seq_qtn: Indices of candidate pseudo-QTNs
+        seq_qtn_p: P-values for candidate pseudo-QTNs
+        threshold: Correlation threshold for removing markers
+        max_samples: Maximum number of individuals to use for correlation
+
+    Returns:
+        Tuple of (bin genotypes for selected QTNs, updated QTN indices)
+    """
+    if seq_qtn is None or len(seq_qtn) == 0:
+        return None, np.array([], dtype=int)
+
+    # Sort QTNs by p-value (keep most significant)
+    order = np.argsort(seq_qtn_p)
+    seq_qtn = seq_qtn[order].copy()
+    seq_qtn_p = seq_qtn_p[order].copy()
+
+    # Filter by unique chromosome + position
+    chromosomes = _numeric_chromosomes(map_data.chromosomes)
+    positions = map_data.positions.values.astype(float)
+
+    huge_num = 1e10
+    cb = chromosomes[seq_qtn].astype(float) * huge_num + positions[seq_qtn].astype(float)
+    _, unique_idx = np.unique(cb, return_index=True)
+    unique_idx = np.sort(unique_idx)  # Preserve p-value order
+    seq_qtn = seq_qtn[unique_idx]
+
+    if len(seq_qtn) == 0:
+        return None, np.array([], dtype=int)
+
+    # Get genotypes for QTNs (subsample if needed)
+    n_ind = geno.n_individuals if isinstance(geno, GenotypeMatrix) else geno.shape[0]
+    n_samples = min(n_ind, max_samples)
+    sample_idx = np.arange(n_samples)
+
+    if isinstance(geno, GenotypeMatrix):
+        x = geno.get_columns_imputed(seq_qtn, dtype=np.float32)[sample_idx, :]
+    else:
+        x = geno[sample_idx][:, seq_qtn].astype(np.float32)
+
+    # Calculate correlation matrix and prune
+    if x.shape[1] > 1:
+        # Handle constant columns
+        std = np.std(x, axis=0)
+        constant_cols = std == 0
+        std[constant_cols] = 1  # Prevent division by zero
+
+        x_centered = (x - np.mean(x, axis=0)) / std
+
+        # Set constant columns to zero (no correlation)
+        x_centered[:, constant_cols] = 0
+
+        r = np.corrcoef(x_centered.T)
+        if r.ndim == 0:
+            r = np.array([[r]])
+
+        # Replace NaN with 0 (can happen with constant columns)
+        r = np.nan_to_num(r, nan=0.0)
+
+        # Mark highly correlated pairs - keep the one with lower p-value
+        keep = np.ones(len(seq_qtn), dtype=bool)
+        for i in range(len(seq_qtn)):
+            if not keep[i]:
+                continue
+            for j in range(i + 1, len(seq_qtn)):
+                if keep[j] and abs(r[i, j]) > threshold:
+                    keep[j] = False
+
+        seq_qtn = seq_qtn[keep]
+
+    if len(seq_qtn) == 0:
+        return None, np.array([], dtype=int)
+
+
+
+    # if isinstance(genotype, GenotypeMatrix):
+    #     precomputed_major_alleles = genotype.major_alleles
+    # else:
+       # ... legacy code ..._imputed(seq_qtn, dtype=np.float32)
+    # Get final bin genotypes
+    if isinstance(geno, GenotypeMatrix):
+        bin_geno = geno.get_columns_imputed(seq_qtn, dtype=np.float32)
+    else:
+        bin_geno = geno[:, seq_qtn].astype(np.float32)
+
+    return bin_geno, seq_qtn
+
+
+def _farmcpu_bin(
+    phe: np.ndarray,
+    geno: Union[GenotypeMatrix, np.ndarray],
+    map_data: GenotypeMap,
+    CV: Optional[np.ndarray],
+    P: np.ndarray,
+    method: str,
+    bin_sizes: List[int],
+    bin_selections: List[int],
+    the_loop: int,
+    bound: Optional[int],
+    verbose: bool = True
+) -> np.ndarray:
+    """Select pseudo-QTNs using binning strategy.
+
+    Args:
+        phe: Phenotype matrix
+        geno: Genotype matrix
+        map_data: SNP map information
+        CV: Covariates
+        P: Current p-values
+        method: Binning method ("static", "EMMA", "FaST-LMM")
+        bin_sizes: List of bin sizes to try
+        bin_selections: List of selection counts to try
+        the_loop: Current iteration number (1-indexed)
+        bound: Maximum number of pseudo-QTNs
+        verbose: Print progress
+
+    Returns:
+        Indices of selected pseudo-QTNs
+    """
+    if P is None:
+        return np.array([], dtype=int)
+
+    # Handle 2D P-values (if return_cov_stats=True was used)
+    # Binning should be based on the marker's own P-value (column 0)
+    if P.ndim == 2:
+        P = P[:, 0]
+
+    n = phe.shape[0]
+
+    # Set upper bound for bin selection (matches R: sqrt(n)/sqrt(log10(n)))
+    if bound is None:
+        bound = int(round(np.sqrt(n) / np.sqrt(np.log10(max(n, 10)))))
+
+    # Filter selections to be within bound
+    bin_selections = [min(s, bound) for s in bin_selections]
+    bin_selections = sorted(set(s for s in bin_selections if s <= bound))
+    if not bin_selections:
+        bin_selections = [bound]
+
+    optimizable = len(bin_sizes) * len(bin_selections) > 1
+
+    if method == "static" or not optimizable:
+        # Static method: use different bin sizes for different iterations
+        # R: loop 2 uses b[3], loop 3 uses b[2], else uses b[1]
+        if the_loop == 2:
+            bin_size = bin_sizes[-1]  # Largest bin (5e7)
+        elif the_loop == 3:
+            bin_size = bin_sizes[1] if len(bin_sizes) > 1 else bin_sizes[0]
+        else:
+            bin_size = bin_sizes[0]  # Smallest bin (5e5)
+
+        inc_size = bound
+
+        if verbose:
+            print(f"Optimizing Pseudo QTNs... (bin_size={bin_size}, max_qtns={inc_size})")
+
+        seq_qtn = _farmcpu_specify(map_data, P, bin_size, inc_size)
+
+    elif method == "EMMA" and optimizable:
+        # EMMA method: optimize bin size and selection by REML
+        if verbose:
+            print("Optimizing Pseudo QTNs (EMMA)...")
+
+        best_reml = np.inf
+        best_seq_qtn = np.array([], dtype=int)
+
+        for bin_size in bin_sizes:
+            for inc_size in bin_selections:
+                seq_qtn = _farmcpu_specify(map_data, P, bin_size, inc_size)
+
+                if len(seq_qtn) == 0:
+                    continue
+
+                # Get QTN genotypes
+                if isinstance(geno, GenotypeMatrix):
+                    GK = geno.get_columns_imputed(seq_qtn, dtype=np.float32)
+                else:
+                    GK = geno[:, seq_qtn].astype(np.float32)
+
+                # Calculate REML using EMMA
+                reml = _farmcpu_burger_emma(phe, CV, GK)
+
+                if verbose:
+                    print(f"  bin={bin_size}, n={inc_size}, -2LL={reml:.2f}")
+
+                if reml < best_reml:
+                    best_reml = reml
+                    best_seq_qtn = seq_qtn.copy()
+
+        seq_qtn = best_seq_qtn
+
+    elif method == "FaST-LMM" and optimizable:
+        # FaST-LMM method
+        if verbose:
+            print("Optimizing Pseudo QTNs (FaST-LMM)...")
+
+        best_reml = np.inf
+        best_seq_qtn = np.array([], dtype=int)
+
+        for bin_size in bin_sizes:
+            for inc_size in bin_selections:
+                seq_qtn = _farmcpu_specify(map_data, P, bin_size, inc_size)
+
+                if len(seq_qtn) == 0:
+                    continue
+
+                if isinstance(geno, GenotypeMatrix):
+                    GK = geno.get_columns_imputed(seq_qtn, dtype=np.float32)
+                else:
+                    GK = geno[:, seq_qtn].astype(np.float32)
+
+                reml = _farmcpu_burger_fastlmm(phe, CV, GK)
+
+                if verbose:
+                    print(f"  bin={bin_size}, n={inc_size}, -2LL={reml:.2f}")
+
+                if reml < best_reml:
+                    best_reml = reml
+                    best_seq_qtn = seq_qtn.copy()
+
+        seq_qtn = best_seq_qtn
+    else:
+        seq_qtn = np.array([], dtype=int)
+
+    return seq_qtn
+
+
+def _farmcpu_burger_emma(
+    phe: np.ndarray,
+    CV: Optional[np.ndarray],
+    GK: np.ndarray
+) -> float:
+    """Calculate -2 * log-likelihood using EMMA method.
+
+    Args:
+        phe: Phenotype matrix (n × 2)
+        CV: Covariates (n × c) or None
+        GK: Pseudo-QTN genotypes (n × s)
+
+    Returns:
+        -2 * REML log-likelihood
+    """
+    from ..matrix.kinship import PANICLE_K_VanRaden
+
+    y = phe[:, 1].astype(np.float64)
+    n = len(y)
+
+    # Build covariate matrix
+    if CV is not None:
+        X = np.column_stack([np.ones(n), CV])
+    else:
+        X = np.ones((n, 1))
+
+    # Compute kinship from pseudo-QTNs
+    # PANICLE_K_VanRaden expects individuals × markers
+    K_obj = PANICLE_K_VanRaden(GK, verbose=False)
+    K = K_obj.to_numpy()
+
+    # Eigendecomposition
+    eigenvalues, eigenvectors = np.linalg.eigh(K)
+    eigenvalues = np.maximum(eigenvalues, 0)  # Ensure non-negative
+
+    # Grid search for delta
+    best_ll = -np.inf
+    for log_delta in np.arange(-5, 5.1, 0.1):
+        delta = np.exp(log_delta)
+
+        # Transform
+        D_inv = 1.0 / (eigenvalues + delta)
+        Ut_y = eigenvectors.T @ y
+        Ut_X = eigenvectors.T @ X
+
+        # Weighted least squares
+        XtDX = Ut_X.T @ (D_inv[:, None] * Ut_X)
+        XtDy = Ut_X.T @ (D_inv * Ut_y)
+
+        try:
+            beta = np.linalg.solve(XtDX, XtDy)
+        except np.linalg.LinAlgError:
+            continue
+
+        residuals = Ut_y - Ut_X @ beta
+        sigma2 = np.sum(D_inv * residuals**2) / n
+
+        # Log-likelihood
+        ll = -0.5 * (n * np.log(2 * np.pi * sigma2) + np.sum(np.log(eigenvalues + delta)) + n)
+
+        if ll > best_ll:
+            best_ll = ll
+
+    return -2 * best_ll
+
+
+def _farmcpu_burger_fastlmm(
+    phe: np.ndarray,
+    CV: Optional[np.ndarray],
+    GK: np.ndarray
+) -> float:
+    """Calculate -2 * log-likelihood using FaST-LMM method.
+
+    Uses SVD of the SNP matrix directly instead of computing kinship.
+
+    Args:
+        phe: Phenotype matrix (n × 2)
+        CV: Covariates (n × c) or None
+        GK: Pseudo-QTN genotypes (n × s)
+
+    Returns:
+        -2 * REML log-likelihood
+    """
+    y = phe[:, 1].astype(np.float64)
+    n = len(y)
+
+    # Build covariate matrix
+    if CV is not None:
+        X = np.column_stack([np.ones(n), CV])
+    else:
+        X = np.ones((n, 1))
+
+    # Check for zero-variance columns
+    if np.any(np.var(GK, axis=0) == 0):
+        # Degenerate case
+        return np.inf
+
+    # SVD of SNP matrix
+    U, s, Vt = np.linalg.svd(GK, full_matrices=False)
+
+    # Keep only significant singular values
+    tol = 1e-8
+    k = np.sum(s > tol)
+    if k == 0:
+        return np.inf
+
+    U1 = U[:, :k]
+    d = s[:k]**2
+
+    # Projections
+    U1t_X = U1.T @ X
+    U1t_y = U1.T @ y
+
+    # Complement projection
+    IU = np.eye(n) - U1 @ U1.T
+    IU_X = IU @ X
+    IU_y = IU @ y
+
+    # Grid search for delta
+    best_ll = -np.inf
+    for log_delta in np.arange(-5, 5.1, 0.1):
+        delta = np.exp(log_delta)
+
+        # Compute beta
+        # Part 1: from eigenspace
+        beta1 = np.zeros((X.shape[1], X.shape[1]))
+        beta3 = np.zeros(X.shape[1])
+        for i in range(k):
+            x_i = U1t_X[i:i+1, :]
+            beta1 += x_i.T @ x_i / (d[i] + delta)
+            beta3 += x_i.flatten() * U1t_y[i] / (d[i] + delta)
+
+        # Part 2: from complement space
+        beta2 = IU_X.T @ IU_X / delta
+        beta4 = IU_X.T @ IU_y / delta
+
+        try:
+            beta = np.linalg.solve(beta1 + beta2, beta3 + beta4)
+        except np.linalg.LinAlgError:
+            continue
+
+        # Log-likelihood
+        # Part 1: log determinant
+        log_det = np.sum(np.log(d + delta)) + (n - k) * np.log(delta)
+
+        # Part 2: residual sum of squares
+        rss1 = np.sum((U1t_y - U1t_X @ beta)**2 / (d + delta))
+        rss2 = np.sum((IU_y - IU_X @ beta)**2) / delta
+
+        sigma2 = (rss1 + rss2) / n
+
+        ll = -0.5 * (n * np.log(2 * np.pi) + log_det + n * np.log(sigma2) + n)
+
+        if ll > best_ll:
+            best_ll = ll
+
+    return -2 * best_ll
+
 
 def PANICLE_FarmCPU(phe: np.ndarray,
                geno: Union[GenotypeMatrix, np.ndarray],
                map_data: GenotypeMap,
                CV: Optional[np.ndarray] = None,
                maxLoop: int = 10,
-               p_threshold: Optional[float] = 0.05,
+               p_threshold: Optional[float] = None,
                QTN_threshold: float = 0.01,
+               n_eff: Optional[int] = None,
+               converge: float = 1.0,
                bin_size: Optional[List[int]] = None,
                method_bin: str = "static",
                maxLine: int = 5000,
                cpu: int = 1,
-               reward_method: str = "min",
+               reward_method: str = "reward",
                verbose: bool = True) -> AssociationResults:
-    """FarmCPU method for GWAS analysis
-    
+    """FarmCPU method for GWAS analysis.
+
     Fixed and random model Circulating Probability Unification iteratively:
     1. Uses GLM to identify candidate QTNs
     2. Bins markers and selects representative QTNs
-    3. Uses MLM with selected QTNs as covariates
+    3. Uses GLM with selected QTNs as covariates
     4. Repeats until convergence
-    
+
     Args:
         phe: Phenotype matrix (n_individuals × 2), columns [ID, trait_value]
         geno: Genotype matrix (n_individuals × n_markers)
         map_data: Genetic map with SNP positions
         CV: Covariate matrix (n_individuals × n_covariates), optional
         maxLoop: Maximum number of iterations
-        p_threshold: P-value threshold for first iteration
+        p_threshold: P-value threshold for significance in first iteration.
+                     If min(p) > threshold after iteration 1, stop early.
         QTN_threshold: P-value threshold for selecting pseudo-QTNs
-        bin_size: List of bin sizes for iterations
+        n_eff: Effective number of independent tests. If provided, thresholds are
+               corrected by n_eff instead of n_markers.
+        converge: Convergence threshold (0.0-1.0). Jaccard overlap required between
+                  consecutive QTN sets to declare convergence. Default 1.0 = exact match.
+                  Lower values (e.g., 0.8) allow earlier convergence.
+        bin_size: List of bin sizes for iterations (default: [5e5, 5e6, 5e7])
         method_bin: Binning method ["static", "EMMA", "FaST-LMM"]
-        maxLine: Batch size for processing markers
-        cpu: Number of CPU threads (currently ignored)
-        reward_method: How to substitute pseudo-QTN p-values in final results.
-                'min' (default, matches rMVP "reward"): minimum covariate p-value across iterations.
-                'last': use covariate p-value from the final iteration only.
+        maxLine: Batch size for GLM processing
+        cpu: Number of CPUs (unused, for API compatibility)
+        reward_method: How to substitute pseudo-QTN p-values ("reward", "penalty",
+                       "mean", "median")
         verbose: Print progress information
-    
-    Returns:
-        AssociationResults object containing final Effect, SE, and P-value for each marker
-    """
-    
-    warn_if_potential_single_thread_blas()
-    
-    # Handle input validation
-    if isinstance(phe, np.ndarray):
-        if phe.shape[1] != 2:
-            raise ValueError("Phenotype matrix must have 2 columns [ID, trait_value]")
-        trait_values = phe[:, 1].astype(np.float64)
-    else:
-        raise ValueError("Phenotype must be numpy array")
-    
-    # Handle genotype input
-    if isinstance(geno, GenotypeMatrix):
-        genotype = geno
-        n_individuals = geno.n_individuals
-        n_markers = geno.n_markers
-    elif isinstance(geno, np.ndarray):
-        genotype = geno
-        n_individuals, n_markers = geno.shape
-    else:
-        raise ValueError("Genotype must be GenotypeMatrix or numpy array")
 
-    # Compute (or obtain) major alleles once to accelerate repeated GLM scans
-    # This keeps results identical while avoiding per-chunk bincounts
-    precomputed_major_alleles: Optional[np.ndarray] = None
-    if isinstance(genotype, GenotypeMatrix):
-        precomputed_major_alleles = genotype.major_alleles
+    Returns:
+        AssociationResults with effect sizes, standard errors, and p-values
+        for all markers.
+    """
+    # Validate inputs
+    n_individuals = phe.shape[0]
+    n_markers = map_data.n_markers
+
+    if isinstance(geno, GenotypeMatrix):
+        if geno.n_individuals != n_individuals:
+            raise ValueError(f"Phenotype has {n_individuals} individuals but genotype has {geno.n_individuals}")
+        if geno.n_markers != n_markers:
+            raise ValueError(f"Map has {n_markers} markers but genotype has {geno.n_markers}")
     else:
-        # Vectorized major allele computation for numpy arrays
-        # Treat -9/NaN as missing; counts for 0/1/2 per column
-        G = genotype
-        # Ensure float64 for NaN checks without copying entire matrix unnecessarily
-        # Use logical ops on original dtype to avoid allocation when possible
-        if np.issubdtype(G.dtype, np.floating):
-            is_miss = np.isnan(G) | (G == -9)
-        else:
-            is_miss = (G == -9)
-        # Build counts for 0,1,2 excluding missing
-        counts0 = np.sum((G == 0) & (~is_miss), axis=0)
-        counts1 = np.sum((G == 1) & (~is_miss), axis=0)
-        counts2 = np.sum((G == 2) & (~is_miss), axis=0)
-        counts = np.stack([counts0, counts1, counts2], axis=0)
-        major_codes = np.argmax(counts, axis=0).astype(np.int64)  # 0,1,2
-        precomputed_major_alleles = major_codes
-    
-    # Apply rMVP parameter logic: QTN.threshold = max(p.threshold, QTN.threshold)
-    # This matches rMVP line: if(!is.na(p.threshold)) QTN.threshold = max(p.threshold, QTN.threshold)
+        if geno.shape[0] != n_individuals:
+            raise ValueError(f"Phenotype has {n_individuals} individuals but genotype has {geno.shape[0]}")
+        if geno.shape[1] != n_markers:
+            raise ValueError(f"Map has {n_markers} markers but genotype has {geno.shape[1]}")
+
+    # Check for missing phenotype values
+    if np.any(np.isnan(phe[:, 1].astype(float))):
+        raise ValueError("NAs are not allowed in phenotype")
+
+    # Validate genotype input without loading entire matrix into memory
+    # GLM handles batched imputation efficiently via get_batch_imputed()
+    geno = _validate_genotype(geno, verbose=verbose)
+
+
+    # Set default bin sizes (R defaults: c(5e5, 5e6, 5e7))
+    if bin_size is None:
+        bin_size = [int(5e5), int(5e6), int(5e7)]
+
+    bin_selections = list(range(10, 101, 10))
+
+    # Validate and filter covariates
+    if CV is not None:
+        CV = np.asarray(CV, dtype=np.float64)
+        if CV.shape[0] != n_individuals:
+            raise ValueError("Number of individuals doesn't match between phenotype and covariates")
+        if np.any(np.isnan(CV)):
+            raise ValueError("NAs are not allowed in covariates")
+        # Remove constant columns
+        var_mask = np.var(CV, axis=0) > 0
+        CV = CV[:, var_mask]
+        if CV.shape[1] == 0:
+            CV = None
+        npc = CV.shape[1] if CV is not None else 0
+    else:
+        npc = 0
+
+    # Set QTN threshold (R: QTN.threshold = max(p.threshold, QTN.threshold))
     if p_threshold is not None:
         QTN_threshold = max(p_threshold, QTN_threshold)
-        if verbose and QTN_threshold != 0.01:  # Only print if changed from default
-            print(f"Applied rMVP logic: QTN_threshold adjusted to {QTN_threshold} (max of p_threshold={p_threshold}, original QTN_threshold)")
-    
-    if verbose:
-        print(f"FarmCPU analysis: {n_individuals} individuals, {n_markers} markers")
-        print(f"Parameters: maxLoop={maxLoop}, p_threshold={p_threshold}, QTN_threshold={QTN_threshold}")
-        if HAS_NUMBA:
-            print("⚡ Using Numba JIT compilation for GLM performance boost")
-        else:
-            print("💡 Install numba for GLM performance improvements")
-    
-    # Validate dimensions
-    if len(trait_values) != n_individuals:
-        raise ValueError("Number of phenotype observations must match number of individuals")
-    
-    # Set default bin sizes if not provided (matches R default)
-    if bin_size is None:
-        # R default: bin.size=c(5e5,5e6,5e7)  
-        bin_size = [500000, 5000000, 50000000]  # 500KB, 5MB, 50MB
-    
-    # Initialize variables for iteration (matching R FarmCPU)
-    current_covariates = CV.copy() if CV is not None else None
-    selected_qtns = []  # seqQTN - current QTNs
-    selected_qtns_save = []  # seqQTN.save - previous QTNs  
-    selected_qtns_pre = []  # seqQTN.pre - QTNs before previous
-    iteration_results = []
-    
-    # Track latest covariate statistics for each pseudo-QTN
-    qtn_latest_stats: Dict[int, Dict[str, float]] = {}
-    
-    # Expect 3 PCs (rMVP standard). If not provided, warn and proceed.
-    if CV is None:
+
+    # Default p_threshold for early stopping check (R uses 0.01/nm if p.threshold is NA)
+    n_tests = n_eff if n_eff is not None else n_markers
+    default_p_threshold = 0.01 / n_tests
+
+    # Initialize iteration variables
+    the_loop = 0
+    seq_qtn_save: np.ndarray = np.array([], dtype=int)  # QTNs from previous iteration
+    seq_qtn_pre: np.ndarray = np.array([], dtype=int)   # QTNs from 2 iterations ago
+    is_done = False
+    P: Optional[np.ndarray] = None  # Current p-values
+
+    # Track historical p-values for pseudo-QTNs (for substitution)
+    # Key: marker index, Value: list of p-values from iterations before it became a covariate
+    qtn_pvalue_history: Dict[int, List[float]] = {}
+
+    # Results storage
+    final_effects: Optional[np.ndarray] = None
+    final_se: Optional[np.ndarray] = None
+    final_pvalues: Optional[np.ndarray] = None
+    the_cv = CV  # Current covariates (updated each iteration)
+
+    # Cache first iteration results to avoid redundant GLM call on early stop
+    first_iter_effects: Optional[np.ndarray] = None
+    first_iter_se: Optional[np.ndarray] = None
+    first_iter_pvalues: Optional[np.ndarray] = None
+
+    while not is_done:
+        the_loop += 1
         if verbose:
-            print("Warning: No PCs provided — rMVP uses exactly 3 PCs.")
-    elif CV.shape[1] != 3 and verbose:
-        print(f"Warning: rMVP uses exactly 3 PCs, got {CV.shape[1]}")
-    
-    if verbose:
-        print(f"Starting FarmCPU with multi-scale binning approach")
-        print(f"Number of PCs included in FarmCPU: {CV.shape[1]}")
-    
-    # Loop 1 (initial GLM pass)
-    if verbose:
-        print("Current loop: 1 out of maximum of {0}".format(maxLoop))
-        print("Step 1: Running initial GLM (candidate scan)...")
-    glm_results_initial = PANICLE_GLM(
-        phe=phe,
-        geno=genotype,
-        CV=current_covariates,
-        maxLine=maxLine,
-        verbose=False,
-        impute_missing=True,
-        major_alleles=precomputed_major_alleles,
-        missing_fill_value=MISSING_FILL_VALUE
-    )
-    glm_array = glm_results_initial.to_numpy()
-    # P-values used to drive binning; updated each iteration after rescans
-    current_pvalues = glm_array[:, 2]
-    # Preserve initial on-site p-values (P0) for optional 'onsite' substitution
-    pvalues_initial = current_pvalues.copy()
-    min_p = np.min(current_pvalues) if current_pvalues.size > 0 else 1.0
-    # Early stop rule (rMVP): if min p > p_threshold (or 0.01/n if NA), return GLM
-    if p_threshold is None:
-        p_cut = 0.01 / n_markers
-    else:
-        p_cut = p_threshold
-    if min_p > p_cut:
-        if verbose:
-            print(f"Early stop: min p ({min_p:.2e}) > threshold ({p_cut:.2e}). Returning GLM results.")
-        return glm_results_initial
+            print(f"\nCurrent loop: {the_loop} out of maximum of {maxLoop}")
 
-    # Main FarmCPU iteration loop (loops 2..maxLoop)
-    for iteration in range(2, maxLoop + 1):
-        if verbose:
-            print(f"Current loop: {iteration} out of maximum of {maxLoop}")
-            print("Step 2: Binning and QTN selection (static method)...")
+        # Step 1: Set prior (just use P from previous iteration)
+        my_prior = P  # In R, FarmCPU.Prior returns P unchanged when Prior=NULL
 
-        # Inclusion size: bound = round(sqrt(n) / sqrt(log10(n)))
-        bound = int(np.round(np.sqrt(n_individuals) / np.sqrt(np.log10(n_individuals))))
-        bound = max(bound, 1)
+        # Step 2: Select pseudo-QTNs via binning
+        if my_prior is not None:
+            # Use appropriate covariates for binning
+            bin_cv = CV if the_loop <= 2 else the_cv
 
-        # Prepare p-values for binning: substitute pseudo-QTNs using previous iteration's selection
-        # rMVP applies FarmCPU.SUB before using P for subsequent BIN. Here we emulate 'onsite'
-        # substitution to drive binning.
-        pvals_for_binning = current_pvalues.copy()
-        if selected_qtns_save:
-            idx = np.array(selected_qtns_save, dtype=int)
-            # On-site substitution for selected QTNs
-            pvals_for_binning[idx] = pvalues_initial[idx]
+            seq_qtn = _farmcpu_bin(
+                phe=phe,
+                geno=geno,
+                map_data=map_data,
+                CV=bin_cv,
+                P=my_prior,
+                method=method_bin,
+                bin_sizes=bin_size,
+                bin_selections=bin_selections,
+                the_loop=the_loop,
+                bound=None,
+                verbose=verbose
+            )
 
-        final_selected_qtns, selection_meta = select_pseudo_qtns_rmvp_iteration(
-            pvalues=pvals_for_binning,
-            map_data=map_data,
-            genotype_matrix=genotype,
-            iteration=iteration,
-            n_individuals=n_individuals,
-            qtn_threshold=QTN_threshold,
-            p_threshold=p_threshold,
-            previous_qtns=selected_qtns_save,
-            bin_sizes=bin_size,
-            ld_threshold=0.7,
-            bound=bound,
-            verbose=verbose,
-        )
-
-        bin_size_history = selection_meta.get('bin_size')
-
-        if verbose:
-            if selection_meta.get('stopped'):
-                print("Early stop triggered by rMVP p-value threshold check.")
-            print(f"Selected {len(final_selected_qtns)} QTNs after rMVP-style optimization")
-            if final_selected_qtns:
-                print(f"seqQTN: {' '.join(map(str, final_selected_qtns))}")
-                print(f"number of covariates in current loop is: {3 + len(final_selected_qtns)}")
-
-        if selection_meta.get('stopped'):
-            selected_qtns = []
-            break
-
-        if len(final_selected_qtns) == 0:
             if verbose:
-                print("No QTNs passed QTN optimization threshold. Stopping FarmCPU.")
-            selected_qtns = []
-            break
-
-        if iteration > 0:
-            current_qtns_sorted = sorted(final_selected_qtns)
-            previous_qtns_sorted = sorted(selected_qtns_save)
-            exact_match = current_qtns_sorted == previous_qtns_sorted
-
-            if verbose and exact_match:
-                print("Converged!")
-            if exact_match:
-                break
-
-        # Update QTN history (shift for next iteration)
-        selected_qtns_pre = selected_qtns_save.copy()
-        selected_qtns_save = selected_qtns.copy()
-        selected_qtns = final_selected_qtns
-            
-        # Step 4: Prepare covariates for next iteration
-        if len(selected_qtns) > 0:
-            # Extract QTN genotypes to use as covariates (vectorized)
-            if isinstance(genotype, GenotypeMatrix):
-                # Fetch non-contiguous columns with imputation in one call
-                qtn_genotypes = (
-                    genotype.get_columns_imputed(selected_qtns, fill_value=MISSING_FILL_VALUE)
-                    if len(selected_qtns) > 0 else None
-                )
-            else:
-                # Numpy array: no imputation needed here because GLM handles it consistently
-                qtn_genotypes = genotype[:, selected_qtns].astype(np.float64)
-                missing_mask = (qtn_genotypes == -9) | np.isnan(qtn_genotypes)
-                if missing_mask.any():
-                    qtn_genotypes = qtn_genotypes.copy()
-                    qtn_genotypes[missing_mask] = MISSING_FILL_VALUE
-            
-            # Combine with existing covariates
-            if CV is not None and qtn_genotypes is not None:
-                current_covariates = np.column_stack([CV, qtn_genotypes])
-            elif CV is not None:
-                current_covariates = CV
-            else:
-                current_covariates = qtn_genotypes
-                
-            if verbose:
-                print(f"Created covariate matrix: {current_covariates.shape} (including {len(selected_qtns)} QTNs)")
+                print(f"Selected {len(seq_qtn)} pseudo-QTNs from binning")
         else:
-            current_covariates = CV
+            seq_qtn = np.array([], dtype=int)
 
-        # Step 5: Re-scan all SNPs with updated covariates to refresh P for next loop
-        # This mirrors rMVP's FarmCPU.LM step
-        rescan = PANICLE_GLM(
-            phe=phe,
-            geno=genotype,
-            CV=current_covariates,
-            maxLine=maxLine,
-            verbose=False,
-            impute_missing=True,
-            major_alleles=precomputed_major_alleles,
-            missing_fill_value=MISSING_FILL_VALUE
-        )
-        current_pvalues = rescan.to_numpy()[:, 2]
-        
-        # Track iteration history for reward method
-        if len(selected_qtns) > 0:
-            covariate_pvals, covariate_effects, covariate_se = _get_covariate_statistics(
-                phe, current_covariates, verbose=False)
-
-            pc_covariates = current_covariates.shape[1] - len(selected_qtns)
-            for i, qtn_idx in enumerate(selected_qtns):
-                covariate_col_idx = pc_covariates + i
-                if covariate_col_idx >= len(covariate_pvals):
-                    if verbose:
-                        print(f"  Warning: covariate index {covariate_col_idx} out of bounds for QTN {qtn_idx}")
-                    continue
-
-                reward_pval = float(covariate_pvals[covariate_col_idx])
-                reward_effect = float(covariate_effects[covariate_col_idx])
-                reward_se = float(covariate_se[covariate_col_idx])
-
-                qtn_latest_stats[qtn_idx] = {
-                    'iteration': iteration,
-                    'p_value': reward_pval,
-                    'effect': reward_effect,
-                    'se': reward_se,
-                    'bin_size': bin_size_history,
-                }
-
-                if 0 <= qtn_idx < len(current_pvalues):
-                    current_pvalues[qtn_idx] = reward_pval
-
-        iteration_results.append({
-            'iteration': iteration,
-            'bin_size': selection_meta.get('bin_size'),
-            'n_selected_qtns': len(selected_qtns),
-            'selected_indices': selected_qtns.copy(),
-            'min_pvalue_glm': float(np.min(current_pvalues)) if len(current_pvalues) > 0 else 1.0,
-            'qtn_covariate_pvals': {qtn_idx: stats['p_value'] for qtn_idx, stats in qtn_latest_stats.items()
-                                   if qtn_idx in selected_qtns}
-        })
-    
-    # Final GLM analysis with selected QTNs as covariates (standard FarmCPU output)
-    if verbose:
-        print(f"\n=== Final GLM Analysis ===")
-        print(f"Using {len(selected_qtns)} selected QTNs as covariates")
-    
-    # Run final GLM with selected QTNs as covariates to get GWAS results
-    final_results = PANICLE_GLM(
-        phe=phe,
-        geno=genotype,
-        CV=current_covariates,
-        maxLine=maxLine,
-        verbose=verbose,
-        impute_missing=True,
-        major_alleles=precomputed_major_alleles,
-        missing_fill_value=MISSING_FILL_VALUE
-    )
-    
-    # FarmCPU substitution step (rMVP-style): Replace pseudo-QTN rows with covariate stats
-    if len(selected_qtns) > 0:
-        results_array = final_results.to_numpy()
-        covariate_pvals, covariate_effects, covariate_se = _get_covariate_statistics(
-            phe, current_covariates, verbose=False)
-
-        pc_covariates = current_covariates.shape[1] - len(selected_qtns)
-        for i, qtn_idx in enumerate(selected_qtns):
-            if not (0 <= qtn_idx < len(results_array)):
-                continue
-
-            covariate_col_idx = pc_covariates + i
-            if covariate_col_idx >= len(covariate_pvals):
+        # Step 3: Early stopping check (R: theLoop==2 check)
+        if the_loop == 2:
+            threshold_check = p_threshold if p_threshold is not None else default_p_threshold
+            if my_prior is not None:
+                min_p = np.nanmin(my_prior)
                 if verbose:
-                    print(f"Warning: Unable to substitute QTN {qtn_idx}; covariate index {covariate_col_idx} out of range")
-                continue
-
-            reward_effect = float(covariate_effects[covariate_col_idx])
-            reward_se = float(covariate_se[covariate_col_idx])
-            reward_pval = float(covariate_pvals[covariate_col_idx])
-
-            qtn_latest_stats[qtn_idx] = {
-                'iteration': 'final',
-                'p_value': reward_pval,
-                'effect': reward_effect,
-                'se': reward_se,
-                'bin_size': None,
-            }
-
-            results_array[qtn_idx, 0] = reward_effect
-            results_array[qtn_idx, 1] = reward_se
-            results_array[qtn_idx, 2] = reward_pval
-
-        final_results = AssociationResults(
-            effects=results_array[:, 0],
-            se=results_array[:, 1],
-            pvalues=results_array[:, 2],
-            snp_map=map_data
-        )
-
-        if verbose:
-            print(f"Applied FarmCPU substitution for {len(selected_qtns)} pseudo-QTNs")
-    
-    if verbose:
-        print(f"\nFarmCPU completed after {len(iteration_results)} iterations")
-        if len(iteration_results) > 0:
-            final_min_p = np.min(final_results.to_numpy()[:, 2])
-            print(f"Final minimum p-value: {final_min_p:.2e}")
-        print(f"Selected pseudo-QTNs: {selected_qtns}")
-
-    # Expose latest selection for debugging/testing utilities
-    PANICLE_FarmCPU.last_selected_qtns = selected_qtns.copy()
-    PANICLE_FarmCPU.last_iteration_details = iteration_results
-
-    return final_results
-
-
-def _get_covariate_statistics(phe: np.ndarray, covariates: np.ndarray, verbose: bool = False):
-    """Replicate GAPIT/FarmCPU fixed effect estimation for pseudo-QTNs."""
-    from scipy import stats
-
-    if covariates is None or covariates.size == 0:
-        return np.array([]), np.array([]), np.array([])
-
-    trait_values = phe[:, 1].astype(np.float64)
-    X = np.column_stack([np.ones(trait_values.shape[0]), covariates])
-
-    try:
-        # Suppress warnings for expected numerical issues in matrix operations
-        # These are properly handled by try-except and validity checks
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            XtX = X.T @ X
-            XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
-            beta = XtX_inv @ (X.T @ trait_values)
-            residuals = trait_values - X @ beta
-        df = trait_values.shape[0] - X.shape[1]
-        if df <= 0:
-            raise np.linalg.LinAlgError
-        ve = float(residuals @ residuals) / df
-        se = np.sqrt(np.maximum(np.diag(XtX_inv) * ve, 1e-30))
-        t_stats = np.divide(beta, se, out=np.zeros_like(beta), where=se > 0)
-        p_vals = 2 * stats.t.sf(np.abs(t_stats), df)
-        return p_vals[1:], beta[1:], se[1:]
-    except np.linalg.LinAlgError:
-        if verbose:
-            print("Warning: Failed to compute covariate statistics due to singular matrix")
-        n_covariates = covariates.shape[1]
-        return (np.ones(n_covariates), np.zeros(n_covariates), np.ones(n_covariates))
-    return (np.ones(n_covariates), 
-            np.zeros(n_covariates), 
-            np.ones(n_covariates))
-
-
-def select_qtns_multiscale_binning_rmvp(candidate_indices: np.ndarray,
-                                        pvalues: np.ndarray,
-                                        map_data: 'GenotypeMap',
-                                        bin_sizes: List[int],
-                                        method: str = "static",
-                                        percentiles: List[int] = None,
-                                        verbose: bool = False) -> List[int]:
-    """rMVP multi-scale binning algorithm - exact implementation
-    
-    Implements rMVP's multi-scale binning approach:
-    Each percentile is applied across ALL bin sizes simultaneously:
-    - 500K bp bins (fine-scale)
-    - 5M bp bins (medium-scale)  
-    - 50M bp bins (coarse-scale)
-    
-    This allows multiple QTNs per genomic region and explains why
-    rMVP selects 18+ QTNs instead of just 10 percentiles.
-    
-    Args:
-        candidate_indices: Indices of candidate QTNs
-        pvalues: P-values for all markers
-        map_data: Genetic map information
-        bin_sizes: List of bin sizes [500K, 5M, 50M] for multi-scale binning
-        method: Binning method ("static" for rMVP compliance)
-        percentiles: List of percentiles [10,20,...,100]
-        verbose: Print progress
-    
-    Returns:
-        List of selected QTN indices from multi-scale binning
-    """
-    
-    if len(candidate_indices) == 0:
-        return []
-    
-    if percentiles is None:
-        percentiles = list(range(10, 101, 10))  # [10,20,30...100]
-    
-    if verbose:
-        print(f"rMVP multi-scale binning: {len(candidate_indices)} candidates, {len(percentiles)} percentiles, {len(bin_sizes)} scales")
-    
-    # Get map information
-    try:
-        map_df = map_data.to_dataframe()
-        chromosomes = map_df['CHROM'].values.astype(np.float64)
-        positions = map_df['POS'].values.astype(np.float64)
-    except Exception as e:
-        if verbose:
-            warnings.warn(f"Could not access map data for binning: {e}")
-        # Fallback: select by percentiles directly from p-values
-        sorted_indices = candidate_indices[np.argsort(pvalues[candidate_indices])]
-        n_total = len(sorted_indices)
-        selected_indices = []
-        for pct in percentiles:
-            idx = min(int(n_total * pct / 100) - 1, n_total - 1)
-            if idx >= 0:
-                selected_indices.append(sorted_indices[idx])
-        return list(set(selected_indices))  # Remove duplicates
-    
-    if method.lower() != "static":
-        if verbose:
-            print(f"Warning: rMVP uses static binning, got {method}")
-    
-    # rMVP multi-scale static binning implementation
-    MaxBP = 1e10  # Maximum base pair value for chromosome encoding
-    
-    # Step 1: Create SNP ID = position + chromosome * MaxBP (rMVP standard)
-    snp_ids = positions[candidate_indices] + chromosomes[candidate_indices] * MaxBP
-    candidate_pvalues = pvalues[candidate_indices]
-    
-    all_selected_qtns = set()  # Use set to avoid duplicates across scales
-    
-    # Step 2: Apply each percentile across ALL bin sizes (multi-scale approach)
-    for bin_size in bin_sizes:
-        if verbose:
-            print(f"  Processing bin size: {bin_size:,.0f} bp")
-        
-        # Create bin IDs for this scale
-        bin_ids = np.floor(snp_ids / bin_size).astype(np.int64)
-        
-        # Create binning data with position-based tie breaking
-        bin_data = []
-        for i in range(len(candidate_indices)):
-            bin_data.append({
-                'bin_id': bin_ids[i],
-                'snp_idx': candidate_indices[i],
-                'snp_id': snp_ids[i],
-                'pvalue': candidate_pvalues[i],
-                'position': positions[candidate_indices[i]],
-                'original_order': i
-            })
-        
-        # Sort by p-value first, then by position for tie breaking
-        bin_data.sort(key=lambda x: (x['pvalue'], x['position'], x['original_order']))
-        
-        # Group by bin and select best QTN from each bin
-        bin_representatives = {}
-        for item in bin_data:
-            bin_id = item['bin_id']
-            if bin_id not in bin_representatives:
-                bin_representatives[bin_id] = item  # Take best (first) QTN per bin
-        
-        # Get all representative QTNs from this scale
-        scale_qtns = list(bin_representatives.values())
-        scale_qtns.sort(key=lambda x: (x['pvalue'], x['position'], x['original_order']))
-        
-        # Apply percentile selection to this scale's QTNs
-        n_scale_qtns = len(scale_qtns)
-        if n_scale_qtns > 0:
-            for pct in percentiles:
-                pct_idx = min(int(n_scale_qtns * pct / 100) - 1, n_scale_qtns - 1)
-                if pct_idx >= 0:
-                    qtn_idx = scale_qtns[pct_idx]['snp_idx']
-                    all_selected_qtns.add(qtn_idx)
-    
-    # Convert set back to list and sort by p-value
-    selected_qtns = list(all_selected_qtns)
-    if len(selected_qtns) > 1:
-        qtn_pvalues = [(idx, pvalues[idx]) for idx in selected_qtns]
-        qtn_pvalues.sort(key=lambda x: x[1])  # Sort by p-value
-        selected_qtns = [idx for idx, _ in qtn_pvalues]
-    
-    if verbose:
-        print(f"rMVP multi-scale binning result: {len(selected_qtns)} total QTNs from {len(bin_sizes)} scales")
-    
-    return selected_qtns
-
-
-def _union_preserve_order(primary: Sequence[int], secondary: Sequence[int]) -> List[int]:
-    """Return ordered union matching rMVP's base::union behaviour."""
-    seen: set[int] = set()
-    merged: List[int] = []
-    for idx in list(primary) + list(secondary):
-        idx_int = int(idx)
-        if idx_int not in seen:
-            merged.append(idx_int)
-            seen.add(idx_int)
-    return merged
-
-
-def select_pseudo_qtns_rmvp_iteration(
-    pvalues: np.ndarray,
-    map_data: 'GenotypeMap',
-    genotype_matrix: Union[GenotypeMatrix, np.ndarray],
-    iteration: int,
-    n_individuals: int,
-    qtn_threshold: float,
-    p_threshold: Optional[float],
-    previous_qtns: Sequence[int],
-    *,
-    bin_sizes: Optional[Sequence[int]] = None,
-    ld_threshold: float = 0.7,
-    bound: Optional[int] = None,
-    verbose: bool = False,
-) -> Tuple[List[int], Dict[str, Union[int, float, List[int]]]]:
-    """Exact rMVP pseudo-QTN selection for a single FarmCPU iteration."""
-
-    pvalues = np.asarray(pvalues, dtype=float)
-    n_markers = pvalues.shape[0]
-
-    if bin_sizes is None:
-        bin_sizes = (500_000, 5_000_000, 50_000_000)
-    if len(bin_sizes) < 3:
-        raise ValueError("bin_sizes must contain at least three elements")
-
-    if bound is None:
-        with np.errstate(divide='ignore', invalid='ignore'):
-            bound_est = np.sqrt(float(n_individuals)) / np.sqrt(np.log10(max(n_individuals, 2)))
-        bound = max(int(round(bound_est)), 1)
-
-    if iteration == 2:
-        bin_size_use = bin_sizes[-1]
-    elif iteration == 3:
-        bin_size_use = bin_sizes[-2]
-    else:
-        bin_size_use = bin_sizes[0]
-
-    initial_candidates = select_qtns_static_binning_rmvp(
-        pvalues=pvalues,
-        map_data=map_data,
-        bin_size=bin_size_use,
-        top_k=bound,
-        qtn_p_threshold=qtn_threshold,
-        verbose=verbose,
-    )
-
-    metadata: Dict[str, Union[int, float, List[int]]] = {
-        'iteration': iteration,
-        'bin_size': bin_size_use,
-        'initial_candidates': list(initial_candidates),
-    }
-
-    finite_mask = np.isfinite(pvalues)
-    min_p = float(np.min(pvalues[finite_mask])) if np.any(finite_mask) else float('inf')
-    metadata['min_p'] = min_p
-
-    if iteration == 2:
-        if p_threshold is not None and not np.isnan(p_threshold):
-            threshold_cut = float(p_threshold)
-        else:
-            threshold_cut = 0.01 / max(n_markers, 1)
-        metadata['p_threshold'] = threshold_cut
-        if min_p > threshold_cut:
-            metadata['stopped'] = True
-            return [], metadata
-
-    prev_list = list(previous_qtns) if previous_qtns is not None else []
-    candidates = _union_preserve_order(initial_candidates, prev_list)
-    metadata['after_union'] = candidates.copy()
-
-    if not candidates:
-        metadata['after_threshold'] = []
-        metadata['after_ld'] = []
-        return [], metadata
-
-    candidate_pvals = pvalues[candidates]
-    keep_mask = np.isfinite(candidate_pvals)
-
-    if iteration == 2:
-        keep_mask &= (candidate_pvals < qtn_threshold)
-    else:
-        below = candidate_pvals < qtn_threshold
-        prev_set = set(prev_list)
-        keep_prev = np.array([idx in prev_set for idx in candidates]) if prev_list else np.zeros(len(candidates), dtype=bool)
-        keep_mask &= (below | keep_prev)
-
-    filtered_candidates = [idx for idx, keep in zip(candidates, keep_mask) if keep]
-    filtered_pvals = [float(val) for val, keep in zip(candidate_pvals, keep_mask) if keep]
-    metadata['after_threshold'] = filtered_candidates.copy()
-
-    if not filtered_candidates:
-        metadata['after_ld'] = []
-        return [], metadata
-
-    order = np.argsort(filtered_pvals)
-    sorted_candidates = [filtered_candidates[i] for i in order]
-
-    pruned = remove_qtns_by_ld(
-        selected_qtns=sorted_candidates,
-        genotype_matrix=genotype_matrix,
-        correlation_threshold=ld_threshold,
-        max_individuals=100000,
-        map_data=map_data,
-        within_chrom_only=True,
-        verbose=verbose,
-        debug=verbose,
-    )
-
-    metadata['after_ld'] = pruned.copy()
-    return pruned, metadata
-
-
-def select_qtns_static_binning_rmvp(pvalues: np.ndarray,
-                                    map_data: 'GenotypeMap',
-                                    bin_size: int,
-                                    top_k: int,
-                                    qtn_p_threshold: float = 0.01,
-                                    verbose: bool = False) -> List[int]:
-    """Static binning (rMVP default) for FarmCPU QTN selection
-
-    Steps per rMVP:
-    - Compute SNP ID = CHR * MaxBP + POS (MaxBP = 1e9)
-    - binID = floor(ID / bin_size)
-    - Within each bin, select SNP with smallest GLM p-value
-    - Collect bin representatives, sort by p, filter by p < qtn_p_threshold, take top_k
-    """
-    map_df = map_data.to_dataframe()
-    chrom_raw = map_df['CHROM'].to_numpy()
-    pos_raw = map_df['POS'].to_numpy()
-
-    if np.issubdtype(chrom_raw.dtype, np.number):
-        chrom_numeric = chrom_raw.astype(np.int64, copy=False)
-    else:
-        chrom_numeric = np.empty(len(chrom_raw), dtype=np.int64)
-        chrom_lookup: Dict[str, int] = {}
-        next_code = 1
-        for idx, value in enumerate(chrom_raw.astype(str)):
-            code = chrom_lookup.get(value)
-            if code is None:
-                code = next_code
-                chrom_lookup[value] = code
-                next_code += 1
-            chrom_numeric[idx] = code
-
-    pos_numeric = pos_raw.astype(np.int64, copy=False)
-
-    # rMVP uses fixed MaxBP = 1e10 and ID = POS + CHR*MaxBP
-    MaxBP = 10_000_000_000
-    ids = pos_numeric + chrom_numeric * MaxBP
-    bin_ids = (ids // bin_size).astype(np.int64)
-
-    n = len(pvalues)
-    idx_all = np.arange(n)
-    # Keep finite p-values only
-    finite_mask = np.isfinite(pvalues)
-    idx_all = idx_all[finite_mask]
-    if idx_all.size == 0:
-        return []
-    # rMVP sorts by p, then by bin ID. Use stable sorts to keep min-p per bin.
-    idx_p = idx_all[np.argsort(pvalues[idx_all], kind='mergesort')]
-    idx_pb = idx_p[np.argsort(bin_ids[idx_p], kind='mergesort')]
-    # Take first SNP per bin as representative
-    seen_bins = set()
-    reps = []
-    for i in idx_pb:
-        b = bin_ids[i]
-        if b not in seen_bins:
-            seen_bins.add(b)
-            reps.append(i)
-    reps_before = len(reps)
-    # Sort reps by p ascending and take top_k (thresholding applied by caller for rMVP parity)
-    reps.sort(key=lambda i: pvalues[i])
-    if top_k is not None and top_k > 0:
-        reps = reps[:top_k]
-
-    if verbose:
-        print(f"Static binning: bin={bin_size:,}, reps before filter={reps_before}, after threshold/top_k={len(reps)}")
-
-    return reps
-
-
-def remove_qtns_by_ld(selected_qtns: List[int],
-                     genotype_matrix: Union[GenotypeMatrix, np.ndarray],
-                     correlation_threshold: float = 0.7,
-                     max_individuals: int = 100000,
-                     map_data: Optional[GenotypeMap] = None,
-                     within_chrom_only: bool = False,
-                     verbose: bool = False,
-                     debug: bool = False,
-                     ld_max: Optional[int] = 50,
-                     block_size: int = 1000) -> List[int]:
-    """Remove correlated QTNs using GAPIT/BLINK block-based LD pruning.
-
-    This mirrors the behaviour of ``Blink.LDRemove`` / ``Blink.LDRemoveBlock`` by
-    processing significant SNPs in fixed-size blocks (default 1,000) and
-    iteratively pruning SNPs whose pairwise correlation exceeds the supplied
-    threshold. Optional ``ld_max`` limits the number of retained QTNs, matching
-    GAPIT's ``LD.num`` parameter (default 50).
-    """
-
-    if len(selected_qtns) <= 1:
-        return selected_qtns
-
-    if verbose:
-        scope = "within-chromosome" if within_chrom_only else "genome-wide"
-        print(f"LD filtering: {len(selected_qtns)} QTNs, threshold={correlation_threshold} ({scope})")
-
-    # Step 1: Extract genotypes for the candidate QTNs
-    if isinstance(genotype_matrix, GenotypeMatrix):
-        qtn_genotypes = genotype_matrix.get_columns_imputed(selected_qtns).astype(np.float64, copy=True)
-        n_individuals = genotype_matrix.n_individuals
-    else:
-        qtn_genotypes = np.asarray(genotype_matrix[:, selected_qtns], dtype=np.float64)
-        n_individuals = genotype_matrix.shape[0]
-
-    # Step 2: Use the first ``max_individuals`` individuals (GAPIT behaviour)
-    sampled_individuals = min(n_individuals, max_individuals)
-    qtn_subset = qtn_genotypes[:sampled_individuals, :]
-
-    # Treat missing calls (-9) as NaN so correlations are punished
-    missing_mask = (qtn_subset == -9)
-    if missing_mask.any():
-        qtn_subset = qtn_subset.copy()
-        qtn_subset[missing_mask] = np.nan
-
-    # Drop zero-variance SNPs prior to LD pruning
-    std_dev = np.nanstd(qtn_subset, axis=0)
-    variance_mask = std_dev > 1e-12
-    candidate_array = np.asarray(selected_qtns, dtype=int)[variance_mask]
-    qtn_subset = qtn_subset[:, variance_mask]
-
-    if candidate_array.size <= 1:
-        return candidate_array.tolist()
-
-    if verbose and candidate_array.size != len(selected_qtns):
-        dropped = len(selected_qtns) - candidate_array.size
-        print(f"LD filtering: dropped {dropped} zero-variance QTNs before correlation")
-
-    # Pre-compute chromosome equality mask if required
-    same_chrom_matrix: Optional[np.ndarray]
-    if within_chrom_only and map_data is not None:
-        chrom_vec = map_data.to_dataframe()['CHROM'].to_numpy()
-        chrom_sel = chrom_vec[candidate_array]
-        same_chrom_matrix = chrom_sel[:, None] == chrom_sel[None, :]
-    else:
-        same_chrom_matrix = None
-
-    block_size = max(1, min(block_size, candidate_array.size))
-    truncated = False
-    retained_indices: List[int] = []
-    retained_positions: List[int] = []
-
-    for start in range(0, candidate_array.size, block_size):
-        end = min(start + block_size, candidate_array.size)
-        block_data = qtn_subset[:, start:end]
-        block_indices = candidate_array[start:end]
-        same_block = (
-            same_chrom_matrix[start:end, start:end] if same_chrom_matrix is not None else None
-        )
-        keep_mask = _ld_remove_block(block_data, correlation_threshold, same_block)
-        retained_indices.extend(int(idx) for idx, keep in zip(block_indices, keep_mask) if keep)
-        retained_positions.extend(start + i for i, keep in enumerate(keep_mask) if keep)
-
-        if ld_max is not None and ld_max > 0 and len(retained_indices) >= ld_max:
-            retained_indices = retained_indices[:ld_max]
-            retained_positions = retained_positions[:ld_max]
-            truncated = True
-            if verbose:
-                print(f"LD filtering truncated after reaching ld_max={ld_max}")
-            break
-
-    # If we processed multiple blocks without truncation, run a final LD pass on retained SNPs
-    if not truncated and candidate_array.size > block_size and len(retained_indices) > 1:
-        unique_positions = sorted(set(retained_positions))
-        reduced_data = qtn_subset[:, unique_positions]
-        same_reduced = (
-            same_chrom_matrix[np.ix_(unique_positions, unique_positions)]
-            if same_chrom_matrix is not None else None
-        )
-        keep_mask = _ld_remove_block(reduced_data, correlation_threshold, same_reduced)
-        retained_indices = [int(candidate_array[unique_positions[i]]) for i, keep in enumerate(keep_mask) if keep]
-
-    if ld_max is not None and ld_max > 0 and len(retained_indices) > ld_max:
-        retained_indices = retained_indices[:ld_max]
-
-    if verbose:
-        print(f"LD filtering complete: {len(retained_indices)}/{len(selected_qtns)} QTNs retained")
-
-    return retained_indices
-
-
-def _ld_remove_block(gd_block: np.ndarray,
-                     correlation_threshold: float,
-                     same_chrom: Optional[np.ndarray]) -> np.ndarray:
-    """Replicate Blink.LDRemoveBlock for a single matrix chunk."""
-
-    n_markers = gd_block.shape[1]
-    if n_markers == 0:
-        return np.zeros(0, dtype=bool)
-
-    masked = np.ma.masked_invalid(gd_block)
-    corr = np.ma.corrcoef(masked, rowvar=False).filled(np.nan)
-    corr = np.where(np.isnan(corr), 1.0, corr)
-
-    keep_mask = np.ones(n_markers, dtype=bool)
-    for i in range(n_markers):
-        if not keep_mask[i]:
-            continue
-        for j in range(i):
-            if not keep_mask[j]:
-                continue
-            if same_chrom is not None and not same_chrom[i, j]:
-                continue
-            if abs(corr[i, j]) > correlation_threshold:
-                keep_mask[i] = False
+                    print(f"Min p-value from previous iteration: {min_p:.2e}, threshold: {threshold_check:.2e}")
+                if min_p > threshold_check:
+                    seq_qtn = np.array([], dtype=int)
+                    if verbose:
+                        print("Top SNPs have little effect, set seqQTN to NULL!")
+
+            # If no QTNs after early stopping check, return first iteration's GLM results
+            if len(seq_qtn) == 0:
+                if verbose:
+                    print("No significant pseudo-QTNs found, returning cached GLM results")
+                # Use cached first iteration results (avoid redundant GLM call)
+                final_effects = first_iter_effects
+                final_se = first_iter_se
+                final_pvalues = first_iter_pvalues
                 break
 
-    return keep_mask
+        # Step 4: Force include previous QTNs (R logic)
+        if len(seq_qtn_save) > 0 and len(seq_qtn) > 0:
+            seq_qtn = np.union1d(seq_qtn, seq_qtn_save)
+            if verbose:
+                print(f"After forcing previous QTNs: {len(seq_qtn)} total")
+
+        # Step 5: Filter QTNs by p-value threshold (R: theLoop != 1)
+        if the_loop >= 2 and my_prior is not None and len(seq_qtn) > 0:
+            # Handle 2D P-values (if return_cov_stats=True was used)
+            if my_prior.ndim == 2:
+                # Filter based on the marker's own P-value (column 0)
+                seq_qtn_p = my_prior[seq_qtn, 0]
+            else:
+                seq_qtn_p = my_prior[seq_qtn]
+
+            if the_loop == 2:
+                # Strict filtering in loop 2
+                seq_qtn = np.asarray(seq_qtn).ravel()
+                seq_qtn_p = np.asarray(seq_qtn_p).ravel()
+                min_len = min(seq_qtn.size, seq_qtn_p.size)
+                seq_qtn = seq_qtn[:min_len]
+                seq_qtn_p = seq_qtn_p[:min_len]
+                keep_mask = seq_qtn_p < QTN_threshold
+            else:
+                # Keep previous QTNs plus new ones below threshold
+                seq_qtn = np.asarray(seq_qtn).ravel()
+                seq_qtn_p = np.asarray(seq_qtn_p).ravel()
+                min_len = min(seq_qtn.size, seq_qtn_p.size)
+                seq_qtn = seq_qtn[:min_len]
+                seq_qtn_p = seq_qtn_p[:min_len]
+                keep_mask = (seq_qtn_p < QTN_threshold) | np.isin(seq_qtn, seq_qtn_save)
+
+            keep_mask = np.asarray(keep_mask).ravel()
+            keep_mask = keep_mask[:seq_qtn.size]
+            seq_qtn = seq_qtn[keep_mask]
+            seq_qtn_p = seq_qtn_p[:seq_qtn.size][keep_mask]
+
+            # Remove NaN entries
+            valid_mask = ~np.isnan(seq_qtn_p)
+            seq_qtn = seq_qtn[valid_mask]
+            seq_qtn_p = seq_qtn_p[valid_mask]
+
+            if verbose:
+                print(f"After p-value filtering (threshold={QTN_threshold}): {len(seq_qtn)} QTNs")
+                print(f"After p-value filtering (threshold={QTN_threshold}): {len(seq_qtn)} QTNs")
+        else:
+            if my_prior is not None and len(seq_qtn) > 0:
+                if my_prior.ndim == 2:
+                    seq_qtn_p = my_prior[seq_qtn, 0]
+                else:
+                    seq_qtn_p = my_prior[seq_qtn]
+            else:
+                seq_qtn_p = np.array([])
+
+        # Step 6: Remove correlated QTNs (LD pruning)
+        if len(seq_qtn) > 0:
+            bin_geno, seq_qtn = _farmcpu_remove(
+                geno=geno,
+                map_data=map_data,
+                seq_qtn=seq_qtn,
+                seq_qtn_p=seq_qtn_p if len(seq_qtn_p) == len(seq_qtn) else (my_prior[seq_qtn] if my_prior is not None else np.ones(len(seq_qtn))),
+                threshold=0.7
+            )
+            if verbose:
+                print(f"After LD pruning: {len(seq_qtn)} QTNs")
+        else:
+            bin_geno = None
+
+        # Step 7: Check convergence (Jaccard similarity)
+        if len(seq_qtn) > 0 and len(seq_qtn_save) > 0:
+            intersection = len(np.intersect1d(seq_qtn, seq_qtn_save))
+            union = len(np.union1d(seq_qtn, seq_qtn_save))
+            the_converge = intersection / union if union > 0 else 0
+        else:
+            the_converge = 0
+
+        # Check for cycling (same QTNs as 2 iterations ago)
+        if len(seq_qtn) > 0 and len(seq_qtn_pre) > 0:
+            is_circle = (len(np.union1d(seq_qtn, seq_qtn_pre)) ==
+                        len(np.intersect1d(seq_qtn, seq_qtn_pre)))
+        else:
+            is_circle = False
+
+        if verbose:
+            if len(seq_qtn) > 0:
+                print(f"seqQTN: {seq_qtn[:10]}{'...' if len(seq_qtn) > 10 else ''}")
+            else:
+                print("seqQTN: NULL")
+            print(f"Convergence: {the_converge:.2f}")
+
+        # Check if done
+        is_done = (the_loop >= maxLoop) or (the_converge >= converge) or is_circle
+
+        if verbose and the_loop == maxLoop:
+            print(f"Total number of possible QTNs in the model: {len(seq_qtn)}")
+
+        # Update history
+        seq_qtn_pre = seq_qtn_save.copy()
+        seq_qtn_save = seq_qtn.copy()
+
+        # Step 8: Build covariates including pseudo-QTNs
+        if bin_geno is not None and len(seq_qtn) > 0:
+            if CV is not None:
+                the_cv = np.column_stack([CV, bin_geno])
+            else:
+                the_cv = bin_geno.astype(np.float64)
+            if verbose:
+                print(f"Number of covariates in current loop: {the_cv.shape[1]}")
+        else:
+            the_cv = CV
+
+        # Step 9: Run GLM with updated covariates
+        # Use cov_pvalue_agg for memory-efficient aggregation when QTNs exist
+        # This avoids creating a huge (n_markers × n_covariates) 2D array
+        has_qtns = len(seq_qtn) > 0
+        agg_method = reward_method if reward_method in {"reward", "penalty", "mean"} else None
+        use_cov_pvalue_agg = has_qtns and agg_method is not None
+        if verbose:
+            print("Running GLM...")
+
+        glm_result = PANICLE_GLM(
+            phe=phe,
+            geno=geno,
+            CV=the_cv,
+            maxLine=maxLine,
+            cpu=cpu,
+            verbose=verbose,
+            missing_fill_value=MISSING_FILL_VALUE,
+            return_cov_stats=has_qtns and not use_cov_pvalue_agg,
+            cov_pvalue_agg=agg_method if use_cov_pvalue_agg else None
+        )
+
+        effects = glm_result.effects.copy()
+        se = glm_result.se.copy()
+        if glm_result.pvalues.ndim == 2:
+            P = glm_result.pvalues[:, 0].copy()
+        else:
+            P = glm_result.pvalues.copy()
+
+        # Get aggregated covariate p-values for substitution (if available)
+        cov_pvalue_summary = getattr(glm_result, "cov_pvalue_summary", None)
+
+        # Handle zero p-values (R: P[P==0] <- min(P[P!=0],na.rm=TRUE)*0.01)
+        if np.any(P == 0):
+            min_nonzero = np.nanmin(P[P != 0]) if np.any(P != 0) else 1e-300
+            P[P == 0] = min_nonzero * 0.01
+
+        # Cache first iteration results for potential early stop (avoid redundant GLM)
+        if the_loop == 1:
+            first_iter_effects = effects.copy()
+            first_iter_se = se.copy()
+            first_iter_pvalues = P.copy()
+
+        # Step 10: Track p-values for pseudo-QTNs BEFORE they become covariates
+        # (for substitution later)
+        if my_prior is not None:
+            for qtn_idx in seq_qtn:
+                if qtn_idx not in qtn_pvalue_history:
+                    # First time seeing this QTN - record its p-value from PREVIOUS iteration
+                    qtn_pvalue_history[qtn_idx] = [my_prior[qtn_idx]]
+                # Always add current p-value (even though it's confounded when QTN is covariate)
+                qtn_pvalue_history[qtn_idx].append(P[qtn_idx])
+
+        # Step 11: Substitute pseudo-QTN p-values using covariate statistics
+        # Aggregation mode: use cov_pvalue_summary for each covariate column.
+        # Full mode: fall back to per-marker covariate p-values.
+        if has_qtns:
+            n_user_cov = CV.shape[1] if CV is not None else 0
+            if cov_pvalue_summary is not None:
+                # Layout: [intercept, user_cov1, ..., user_covN, QTN_1, QTN_2, ...]
+                qtn_start_idx = 1 + n_user_cov
+                for i, qtn_idx in enumerate(seq_qtn):
+                    cov_idx = qtn_start_idx + i
+                    if cov_idx < len(cov_pvalue_summary):
+                        sub_p = cov_pvalue_summary[cov_idx]
+                        if np.isnan(sub_p) or not np.isfinite(sub_p):
+                            sub_p = 1.0
+                        P[qtn_idx] = sub_p
+            elif glm_result.pvalues.ndim == 2:
+                # Full covariate stats path (needed for median)
+                qtn_start_col = 2 + n_user_cov
+                for i, qtn_idx in enumerate(seq_qtn):
+                    col_idx = qtn_start_col + i
+                    if col_idx < glm_result.pvalues.shape[1]:
+                        cov_p_vec = glm_result.pvalues[:, col_idx]
+                        if reward_method == "reward":
+                            sub_p = np.nanmin(cov_p_vec)
+                        elif reward_method == "penalty":
+                            sub_p = np.nanmax(cov_p_vec)
+                        elif reward_method == "mean":
+                            sub_p = np.nanmean(cov_p_vec)
+                        elif reward_method == "median":
+                            sub_p = np.nanmedian(cov_p_vec)
+                        else:
+                            sub_p = np.nanmin(cov_p_vec)
+
+                        if np.isnan(sub_p) or not np.isfinite(sub_p):
+                            sub_p = 1.0
+                        P[qtn_idx] = sub_p
+
+        # Explicitly delete glm_result to free memory before next iteration
+        del glm_result
+
+        final_effects = effects
+        final_se = se
+        final_pvalues = P
+
+    # Create results object
+    result = AssociationResults(
+        effects=final_effects,
+        se=final_se,
+        pvalues=final_pvalues,
+        snp_map=map_data
+    )
+
+    PANICLE_FarmCPU.last_selected_qtns = [int(idx) for idx in seq_qtn_save]
+
+    if verbose:
+        n_sig = np.sum(final_pvalues < 0.05 / n_markers)
+        print(f"\nFarmCPU complete. {n_sig} markers below Bonferroni threshold")
+
+    return result
+
+
+PANICLE_FarmCPU.last_selected_qtns = []  # type: ignore[attr-defined]

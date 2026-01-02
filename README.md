@@ -203,43 +203,37 @@ GEC citation: Li MX, Yeung JM, Cherny SS, Sham PC. Evaluating the effective numb
 
 ## Benchmarks
 
-Benchmarks based on traits measured from 862 samples, each scored for 5,751,024 markers and run on a Apple M4 CPU.
+Benchmarks based on traits measured from 862 samples, each scored for 5,751,024 markers and run on an Apple M4 CPU (cached VCF).
 
 ### Data Loading
 
-Data loading is shared across all algorithms (cached VCF, large dataset):
-
 | Step                | Time    |
 |---------------------|---------|
-| Genotype loading    | 1.42s   |
+| Genotype loading    | 1.34s   |
 | Phenotype loading   | 0.005s  |
-| Sample alignment    | 8.42s   |
-| PCA (3 components)  | 1.47s   |
-| **Total**           | **11.31s**|
+| Sample alignment    | 11.12s  |
+| PCA (3 components)  | 2.08s   |
+| **Total**           | **14.55s** |
 
-*Note: First run with a given genetic marker file requires substantial time for parsing (9 minutes for 5M markers scored for 1000 individuals); subsequent runs use binary cache and load in seconds.*
+*Note: First run with a given genetic marker file requires substantial time for parsing (≈9 minutes for 5M markers scored for 1000 individuals); subsequent runs use binary cache and load in seconds.*
 
-### Analysis Times
+### Analysis Times (5.75M markers, 862 samples; excludes data loading/result writing)
 
-Time to run each algorithm (excludes data loading and result writing):
+| Method      | Time    | Notes                                     |
+|-------------|---------|-------------------------------------------|
+| GLM         | 8.94s   | ~643K markers/second                      |
+| MLM         | 28.18s  | LOCO kinship precompute +15.95s = 44.13s total |
+| MLM_Hybrid  | 30.67s  | Includes LOCO kinship reuse               |
+| FarmCPU     | 41.90s  | 10 max iterations                         |
+| BLINK       | 60.81s  | 10 max iterations                         |
 
-| Method      | Time    | Notes                              |
-|-------------|---------|------------------------------------|
-| GLM         | 5.8s   | ~997K markers/second (5M markers)  |
-| MLM  | 34.0s  | Includes leave one chromosome out kinship calcs       |
-| FarmCPU     | 83.6s  | 10 max iterations                  |
-| BLINK       | 54.6s  | 10 max iterations                  |
-
-### Scaling by Marker Count
-
-Performance scaling with 862 samples at varying marker densities (SAP large dataset).
-Timings include cached data loading, sample alignment, PCA, and kinship calcs (when relevant).
+### Scaling by Marker Count (862 samples; includes cached load, alignment, PCA, kinship where relevant)
 
 | Markers    | GLM     | MLM     | MLM_Hybrid | FarmCPU  | BLINK   |
 |------------|---------|---------|------------|----------|---------|
-| 50,000     | 11.50s  | 12.13s  | 11.75s     | 12.15s   | 11.83s  |
-| 500,000    | 11.98s  | 14.36s  | 14.08s     | 18.44s   | 15.16s  |
-| 5,000,000  | 18.31s  | 41.68s  | 43.42s     | 86.34s   | 54.50s  |
+| 50,000     | 12.09s  | 12.86s  | 12.37s     | 12.29s   | 12.42s  |
+| 500,000    | 12.78s  | 15.72s  | 15.03s     | 14.66s   | 15.74s  |
+| 5,000,000  | 19.49s  | 47.12s  | 45.63s     | 46.37s   | 58.60s  |
 
 ## License
 

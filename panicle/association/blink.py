@@ -12,7 +12,7 @@ from __future__ import annotations
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy import stats
@@ -20,7 +20,6 @@ from scipy import stats
 from ..utils.data_types import AssociationResults, GenotypeMap, GenotypeMatrix
 from ..utils.stats import calculate_maf_from_genotypes
 from .glm import PANICLE_GLM
-from .farmcpu import remove_qtns_by_ld, _get_covariate_statistics  # type: ignore
 
 
 MISSING_FILL_VALUE = 1.0  # rMVP / BLINK fill value for missing markers (-9/NA)
@@ -509,6 +508,190 @@ def _compute_maf_mask(
     )
     mask = maf >= maf_threshold
     return mask, maf
+
+
+def remove_qtns_by_ld(
+    selected_qtns: Sequence[int],
+    genotype_matrix: Union[np.ndarray, GenotypeMatrix],
+    correlation_threshold: float = 0.7,
+    *,
+    within_chrom_only: bool = True,
+    map_data: Optional[GenotypeMap] = None,
+    verbose: bool = False,
+    debug: bool = False,
+    ld_max: Optional[int] = None,
+    max_samples: int = 100000,
+) -> List[int]:
+    if not selected_qtns:
+        return []
+
+    seq_qtn = np.asarray(selected_qtns, dtype=int)
+
+    if map_data is not None:
+        chrom_values = map_data.chromosomes.values
+        pos_values = map_data.positions.values
+        seen = set()
+        unique_qtns: List[int] = []
+        for idx in seq_qtn:
+            key = (chrom_values[idx], pos_values[idx])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_qtns.append(int(idx))
+        seq_qtn = np.asarray(unique_qtns, dtype=int)
+
+    if seq_qtn.size == 0:
+        return []
+
+    if within_chrom_only and map_data is not None:
+        chrom_values = map_data.chromosomes.values
+        chrom_subset = chrom_values[seq_qtn]
+        kept_set: set[int] = set()
+        for chrom in np.unique(chrom_subset):
+            chrom_mask = chrom_subset == chrom
+            group = seq_qtn[chrom_mask]
+            kept_group = _ld_prune_subset(
+                group,
+                genotype_matrix=genotype_matrix,
+                correlation_threshold=correlation_threshold,
+                max_samples=max_samples,
+            )
+            kept_set.update(int(idx) for idx in kept_group)
+        kept = [int(idx) for idx in seq_qtn if int(idx) in kept_set]
+    else:
+        kept = [
+            int(idx)
+            for idx in _ld_prune_subset(
+                seq_qtn,
+                genotype_matrix=genotype_matrix,
+                correlation_threshold=correlation_threshold,
+                max_samples=max_samples,
+            )
+        ]
+
+    if ld_max is not None:
+        kept = kept[: max(ld_max, 0)]
+
+    if verbose and debug:
+        print(f"  LD pruning retained {len(kept)} QTNs")
+
+    return kept
+
+
+def _ld_prune_subset(
+    seq_qtn: np.ndarray,
+    *,
+    genotype_matrix: Union[np.ndarray, GenotypeMatrix],
+    correlation_threshold: float,
+    max_samples: int,
+) -> np.ndarray:
+    if seq_qtn.size <= 1:
+        return seq_qtn
+
+    if isinstance(genotype_matrix, GenotypeMatrix):
+        x = genotype_matrix.get_columns_imputed(seq_qtn, dtype=np.float32)
+    else:
+        x = genotype_matrix[:, seq_qtn].astype(np.float32)
+        missing = (x == -9) | np.isnan(x)
+        if missing.any():
+            x[missing] = MISSING_FILL_VALUE
+
+    if x.shape[0] > max_samples:
+        x = x[:max_samples, :]
+
+    if x.shape[1] <= 1:
+        return seq_qtn
+
+    std = np.std(x, axis=0)
+    constant_cols = std == 0
+    std[constant_cols] = 1.0
+    x_centered = (x - np.mean(x, axis=0)) / std
+    x_centered[:, constant_cols] = 0.0
+
+    r = np.corrcoef(x_centered.T)
+    if r.ndim == 0:
+        r = np.array([[r]])
+    r = np.nan_to_num(r, nan=0.0)
+
+    keep = np.ones(len(seq_qtn), dtype=bool)
+    for i in range(len(seq_qtn)):
+        if not keep[i]:
+            continue
+        for j in range(i + 1, len(seq_qtn)):
+            if keep[j] and abs(r[i, j]) > correlation_threshold:
+                keep[j] = False
+
+    return seq_qtn[keep]
+
+
+def _get_covariate_statistics(
+    phe: np.ndarray,
+    covariates: Optional[np.ndarray],
+    *,
+    verbose: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if covariates is None or covariates.size == 0:
+        return np.array([]), np.array([]), np.array([])
+
+    cov = np.asarray(covariates, dtype=np.float64)
+    if cov.ndim == 1:
+        cov = cov.reshape(-1, 1)
+
+    y = np.asarray(phe[:, 1], dtype=np.float64)
+    n = y.shape[0]
+    if cov.shape[0] != n:
+        raise ValueError("Covariate rows must equal number of individuals")
+
+    X = np.column_stack([np.ones(n, dtype=np.float64), cov])
+    n_cov = cov.shape[1]
+    rank = np.linalg.matrix_rank(X)
+    if rank < X.shape[1] or n <= X.shape[1]:
+        return np.ones(n_cov), np.zeros(n_cov), np.ones(n_cov)
+
+    XtX = X.T @ X
+    try:
+        XtX_inv = np.linalg.inv(XtX)
+    except np.linalg.LinAlgError:
+        XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
+
+    beta = XtX_inv @ (X.T @ y)
+    residuals = y - X @ beta
+    df = n - X.shape[1]
+    if df <= 0:
+        return np.ones(n_cov), np.zeros(n_cov), np.ones(n_cov)
+
+    rss = float(np.sum(residuals ** 2))
+    if rss <= 0:
+        rss = np.finfo(np.float64).tiny
+    sigma2 = rss / df
+
+    var_beta = np.diag(XtX_inv) * sigma2
+    se_beta = np.sqrt(np.maximum(var_beta, 1e-30))
+    t_stats = np.zeros_like(beta)
+    valid = se_beta > 0
+    if np.any(valid):
+        t_stats[valid] = beta[valid] / se_beta[valid]
+    pvals = np.ones_like(beta)
+    if np.any(valid):
+        pvals[valid] = 2.0 * stats.t.sf(np.abs(t_stats[valid]), df)
+
+    cov_effects = beta[1:].astype(np.float64, copy=False)
+    cov_se = se_beta[1:].astype(np.float64, copy=False)
+    cov_pvals = pvals[1:].astype(np.float64, copy=False)
+
+    bad = ~np.isfinite(cov_effects) | ~np.isfinite(cov_se) | ~np.isfinite(cov_pvals)
+    if bad.any():
+        cov_effects = cov_effects.copy()
+        cov_se = cov_se.copy()
+        cov_pvals = cov_pvals.copy()
+        cov_effects[bad] = 0.0
+        cov_se[bad] = 1.0
+        cov_pvals[bad] = 1.0
+
+    if verbose:
+        print(f"Computed covariate stats for {n_cov} covariates")
+
+    return cov_pvals, cov_effects, cov_se
 
 
 def _farmcpu_prior_simple(

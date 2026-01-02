@@ -25,10 +25,47 @@ Use tests/quick_validation_test.py to validate before integration.
 """
 
 from typing import Optional, Union, Tuple
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-from scipy import stats
+from scipy import special
 
 from panicle.utils.data_types import GenotypeMatrix, AssociationResults
+
+
+def _fast_t_pvalue(t_stats: np.ndarray, df: np.ndarray) -> np.ndarray:
+    """Fast vectorized two-tailed t-test p-value calculation.
+
+    Uses a normal approximation (erfc) for speed on large arrays.
+
+    Args:
+        t_stats: Array of absolute t-statistics
+        df: Array of degrees of freedom (same shape as t_stats)
+
+    Returns:
+        Two-tailed p-values
+    """
+    p = special.erfc(t_stats / np.sqrt(2.0))
+    return np.clip(p, 0.0, 1.0)
+
+
+def _load_genotype_batch(
+    geno: Union[GenotypeMatrix, np.ndarray],
+    start: int,
+    end: int,
+    use_gm: bool,
+    is_imputed: bool,
+    missing_fill_value: float
+) -> np.ndarray:
+    """Load and optionally impute a genotype batch. Thread-safe for prefetching."""
+    if use_gm:
+        if is_imputed:
+            return geno.get_batch_imputed(start, end, fill_value=None, dtype=np.float32)
+        else:
+            return geno.get_batch_imputed(start, end, fill_value=missing_fill_value, dtype=np.float32)
+    else:
+        return _impute_numpy_batch_major_allele(
+            geno[:, start:end], fill_value=missing_fill_value, dtype=np.float32
+        )
 
 
 def _impute_numpy_batch_major_allele(batch: np.ndarray,
@@ -95,7 +132,9 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
                       maxLine: int = 5000,
                       cpu: int = 1,
                       verbose: bool = True,
-                      missing_fill_value: float = 1.0) -> AssociationResults:
+                      missing_fill_value: float = 1.0,
+                      return_cov_stats: bool = False,
+                      cov_pvalue_agg: Optional[str] = None) -> AssociationResults:
     """FWL+QR GLM scan with vectorized residualization and statistics.
 
     Args:
@@ -105,8 +144,15 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         maxLine: batch size (markers per block)
         cpu: unused (kept for signature compatibility)
         verbose: print brief progress
+        missing_fill_value: value to impute for missing genotypes
+        return_cov_stats: if True, return stats for all covariates (memory intensive!)
+        cov_pvalue_agg: if set ("reward"/"penalty"/"mean"), compute aggregated
+            covariate p-values instead of full 2D array. Much more memory efficient.
+            Result will have .cov_pvalue_summary attribute with shape (n_covariates,).
     Returns:
-        AssociationResults with Effect, SE, P-value per marker
+        AssociationResults. If return_cov_stats is False and cov_pvalue_agg is None,
+        arrays are 1D (markers). If return_cov_stats is True, arrays are 2D.
+        If cov_pvalue_agg is set, arrays are 1D with .cov_pvalue_summary metadata.
     """
     # Extract phenotype vector y
     if not isinstance(phe, np.ndarray) or phe.shape[1] != 2:
@@ -146,7 +192,16 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         xy = XT @ y
         beta_cov = iXX @ xy
         yy = float(y @ y)
+        beta_cov = iXX @ xy
+        yy = float(y @ y)
     p = X.shape[1]
+    
+    # Pre-extract diagonal of iXX for variance updates
+    # iXX diagonal elements correspond to the variance of covariate estimates
+    diag_iXX = np.diag(iXX).astype(np.float64)
+    # Number of fixed effects (intercept + covariates)
+    n_fixed = p 
+
     iXX = iXX.astype(np.float32, copy=False)
     xy = xy.astype(np.float32, copy=False)
     beta_cov = beta_cov.astype(np.float32, copy=False)
@@ -159,85 +214,85 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
     if df_full <= 0:
         raise ValueError("Degrees of freedom must be positive; check covariates")
 
-    effects = np.zeros(m, dtype=np.float64)
-    ses = np.zeros(m, dtype=np.float64)
-    pvals = np.ones(m, dtype=np.float64)
+    
+    # Determine output mode:
+    # - return_cov_stats=True: full 2D arrays (memory intensive)
+    # - cov_pvalue_agg set: 1D marker arrays + aggregated covariate p-values (efficient)
+    # - neither: 1D marker arrays only
+    use_cov_agg = cov_pvalue_agg is not None and n_fixed > 1  # Need covariates to aggregate
+
+    if return_cov_stats and not use_cov_agg:
+        # Full 2D mode (legacy, memory intensive)
+        n_cols = 1 + n_fixed
+        effects = np.zeros((m, n_cols), dtype=np.float64)
+        ses = np.zeros((m, n_cols), dtype=np.float64)
+        pvals = np.ones((m, n_cols), dtype=np.float64)
+        cov_pval_min = cov_pval_max = cov_pval_sum = cov_pval_count = None
+    else:
+        # 1D marker arrays only
+        effects = np.zeros(m, dtype=np.float64)
+        ses = np.zeros(m, dtype=np.float64)
+        pvals = np.ones(m, dtype=np.float64)
+
+        if use_cov_agg:
+            # Initialize running aggregates for covariate p-values
+            # Shape: (n_fixed,) for [intercept, cov1, cov2, ..., covN]
+            cov_pval_min = np.full(n_fixed, np.inf, dtype=np.float64)
+            cov_pval_max = np.full(n_fixed, -np.inf, dtype=np.float64)
+            cov_pval_sum = np.zeros(n_fixed, dtype=np.float64)
+            cov_pval_count = np.zeros(n_fixed, dtype=np.int64)
+        else:
+            cov_pval_min = cov_pval_max = cov_pval_sum = cov_pval_count = None
 
     batch_size = max(1, min(maxLine, m))
-    for start in range(0, m, batch_size):
-        end = min(start + batch_size, m)
-        if use_gm:
-            if geno.is_imputed:
-                # Fast path for pre-imputed caches: skip missing checks entirely.
-                G = geno.get_batch_imputed(
-                    start,
-                    end,
-                    fill_value=None,
-                    dtype=np.float32,
+    is_imputed = use_gm and geno.is_imputed
+
+    # Use prefetching for large datasets to overlap I/O with computation
+    use_prefetch = m > batch_size * 2  # Only prefetch if more than 2 batches
+
+    if use_prefetch:
+        # Prefetch next batch while processing current batch
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            # Load first batch
+            G = _load_genotype_batch(geno, 0, min(batch_size, m), use_gm, is_imputed, missing_fill_value)
+            next_future = None
+
+            for start in range(0, m, batch_size):
+                end = min(start + batch_size, m)
+
+                # Get current batch (from prefetch or first load)
+                if next_future is not None:
+                    G = next_future.result()
+
+                # Submit prefetch for next batch
+                next_start = start + batch_size
+                if next_start < m:
+                    next_end = min(next_start + batch_size, m)
+                    next_future = executor.submit(
+                        _load_genotype_batch, geno, next_start, next_end,
+                        use_gm, is_imputed, missing_fill_value
+                    )
+                else:
+                    next_future = None
+
+                # Process current batch (code continues below)
+                _process_glm_batch(
+                    G, start, end, XT, iXX, beta_cov, beta_cov_f64, xy_f64, y, yy_f64,
+                    df_full, df_reduced, diag_iXX, effects, ses, pvals,
+                    return_cov_stats and not use_cov_agg, n_fixed,
+                    cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count
                 )
-            else:
-                G = geno.get_batch_imputed(
-                    start,
-                    end,
-                    fill_value=missing_fill_value,
-                    dtype=np.float32,
-                )
-        else:
-            G = _impute_numpy_batch_major_allele(
-                geno[:, start:end],
-                fill_value=missing_fill_value,
-                dtype=np.float32,
+    else:
+        # Simple sequential processing for small datasets
+        for start in range(0, m, batch_size):
+            end = min(start + batch_size, m)
+            G = _load_genotype_batch(geno, start, end, use_gm, is_imputed, missing_fill_value)
+            _process_glm_batch(
+                G, start, end, XT, iXX, beta_cov, beta_cov_f64, xy_f64, y, yy_f64,
+                df_full, df_reduced, diag_iXX, effects, ses, pvals,
+                return_cov_stats and not use_cov_agg, n_fixed,
+                cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count
             )
-
-        # Suppress warnings for expected numerical issues in matrix operations
-        # These are properly handled by validity checks below
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            xs = XT @ G                       # shape (p, b)
-            xst = xs.T                        # shape (b, p)
-            sy = G.T @ y                      # shape (b,)
-            ss = np.sum(G * G, axis=0)        # shape (b,)
-
-            B21 = xst @ iXX                   # shape (b, p)
-            tmp = sy - (xst @ beta_cov)       # shape (b,)
-            t2 = np.einsum('ij,ij->i', B21, xst)
-            B22 = ss - t2
-
-        B21 = B21.astype(np.float64)
-        tmp = tmp.astype(np.float64)
-        B22 = B22.astype(np.float64)
-        sy = sy.astype(np.float64)
-
-        valid = B22 > 1e-8
-        invB22 = np.zeros_like(B22)
-        invB22[valid] = 1.0 / B22[valid]
-
-        beta_marker = invB22 * tmp
-
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            beta_cov_new = beta_cov_f64[np.newaxis, :] - (beta_marker[:, np.newaxis] * B21)
-            rhs_cov = beta_cov_new @ xy_f64
-        df_array = np.full_like(B22, df_full, dtype=float)
-        df_array[~valid] = df_reduced
-
-        ve = (yy_f64 - (rhs_cov + beta_marker * sy)) / df_array
-        ve = np.maximum(ve, 0.0)
-        se_marker = np.sqrt(ve * invB22)
-
-        t_stats = np.zeros_like(beta_marker)
-        finite_mask = (se_marker > 0) & np.isfinite(se_marker)
-        t_stats[finite_mask] = np.abs(beta_marker[finite_mask] / se_marker[finite_mask])
-        p_batch = np.ones_like(beta_marker)
-        if np.any(finite_mask):
-            p_batch[finite_mask] = 2.0 * stats.t.sf(t_stats[finite_mask], df_array[finite_mask])
-
-        # Handle singular cases as rMVP (set effect/SE to 0/NaN, p=1)
-        beta_marker[~valid] = 0.0
-        se_marker[~valid] = np.nan
-        p_batch[~valid] = 1.0
-
-        effects[start:end] = beta_marker
-        ses[start:end] = se_marker
-        pvals[start:end] = p_batch
 
     if verbose:
         valid_tests = np.sum(np.isfinite(ses))
@@ -245,4 +300,172 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         if valid_tests > 0:
             print(f"Minimum p-value: {np.nanmin(pvals):.2e}")
 
-    return AssociationResults(effects, ses, pvals)
+    result = AssociationResults(effects, ses, pvals)
+
+    # Attach aggregated covariate p-values if computed
+    if use_cov_agg and cov_pval_min is not None:
+        # Compute final aggregates based on method
+        if cov_pvalue_agg == "reward":
+            cov_summary = cov_pval_min
+        elif cov_pvalue_agg == "penalty":
+            cov_summary = cov_pval_max
+        elif cov_pvalue_agg == "mean":
+            with np.errstate(invalid='ignore'):
+                cov_summary = cov_pval_sum / np.maximum(cov_pval_count, 1)
+            cov_summary[cov_pval_count == 0] = 1.0
+        else:
+            # Default to reward (min)
+            cov_summary = cov_pval_min
+
+        # Replace inf with 1.0 for covariates with no valid tests
+        cov_summary[~np.isfinite(cov_summary)] = 1.0
+        result.cov_pvalue_summary = cov_summary
+
+    return result
+
+
+def _process_glm_batch(
+    G: np.ndarray,
+    start: int,
+    end: int,
+    XT: np.ndarray,
+    iXX: np.ndarray,
+    beta_cov: np.ndarray,
+    beta_cov_f64: np.ndarray,
+    xy_f64: np.ndarray,
+    y: np.ndarray,
+    yy_f64: float,
+    df_full: int,
+    df_reduced: int,
+    diag_iXX: np.ndarray,
+    effects: np.ndarray,
+    ses: np.ndarray,
+    pvals: np.ndarray,
+    return_cov_stats: bool,
+    n_fixed: int,
+    cov_pval_min: Optional[np.ndarray] = None,
+    cov_pval_max: Optional[np.ndarray] = None,
+    cov_pval_sum: Optional[np.ndarray] = None,
+    cov_pval_count: Optional[np.ndarray] = None
+) -> None:
+    """Process a single batch of genotypes for GLM statistics.
+
+    If cov_pval_* arrays are provided, updates running aggregates for covariate
+    p-values without storing the full 2D arrays.
+    """
+    # Suppress warnings for expected numerical issues in matrix operations
+    # These are properly handled by validity checks below
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        xs = XT @ G                       # shape (p, b)
+        xst = xs.T                        # shape (b, p)
+        sy = G.T @ y                      # shape (b,)
+        ss = np.sum(G * G, axis=0)        # shape (b,)
+
+        B21 = xst @ iXX                   # shape (b, p)
+        tmp = sy - (xst @ beta_cov)       # shape (b,)
+        t2 = np.einsum('ij,ij->i', B21, xst)
+        B22 = ss - t2
+
+    B21 = B21.astype(np.float64)
+    tmp = tmp.astype(np.float64)
+    B22 = B22.astype(np.float64)
+    sy = sy.astype(np.float64)
+
+    valid = B22 > 1e-8
+    invB22 = np.zeros_like(B22)
+    invB22[valid] = 1.0 / B22[valid]
+
+    beta_marker = invB22 * tmp
+
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        beta_cov_new = beta_cov_f64[np.newaxis, :] - (beta_marker[:, np.newaxis] * B21)
+        rhs_cov = beta_cov_new @ xy_f64
+    df_array = np.full_like(B22, df_full, dtype=float)
+    df_array[~valid] = df_reduced
+
+    ve = (yy_f64 - (rhs_cov + beta_marker * sy)) / df_array
+    ve = np.maximum(ve, 0.0)
+    se_marker = np.sqrt(ve * invB22)
+
+    t_stats = np.zeros_like(beta_marker)
+    finite_mask = (se_marker > 0) & np.isfinite(se_marker)
+    t_stats[finite_mask] = np.abs(beta_marker[finite_mask] / se_marker[finite_mask])
+    p_batch = np.ones_like(beta_marker)
+    if np.any(finite_mask):
+        p_batch[finite_mask] = _fast_t_pvalue(t_stats[finite_mask], df_array[finite_mask])
+
+    # Handle singular cases as rMVP (set effect/SE to 0/NaN, p=1)
+    beta_marker[~valid] = 0.0
+    se_marker[~valid] = np.nan
+    p_batch[~valid] = 1.0
+
+    if return_cov_stats:
+        # Full 2D mode - store all covariate stats
+        b_cov_final = beta_cov_new
+        if b_cov_final.ndim == 1:
+            b_cov_final = b_cov_final[:, np.newaxis]
+
+        var_inflation = (B21**2) * invB22[:, np.newaxis]
+        diag_inv_new = diag_iXX[np.newaxis, :] + var_inflation
+        se_cov_new = np.sqrt(ve[:, np.newaxis] * diag_inv_new)
+
+        p_cov = np.ones_like(b_cov_final)
+        valid_batch_idx = np.where(valid)[0]
+        if len(valid_batch_idx) > 0:
+            b_valid = b_cov_final[valid_batch_idx]
+            se_valid = se_cov_new[valid_batch_idx]
+            df_valid = df_array[valid_batch_idx]
+
+            t_valid = np.abs(b_valid / se_valid)
+            for col in range(t_valid.shape[1]):
+                p_cov[valid_batch_idx, col] = _fast_t_pvalue(t_valid[:, col], df_valid)
+
+            bad_mask = ~np.isfinite(se_valid) | (se_valid <= 0)
+            p_cov[valid_batch_idx][bad_mask] = 1.0
+            se_cov_new[valid_batch_idx][bad_mask] = np.nan
+
+        effects[start:end, 0] = beta_marker
+        effects[start:end, 1:] = b_cov_final
+        ses[start:end, 0] = se_marker
+        ses[start:end, 1:] = se_cov_new
+        pvals[start:end, 0] = p_batch
+        pvals[start:end, 1:] = p_cov
+
+    elif cov_pval_min is not None:
+        # Aggregation mode - compute covariate p-values but only keep running stats
+        # This avoids storing the huge 2D array
+        var_inflation = (B21**2) * invB22[:, np.newaxis]
+        diag_inv_new = diag_iXX[np.newaxis, :] + var_inflation
+        se_cov_new = np.sqrt(ve[:, np.newaxis] * diag_inv_new)
+
+        valid_batch_idx = np.where(valid)[0]
+        if len(valid_batch_idx) > 0:
+            b_valid = beta_cov_new[valid_batch_idx]
+            se_valid = se_cov_new[valid_batch_idx]
+            df_valid = df_array[valid_batch_idx]
+
+            t_valid = np.abs(b_valid / se_valid)
+            # Compute p-values for each covariate and update running aggregates
+            for col in range(t_valid.shape[1]):
+                p_col = _fast_t_pvalue(t_valid[:, col], df_valid)
+                # Handle bad values
+                bad = ~np.isfinite(se_valid[:, col]) | (se_valid[:, col] <= 0)
+                p_col[bad] = 1.0
+                # Update running aggregates
+                valid_p = p_col[~bad]
+                if len(valid_p) > 0:
+                    cov_pval_min[col] = min(cov_pval_min[col], np.min(valid_p))
+                    cov_pval_max[col] = max(cov_pval_max[col], np.max(valid_p))
+                    cov_pval_sum[col] += np.sum(valid_p)
+                    cov_pval_count[col] += len(valid_p)
+
+        # Store only marker results (1D)
+        effects[start:end] = beta_marker
+        ses[start:end] = se_marker
+        pvals[start:end] = p_batch
+
+    else:
+        # Simple 1D mode - marker stats only
+        effects[start:end] = beta_marker
+        ses[start:end] = se_marker
+        pvals[start:end] = p_batch

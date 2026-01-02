@@ -22,9 +22,11 @@ def PANICLE_GLM(phe: np.ndarray,
            verbose: bool = True,
            impute_missing: bool = True,
            major_alleles: Optional[np.ndarray] = None,
-           missing_fill_value: float = 1.0) -> AssociationResults:
+           missing_fill_value: float = 1.0,
+           return_cov_stats: bool = False,
+           cov_pvalue_agg: Optional[str] = None) -> AssociationResults:
     """General Linear Model (GLM) for GWAS.
-    
+
     Uses an optimized FWL+QR algorithm for speed.
 
     Args:
@@ -37,9 +39,17 @@ def PANICLE_GLM(phe: np.ndarray,
         impute_missing: Unused (always handled internally by FWL+QR loader)
         major_alleles: Unused (always handled internally)
         missing_fill_value: Value to use for missing genotypes (default: 1.0)
+        return_cov_stats: If True, returns effects/SE/P-values for all columns
+                         including covariates. Memory intensive for large datasets.
+        cov_pvalue_agg: Memory-efficient alternative to return_cov_stats.
+                       Computes aggregated covariate p-values per covariate column.
+                       Options: "reward" (min), "penalty" (max), "mean".
+                       Result has .cov_pvalue_summary attribute with shape (n_covariates,).
 
     Returns:
         AssociationResults object with effects, SEs, and p-values.
+        If return_cov_stats is True, results arrays will be 2D (markers x terms).
+        If cov_pvalue_agg is set, arrays are 1D with cov_pvalue_summary metadata.
     """
     return PANICLE_GLM_ultrafast(
         phe=phe,
@@ -49,4 +59,6 @@ def PANICLE_GLM(phe: np.ndarray,
         cpu=cpu,
         verbose=verbose,
         missing_fill_value=missing_fill_value,
+        return_cov_stats=return_cov_stats,
+        cov_pvalue_agg=cov_pvalue_agg
     )

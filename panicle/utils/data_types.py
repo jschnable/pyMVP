@@ -422,8 +422,12 @@ class AssociationResults:
     def __init__(self, effects: np.ndarray, se: np.ndarray, pvalues: np.ndarray,
                  snp_map: Optional[GenotypeMap] = None):
         
-        if not (len(effects) == len(se) == len(pvalues)):
-            raise ValueError("All result arrays must have same length")
+        # Validate lengths (first dimension must match)
+        n = len(effects)
+        if hasattr(se, '__len__') and len(se) != n:
+             raise ValueError(f"SE array length {len(se)} does not match effects length {n}")
+        if hasattr(pvalues, '__len__') and len(pvalues) != n:
+             raise ValueError(f"P-value array length {len(pvalues)} does not match effects length {n}")
             
         self.effects = effects
         self.se = se  
@@ -452,8 +456,17 @@ class AssociationResults:
         return df
     
     def to_numpy(self) -> np.ndarray:
-        """Convert to numpy array [Effect, SE, P-value]"""
-        return np.column_stack([self.effects, self.se, self.pvalues])
+        """Convert to numpy array [Effect, SE, P-value]
+        
+        If results contain multiple columns (e.g. for covariates),
+        only the first column (marker results) is returned by default
+        to maintain backward compatibility with 2D array expectations.
+        """
+        eff = self.effects if self.effects.ndim == 1 else self.effects[:, 0]
+        se = self.se if self.se.ndim == 1 else self.se[:, 0]
+        pv = self.pvalues if self.pvalues.ndim == 1 else self.pvalues[:, 0]
+        
+        return np.column_stack([eff, se, pv])
 
 
 class KinshipMatrix:

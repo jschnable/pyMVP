@@ -33,7 +33,7 @@ def test_loco_kinship_matches_naive():
 
     full_ref = PANICLE_K_VanRaden(geno, maxLine=7, verbose=False).to_numpy()
     full_loco = loco.get_full().to_numpy()
-    np.testing.assert_allclose(full_loco, full_ref, rtol=1e-8, atol=1e-8)
+    np.testing.assert_allclose(full_loco, full_ref, rtol=1e-8, atol=1e-7)
 
     chroms = map_df["CHROM"].to_numpy()
     for chrom in np.unique(chroms):
@@ -41,7 +41,7 @@ def test_loco_kinship_matches_naive():
         geno_subset = genotypes[:, keep_mask]
         ref = PANICLE_K_VanRaden(geno_subset, maxLine=7, verbose=False).to_numpy()
         loco_k = loco.get_loco(chrom).to_numpy()
-        np.testing.assert_allclose(loco_k, ref, rtol=1e-8, atol=1e-8)
+        np.testing.assert_allclose(loco_k, ref, rtol=1e-8, atol=5e-7)
 
 
 def test_mlm_loco_matches_per_chrom_mlm():

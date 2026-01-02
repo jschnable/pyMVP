@@ -144,6 +144,12 @@ DevTests/
 DevScripts/
 simple_test/
 
+# Local profiling/benchmark scripts
+scripts/benchmark_performance.py
+scripts/profile_mlm.py
+scripts/profile_mlm_memory.py
+scripts/test_float32_pipeline.py
+
 # Archived/experimental code
 **/_archived/
 **/archived/
