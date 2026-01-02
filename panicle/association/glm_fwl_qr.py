@@ -26,10 +26,37 @@ Use tests/quick_validation_test.py to validate before integration.
 
 from typing import Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor
+import os
+import time
 import numpy as np
 from scipy import special
 
 from panicle.utils.data_types import GenotypeMatrix, AssociationResults
+
+
+_PROFILE_GLM_BATCH = os.getenv("PANICLE_PROFILE_GLM_BATCH", "").lower() in {"1", "true", "yes"}
+_DEBUG_GLM_LAYOUT = os.getenv("PANICLE_DEBUG_GLM_LAYOUT", "").lower() in {"1", "true", "yes"}
+_GLM_BATCH_PROFILE = {
+    "calls": 0,
+    "XtG": 0.0,
+    "Gty": 0.0,
+    "GtG": 0.0,
+    "block": 0.0,
+    "total": 0.0,
+}
+
+
+def _reset_glm_batch_profile() -> None:
+    _GLM_BATCH_PROFILE.update(
+        {
+            "calls": 0,
+            "XtG": 0.0,
+            "Gty": 0.0,
+            "GtG": 0.0,
+            "block": 0.0,
+            "total": 0.0,
+        }
+    )
 
 
 def _fast_t_pvalue(t_stats: np.ndarray, df: np.ndarray) -> np.ndarray:
@@ -134,7 +161,8 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
                       verbose: bool = True,
                       missing_fill_value: float = 1.0,
                       return_cov_stats: bool = False,
-                      cov_pvalue_agg: Optional[str] = None) -> AssociationResults:
+                      cov_pvalue_agg: Optional[str] = None,
+                      return_t_stats: bool = False) -> AssociationResults:
     """FWL+QR GLM scan with vectorized residualization and statistics.
 
     Args:
@@ -149,10 +177,15 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         cov_pvalue_agg: if set ("reward"/"penalty"/"mean"), compute aggregated
             covariate p-values instead of full 2D array. Much more memory efficient.
             Result will have .cov_pvalue_summary attribute with shape (n_covariates,).
+        return_t_stats: if True, return absolute t-statistics instead of p-values.
+            This skips the erfc computation and is useful for intermediate FarmCPU
+            iterations where only ordinal ranking matters. The .pvalues attribute
+            will contain |t| values (larger = more significant).
     Returns:
         AssociationResults. If return_cov_stats is False and cov_pvalue_agg is None,
         arrays are 1D (markers). If return_cov_stats is True, arrays are 2D.
         If cov_pvalue_agg is set, arrays are 1D with .cov_pvalue_summary metadata.
+        If return_t_stats is True, .pvalues contains |t| instead of p-values.
     """
     # Extract phenotype vector y
     if not isinstance(phe, np.ndarray) or phe.shape[1] != 2:
@@ -235,10 +268,15 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         pvals = np.ones(m, dtype=np.float64)
 
         if use_cov_agg:
-            # Initialize running aggregates for covariate p-values
+            # Initialize running aggregates for covariate statistics
             # Shape: (n_fixed,) for [intercept, cov1, cov2, ..., covN]
-            cov_pval_min = np.full(n_fixed, np.inf, dtype=np.float64)
-            cov_pval_max = np.full(n_fixed, -np.inf, dtype=np.float64)
+            # When return_t_stats=True: min tracks max|t|, max tracks min|t| (inverted)
+            if return_t_stats:
+                cov_pval_min = np.full(n_fixed, -np.inf, dtype=np.float64)  # Will use max() to find max |t|
+                cov_pval_max = np.full(n_fixed, np.inf, dtype=np.float64)   # Will use min() to find min |t|
+            else:
+                cov_pval_min = np.full(n_fixed, np.inf, dtype=np.float64)   # Will use min() to find min p
+                cov_pval_max = np.full(n_fixed, -np.inf, dtype=np.float64)  # Will use max() to find max p
             cov_pval_sum = np.zeros(n_fixed, dtype=np.float64)
             cov_pval_count = np.zeros(n_fixed, dtype=np.int64)
         else:
@@ -246,6 +284,7 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
 
     batch_size = max(1, min(maxLine, m))
     is_imputed = use_gm and geno.is_imputed
+    printed_layout = False
 
     # Use prefetching for large datasets to overlap I/O with computation
     use_prefetch = m > batch_size * 2  # Only prefetch if more than 2 batches
@@ -255,6 +294,15 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         with ThreadPoolExecutor(max_workers=1) as executor:
             # Load first batch
             G = _load_genotype_batch(geno, 0, min(batch_size, m), use_gm, is_imputed, missing_fill_value)
+            if _DEBUG_GLM_LAYOUT and not printed_layout:
+                print(
+                    "GLM layout: X.shape={}, X.dtype={}, X.C={}, X.F={}; "
+                    "G.shape={}, G.dtype={}, G.C={}, G.F={}".format(
+                        X.shape, X.dtype, X.flags["C_CONTIGUOUS"], X.flags["F_CONTIGUOUS"],
+                        G.shape, G.dtype, G.flags["C_CONTIGUOUS"], G.flags["F_CONTIGUOUS"],
+                    )
+                )
+                printed_layout = True
             next_future = None
 
             for start in range(0, m, batch_size):
@@ -280,18 +328,29 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
                     G, start, end, XT, iXX, beta_cov, beta_cov_f64, xy_f64, y, yy_f64,
                     df_full, df_reduced, diag_iXX, effects, ses, pvals,
                     return_cov_stats and not use_cov_agg, n_fixed,
-                    cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count
+                    cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count,
+                    return_t_stats
                 )
     else:
         # Simple sequential processing for small datasets
         for start in range(0, m, batch_size):
             end = min(start + batch_size, m)
             G = _load_genotype_batch(geno, start, end, use_gm, is_imputed, missing_fill_value)
+            if _DEBUG_GLM_LAYOUT and not printed_layout:
+                print(
+                    "GLM layout: X.shape={}, X.dtype={}, X.C={}, X.F={}; "
+                    "G.shape={}, G.dtype={}, G.C={}, G.F={}".format(
+                        X.shape, X.dtype, X.flags["C_CONTIGUOUS"], X.flags["F_CONTIGUOUS"],
+                        G.shape, G.dtype, G.flags["C_CONTIGUOUS"], G.flags["F_CONTIGUOUS"],
+                    )
+                )
+                printed_layout = True
             _process_glm_batch(
                 G, start, end, XT, iXX, beta_cov, beta_cov_f64, xy_f64, y, yy_f64,
                 df_full, df_reduced, diag_iXX, effects, ses, pvals,
                 return_cov_stats and not use_cov_agg, n_fixed,
-                cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count
+                cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count,
+                return_t_stats
             )
 
     if verbose:
@@ -300,25 +359,55 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         if valid_tests > 0:
             print(f"Minimum p-value: {np.nanmin(pvals):.2e}")
 
+    if _PROFILE_GLM_BATCH and _GLM_BATCH_PROFILE["calls"] > 0:
+        total = _GLM_BATCH_PROFILE["total"]
+        if total > 0:
+            rest = total - (
+                _GLM_BATCH_PROFILE["XtG"]
+                + _GLM_BATCH_PROFILE["Gty"]
+                + _GLM_BATCH_PROFILE["GtG"]
+                + _GLM_BATCH_PROFILE["block"]
+            )
+        else:
+            rest = 0.0
+        print(
+            "GLM batch profile: calls={calls}, total={total:.3f}s, "
+            "XtG={XtG:.3f}s, Gty={Gty:.3f}s, GtG={GtG:.3f}s, "
+            "block={block:.3f}s, rest={rest:.3f}s".format(
+                calls=_GLM_BATCH_PROFILE["calls"],
+                total=total,
+                XtG=_GLM_BATCH_PROFILE["XtG"],
+                Gty=_GLM_BATCH_PROFILE["Gty"],
+                GtG=_GLM_BATCH_PROFILE["GtG"],
+                block=_GLM_BATCH_PROFILE["block"],
+                rest=rest,
+            )
+        )
+        _reset_glm_batch_profile()
+
     result = AssociationResults(effects, ses, pvals)
 
-    # Attach aggregated covariate p-values if computed
+    # Attach aggregated covariate statistics if computed
     if use_cov_agg and cov_pval_min is not None:
         # Compute final aggregates based on method
+        # Note: when return_t_stats=True, cov_pval_min contains max|t| and cov_pval_max contains min|t|
         if cov_pvalue_agg == "reward":
-            cov_summary = cov_pval_min
+            cov_summary = cov_pval_min  # min p-value OR max |t|
         elif cov_pvalue_agg == "penalty":
-            cov_summary = cov_pval_max
+            cov_summary = cov_pval_max  # max p-value OR min |t|
         elif cov_pvalue_agg == "mean":
             with np.errstate(invalid='ignore'):
                 cov_summary = cov_pval_sum / np.maximum(cov_pval_count, 1)
-            cov_summary[cov_pval_count == 0] = 1.0
+            # Default for invalid: 1.0 for p-values, 0.0 for t-stats
+            cov_summary[cov_pval_count == 0] = 0.0 if return_t_stats else 1.0
         else:
-            # Default to reward (min)
+            # Default to reward (min p / max |t|)
             cov_summary = cov_pval_min
 
-        # Replace inf with 1.0 for covariates with no valid tests
-        cov_summary[~np.isfinite(cov_summary)] = 1.0
+        # Replace inf with default for covariates with no valid tests
+        # For p-values: 1.0 (least significant), for t-stats: 0.0 (least significant)
+        default_val = 0.0 if return_t_stats else 1.0
+        cov_summary[~np.isfinite(cov_summary)] = default_val
         result.cov_pvalue_summary = cov_summary
 
     return result
@@ -346,25 +435,47 @@ def _process_glm_batch(
     cov_pval_min: Optional[np.ndarray] = None,
     cov_pval_max: Optional[np.ndarray] = None,
     cov_pval_sum: Optional[np.ndarray] = None,
-    cov_pval_count: Optional[np.ndarray] = None
+    cov_pval_count: Optional[np.ndarray] = None,
+    return_t_stats: bool = False
 ) -> None:
     """Process a single batch of genotypes for GLM statistics.
 
     If cov_pval_* arrays are provided, updates running aggregates for covariate
     p-values without storing the full 2D arrays.
     """
+    prof_start = time.perf_counter() if _PROFILE_GLM_BATCH else None
+
     # Suppress warnings for expected numerical issues in matrix operations
     # These are properly handled by validity checks below
     with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        t0 = time.perf_counter() if _PROFILE_GLM_BATCH else None
         xs = XT @ G                       # shape (p, b)
         xst = xs.T                        # shape (b, p)
+        t1 = time.perf_counter() if _PROFILE_GLM_BATCH else None
+
         sy = G.T @ y                      # shape (b,)
-        ss = np.sum(G * G, axis=0)        # shape (b,)
+        t2 = time.perf_counter() if _PROFILE_GLM_BATCH else None
+
+        ss = np.einsum('ij,ij->j', G, G)  # shape (b,)
+        t3 = time.perf_counter() if _PROFILE_GLM_BATCH else None
 
         B21 = xst @ iXX                   # shape (b, p)
         tmp = sy - (xst @ beta_cov)       # shape (b,)
-        t2 = np.einsum('ij,ij->i', B21, xst)
-        B22 = ss - t2
+        t2_block = np.einsum('ij,ij->i', B21, xst)
+        B22 = ss - t2_block
+        t4 = time.perf_counter() if _PROFILE_GLM_BATCH else None
+
+    if _PROFILE_GLM_BATCH and prof_start is not None:
+        if t0 is not None and t1 is not None:
+            _GLM_BATCH_PROFILE["XtG"] += t1 - t0
+        if t1 is not None and t2 is not None:
+            _GLM_BATCH_PROFILE["Gty"] += t2 - t1
+        if t2 is not None and t3 is not None:
+            _GLM_BATCH_PROFILE["GtG"] += t3 - t2
+        if t3 is not None and t4 is not None:
+            _GLM_BATCH_PROFILE["block"] += t4 - t3
+        _GLM_BATCH_PROFILE["total"] += time.perf_counter() - prof_start
+        _GLM_BATCH_PROFILE["calls"] += 1
 
     B21 = B21.astype(np.float64)
     tmp = tmp.astype(np.float64)
@@ -390,14 +501,24 @@ def _process_glm_batch(
     t_stats = np.zeros_like(beta_marker)
     finite_mask = (se_marker > 0) & np.isfinite(se_marker)
     t_stats[finite_mask] = np.abs(beta_marker[finite_mask] / se_marker[finite_mask])
-    p_batch = np.ones_like(beta_marker)
-    if np.any(finite_mask):
-        p_batch[finite_mask] = _fast_t_pvalue(t_stats[finite_mask], df_array[finite_mask])
 
-    # Handle singular cases as rMVP (set effect/SE to 0/NaN, p=1)
+    if return_t_stats:
+        # Return |t| directly - larger values = more significant
+        # Caller can compare against t_critical threshold
+        p_batch = t_stats.copy()
+        p_batch[~finite_mask] = 0.0  # Invalid markers get t=0 (least significant)
+    else:
+        p_batch = np.ones_like(beta_marker)
+        if np.any(finite_mask):
+            p_batch[finite_mask] = _fast_t_pvalue(t_stats[finite_mask], df_array[finite_mask])
+
+    # Handle singular cases as rMVP (set effect/SE to 0/NaN, p=1 or t=0)
     beta_marker[~valid] = 0.0
     se_marker[~valid] = np.nan
-    p_batch[~valid] = 1.0
+    if return_t_stats:
+        p_batch[~valid] = 0.0  # t=0 for invalid (least significant)
+    else:
+        p_batch[~valid] = 1.0
 
     if return_cov_stats:
         # Full 2D mode - store all covariate stats
@@ -432,7 +553,7 @@ def _process_glm_batch(
         pvals[start:end, 1:] = p_cov
 
     elif cov_pval_min is not None:
-        # Aggregation mode - compute covariate p-values but only keep running stats
+        # Aggregation mode - compute covariate statistics but only keep running stats
         # This avoids storing the huge 2D array
         var_inflation = (B21**2) * invB22[:, np.newaxis]
         diag_inv_new = diag_iXX[np.newaxis, :] + var_inflation
@@ -445,19 +566,31 @@ def _process_glm_batch(
             df_valid = df_array[valid_batch_idx]
 
             t_valid = np.abs(b_valid / se_valid)
-            # Compute p-values for each covariate and update running aggregates
+            # Update running aggregates - use t-stats if return_t_stats, else p-values
             for col in range(t_valid.shape[1]):
-                p_col = _fast_t_pvalue(t_valid[:, col], df_valid)
-                # Handle bad values
                 bad = ~np.isfinite(se_valid[:, col]) | (se_valid[:, col] <= 0)
-                p_col[bad] = 1.0
-                # Update running aggregates
-                valid_p = p_col[~bad]
-                if len(valid_p) > 0:
-                    cov_pval_min[col] = min(cov_pval_min[col], np.min(valid_p))
-                    cov_pval_max[col] = max(cov_pval_max[col], np.max(valid_p))
-                    cov_pval_sum[col] += np.sum(valid_p)
-                    cov_pval_count[col] += len(valid_p)
+                t_col = t_valid[:, col]
+                t_col[bad] = 0.0 if return_t_stats else np.nan  # Invalid gets t=0
+                valid_t = t_col[~bad]
+
+                if return_t_stats:
+                    # Aggregate t-statistics directly (skip erfc)
+                    # For t-stats: max = most significant, min = least significant
+                    if len(valid_t) > 0:
+                        cov_pval_min[col] = max(cov_pval_min[col], np.max(valid_t))  # "min p" = max |t|
+                        cov_pval_max[col] = min(cov_pval_max[col], np.min(valid_t)) if np.isfinite(cov_pval_max[col]) else np.min(valid_t)  # "max p" = min |t|
+                        cov_pval_sum[col] += np.sum(valid_t)
+                        cov_pval_count[col] += len(valid_t)
+                else:
+                    # Compute p-values (original behavior)
+                    p_col = _fast_t_pvalue(t_col, df_valid)
+                    p_col[bad] = 1.0
+                    valid_p = p_col[~bad]
+                    if len(valid_p) > 0:
+                        cov_pval_min[col] = min(cov_pval_min[col], np.min(valid_p))
+                        cov_pval_max[col] = max(cov_pval_max[col], np.max(valid_p))
+                        cov_pval_sum[col] += np.sum(valid_p)
+                        cov_pval_count[col] += len(valid_p)
 
         # Store only marker results (1D)
         effects[start:end] = beta_marker

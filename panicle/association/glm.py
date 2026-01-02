@@ -24,7 +24,8 @@ def PANICLE_GLM(phe: np.ndarray,
            major_alleles: Optional[np.ndarray] = None,
            missing_fill_value: float = 1.0,
            return_cov_stats: bool = False,
-           cov_pvalue_agg: Optional[str] = None) -> AssociationResults:
+           cov_pvalue_agg: Optional[str] = None,
+           return_t_stats: bool = False) -> AssociationResults:
     """General Linear Model (GLM) for GWAS.
 
     Uses an optimized FWL+QR algorithm for speed.
@@ -45,9 +46,12 @@ def PANICLE_GLM(phe: np.ndarray,
                        Computes aggregated covariate p-values per covariate column.
                        Options: "reward" (min), "penalty" (max), "mean".
                        Result has .cov_pvalue_summary attribute with shape (n_covariates,).
+        return_t_stats: If True, return |t|-statistics instead of p-values.
+                       Skips erfc computation for efficiency. Useful for FarmCPU
+                       intermediate iterations where only ordinal ranking matters.
 
     Returns:
-        AssociationResults object with effects, SEs, and p-values.
+        AssociationResults object with effects, SEs, and p-values (or |t| if return_t_stats).
         If return_cov_stats is True, results arrays will be 2D (markers x terms).
         If cov_pvalue_agg is set, arrays are 1D with cov_pvalue_summary metadata.
     """
@@ -60,5 +64,6 @@ def PANICLE_GLM(phe: np.ndarray,
         verbose=verbose,
         missing_fill_value=missing_fill_value,
         return_cov_stats=return_cov_stats,
-        cov_pvalue_agg=cov_pvalue_agg
+        cov_pvalue_agg=cov_pvalue_agg,
+        return_t_stats=return_t_stats
     )
