@@ -692,12 +692,20 @@ class GWASPipeline:
 
             # Specific handling for Resampling (Sequential)
             if run_resampling:
-                 try: 
+                 try:
                      self.log("   Running FarmCPU Resampling (Sequential)...")
                      runs = fc_params.get('resampling_runs', 100)
+                     sig_thresh = fc_params.get('resampling_significance_threshold', 5e-8)
+                     mask_prop = fc_params.get('resampling_mask_proportion', 0.1)
+                     cluster = fc_params.get('resampling_cluster_markers', False)
+                     ld_thresh = fc_params.get('resampling_ld_threshold', 0.7)
                      res = PANICLE_FarmCPUResampling(
                          phe=y_sub, geno=g_sub, map_data=self.geno_map, CV=cov_sub,
                          runs=runs,
+                         significance_threshold=sig_thresh,
+                         mask_proportion=mask_prop,
+                         cluster_markers=cluster,
+                         ld_threshold=ld_thresh,
                          trait_name=trait_name,
                          verbose=False
                      )
@@ -818,9 +826,26 @@ class GWASPipeline:
                     'Significant_Hits': len(df),
                     'Info': f"Runs={Res.total_runs}"
                 })
-                # Add to all_res_df?
-                # RMIP Logic
-                # (Skipping complex mapping for brevity, focusing on main logic)
+
+                # Generate RMIP Manhattan plot
+                if 'manhattan' in outputs:
+                    try:
+                        report = PANICLE_Report(
+                            results=Res,
+                            map_data=self.geno_map,
+                            output_prefix=str(self.output_dir / f"GWAS_{trait_name}_{method}"),
+                            plot_types=['manhattan'],
+                            verbose=False,
+                            save_plots=True
+                        )
+                        # Cleanup figures
+                        import matplotlib.pyplot as plt
+                        for m_plots in report.get('plots', {}).values():
+                            for fig in m_plots.values():
+                                plt.close(fig)
+                    except Exception as e:
+                        self.log(f"   RMIP plotting error {method}: {e}")
+
                 continue
 
             # Standard Results

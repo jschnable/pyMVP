@@ -334,7 +334,7 @@ def PANICLE_FarmCPUResampling(
             geno_run = geno[keep_indices, :]
         cv_run = _subset_covariates(CV, keep_indices)
 
-        farmcpu_result = MVP_FarmCPU(
+        farmcpu_result = PANICLE_FarmCPU(
             phe=phe_run,
             geno=geno_run,
             map_data=map_data,
