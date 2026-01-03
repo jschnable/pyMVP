@@ -662,33 +662,35 @@ class GWASPipeline:
             # Resampling usually handled separately or sequentially due to complexity
             run_resampling = 'FarmCPUResampling' in methods
 
-            self.log(f"   Running parallel analysis for: {parallel_methods}")
+            # Only run parallel executor if there are parallel methods to run
+            if parallel_methods:
+                self.log(f"   Running parallel analysis for: {parallel_methods}")
 
-            with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, len(parallel_methods))) as executor:
-                future_to_method = {
-                    executor.submit(
-                        _run_single_method,
-                        method,
-                        y_sub, g_sub, cov_sub, k_sub,
-                        self.geno_map,
-                        fc_params, blk_params, hybrid_params,
-                        max_iterations, base_threshold, n_markers,
-                        effective_n, alpha  # Pass n_eff and alpha for FarmCPU
-                    ): method for method in parallel_methods
-                }
-                
-                for future in concurrent.futures.as_completed(future_to_method):
-                    m_name = future_to_method[future]
-                    try:
-                        res_name, res_obj, lambda_gc, error = future.result()
-                        if error:
-                            self.log(f"   {m_name} Failed: {error}")
-                        else:
-                            method_results[res_name] = res_obj
-                            if lambda_gc is not None:
-                                self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
-                    except Exception as exc:
-                        self.log(f"   {m_name} generated an exception: {exc}")
+                with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, len(parallel_methods))) as executor:
+                    future_to_method = {
+                        executor.submit(
+                            _run_single_method,
+                            method,
+                            y_sub, g_sub, cov_sub, k_sub,
+                            self.geno_map,
+                            fc_params, blk_params, hybrid_params,
+                            max_iterations, base_threshold, n_markers,
+                            effective_n, alpha  # Pass n_eff and alpha for FarmCPU
+                        ): method for method in parallel_methods
+                    }
+
+                    for future in concurrent.futures.as_completed(future_to_method):
+                        m_name = future_to_method[future]
+                        try:
+                            res_name, res_obj, lambda_gc, error = future.result()
+                            if error:
+                                self.log(f"   {m_name} Failed: {error}")
+                            else:
+                                method_results[res_name] = res_obj
+                                if lambda_gc is not None:
+                                    self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
+                        except Exception as exc:
+                            self.log(f"   {m_name} generated an exception: {exc}")
 
             # Specific handling for Resampling (Sequential)
             if run_resampling:
