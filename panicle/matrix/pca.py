@@ -3,9 +3,6 @@ Principal Component Analysis for GWAS
 """
 
 import numpy as np
-# Underflow to zero is fine; still surface overflows/invalids.
-np.seterr(under='ignore')
-np.seterr(over='raise', invalid='raise')
 from typing import Optional, Union, Tuple
 from ..utils.data_types import GenotypeMatrix, KinshipMatrix
 import warnings
