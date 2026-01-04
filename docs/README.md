@@ -54,6 +54,16 @@ pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
 pipeline.run_analysis(traits=['Height'], methods=['MLM'])
 ```
 
+### CLI Quick Start
+```bash
+python scripts/run_GWAS.py \
+  --phenotype examples/example_phenotypes.csv \
+  --genotype examples/example_genotypes.vcf.gz \
+  --traits PlantHeight \
+  --methods GLM \
+  --outputdir ./results
+```
+
 ## Workflow Overview
 
 ```

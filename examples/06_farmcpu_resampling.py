@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--runs", type=int, default=50)
     parser.add_argument("--mask-proportion", type=float, default=0.1)
     parser.add_argument("--alpha", type=float, default=0.05)
-    parser.add_argument("--output", default="./example06_results")
+    parser.add_argument("--outputdir", default="./example06_results")
     return parser.parse_args()
 
 
@@ -40,7 +40,7 @@ def main():
     print("=" * 70)
 
     args = parse_args()
-    pipeline = GWASPipeline(output_dir=args.output)
+    pipeline = GWASPipeline(output_dir=args.outputdir)
 
     print("\n1. Loading data...")
     pipeline.load_data(
@@ -77,7 +77,7 @@ def main():
     print("\n" + "=" * 70)
     print("Analysis Complete!")
     print("=" * 70)
-    print(f"\nResults saved to: {args.output}/")
+    print(f"\nResults saved to: {args.outputdir}/")
     print(f"- GWAS_{args.trait}_FarmCPUResampling_RMIP.csv")
     print(f"- GWAS_{args.trait}_FarmCPUResampling_rmip_manhattan.png")
 

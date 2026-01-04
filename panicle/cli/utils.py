@@ -30,13 +30,15 @@ def parse_args():
     # Required arguments
     parser.add_argument("--phenotype", "-p", required=True,
                        help="Phenotype file (CSV/TSV with ID column and trait columns)")
+    parser.add_argument("--phenotype-id-column", default='ID',
+                       help="Column name for sample IDs in phenotype file")
     parser.add_argument("--genotype", "-g", required=True,
                        help="Genotype file")
     
     # Optional arguments
     parser.add_argument("--map", "-m", default=None,
                        help="Genetic map file (CSV/TSV)")
-    parser.add_argument("--output", "-o", default="./GWAS_results",
+    parser.add_argument("--outputdir", "-o", default="./GWAS_results",
                        help="Output directory")
     parser.add_argument("--covariates", default=None,
                        help="Optional covariate file")

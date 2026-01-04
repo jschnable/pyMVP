@@ -34,6 +34,7 @@ def test_parse_args_defaults_and_flags(tmp_path) -> None:
     assert args.genotype.endswith("geno.csv")
     assert args.drop_monomorphic is True  # default
     assert args.outputs == list(utils.OUTPUT_CHOICES)
+    assert args.outputdir == "./GWAS_results"
 
 
 def test_parse_args_respects_overrides(tmp_path) -> None:
@@ -54,6 +55,8 @@ def test_parse_args_respects_overrides(tmp_path) -> None:
             "csv",
             "--n-pcs",
             "5",
+            "--outputdir",
+            str(tmp_path / "results"),
         ]
     )
     assert args.drop_monomorphic is False
@@ -61,3 +64,4 @@ def test_parse_args_respects_overrides(tmp_path) -> None:
     assert args.methods == "GLM"
     assert args.format == "csv"
     assert args.n_pcs == 5
+    assert args.outputdir.endswith("results")

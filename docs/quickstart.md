@@ -51,7 +51,7 @@ pipeline.run_analysis(
 ## File Formats
 
 ### Phenotype File Format
-CSV file with first column as individual IDs:
+CSV file with an individual ID column and numeric trait columns:
 
 ```csv
 ID,Height,FloweringTime,YieldTonPerHa
@@ -59,6 +59,8 @@ Ind001,1.85,72,8.5
 Ind002,1.92,68,9.2
 Ind003,1.78,75,7.8
 ```
+
+**ID Column Auto-Detection**: PANICLE automatically detects common ID column names including: `ID`, `IID`, `Sample`, `Taxa`, `Genotype`, `Accession`. If none are found, the first column is used. The detected column is printed during data loading.
 
 ### Genotype File Formats
 Supported formats:
@@ -77,21 +79,23 @@ After running the analysis, your output directory will contain:
 
 ```
 my_gwas_results/
-├── GWAS_Height_all_results.csv           # Full results for Height
+├── GWAS_Height_all_results.csv.gz        # Full results for Height (gzip compressed)
 ├── GWAS_Height_significant.csv           # Only significant SNPs
-├── GWAS_Height_GLM_manhattan.png   # Manhattan plot
-├── GWAS_Height_GLM_qq.png          # QQ plot
-├── GWAS_FloweringTime_all_results.csv   # Full results for FloweringTime
-└── GWAS_summary_by_traits_methods.csv   # Summary statistics
+├── GWAS_Height_GLM_manhattan.png         # Manhattan plot
+├── GWAS_Height_GLM_qq.png                # QQ plot
+├── GWAS_FloweringTime_all_results.csv.gz # Full results for FloweringTime
+└── GWAS_summary_by_traits_methods.csv    # Summary statistics
 ```
+
+**Note:** Full results files are gzip compressed by default to save disk space (typically 10x smaller). You can read them directly with pandas: `pd.read_csv('file.csv.gz')`.
 
 ### Reading Your Results
 
 ```python
 import pandas as pd
 
-# Load full results
-results = pd.read_csv('my_gwas_results/GWAS_Height_all_results.csv')
+# Load full results (pandas reads .gz files automatically)
+results = pd.read_csv('my_gwas_results/GWAS_Height_all_results.csv.gz')
 
 # Results contain:
 # - SNP: Marker ID
@@ -187,8 +191,8 @@ pipeline.run_analysis(
     # Add 'FarmCPUResampling' if needed (resampling is slow)
 )
 
-# All results are in the same all_results.csv file
-results = pd.read_csv('method_comparison/GWAS_MyTrait_all_results.csv')
+# All results are in the same all_results.csv.gz file
+results = pd.read_csv('method_comparison/GWAS_MyTrait_all_results.csv.gz')
 # Contains GLM_P, MLM_P, FarmCPU_P, BLINK_P columns
 ```
 

@@ -174,3 +174,7 @@ sorghum_data/
 # Analysis outputs
 hybrid_mlm_analysis/
 loco_mlm_analysis/
+
+# Benchmarking and test data
+benchmarking/
+testdata/

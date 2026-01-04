@@ -54,7 +54,17 @@ python scripts/run_GWAS.py \
   --n-pcs 5 \
   --compute-effective-tests \
   --outputs manhattan qq significant_marker_pvalues \
-  --output ./results
+  --outputdir ./results
+```
+
+For a small demo dataset included in the repo, see `examples/EXAMPLE_DATA.md` and try:
+```bash
+python scripts/run_GWAS.py \
+  --phenotype examples/example_phenotypes.csv \
+  --genotype examples/example_genotypes.vcf.gz \
+  --traits PlantHeight \
+  --methods GLM \
+  --outputdir ./results
 ```
 
 ### Parameters
@@ -62,11 +72,12 @@ python scripts/run_GWAS.py \
 | Argument | Description | Default |
 | :--- | :--- | :--- |
 | **`--phenotype`** | Path to phenotype CSV/TSV (must contain ID column). | **Required** |
+| **`--phenotype-id-column`** | ID column name in phenotype file. | ID |
 | **`--genotype`** | Path to genotype VCF/BCF/CSV. | **Required** |
-| **`--map`** | Optional map file (SNP, CHROM, POS). Recommended for numeric CSV/TSV and LOCO/Hybrid methods. | None |
+| **`--map`** | Optional map file (SNP, CHROM, POS). Recommended for numeric CSV/TSV and LOCO methods. | None |
 | **`--format`** | Genotype format override: `vcf`, `plink`, `hapmap`, `csv`, `tsv`, `numeric`. | Auto |
 | **`--traits`** | Comma-separated list of columns to analyze. | All numeric |
-| **`--methods`** | GWAS methods: `GLM`, `MLM`, `MLM_Hybrid`, `FarmCPU`, `BLINK`, `FarmCPUResampling`. | All |
+| **`--methods`** | GWAS methods: `GLM`, `MLM`, `FarmCPU`, `BLINK`, `FarmCPUResampling`. | GLM,MLM,FarmCPU,BLINK |
 | **`--n-pcs`** | Number of Principal Components for population structure. | 3 |
 | **`--compute-effective-tests`** | Calculate Effective SNP Number (Me) for Bonferroni correction. | False |
 | **`--use-effective-tests`** | Use Me (if available) for Bonferroni correction. | False |
@@ -78,7 +89,8 @@ python scripts/run_GWAS.py \
 | **`--covariate-id-column`** | ID column name in covariate file. | ID |
 | **`--max-iterations`** | Max iterations for FarmCPU/BLINK. | 10 |
 | **`--max-genotype-dosage`** | Max dosage (e.g., 2 for diploid). | 2.0 |
-| **`--outputs`** | Outputs to generate: `all_marker_pvalues`, `significant_marker_pvalues`, `manhattan`, `qq`. | All |
+| **`--outputdir`** | Output directory. | ./GWAS_results |
+| **`--outputs`** | Outputs to generate: `all_marker_pvalues`, `significant_marker_pvalues`, `manhattan`, `qq` (see [docs/output_files.md](docs/output_files.md)). | All |
 
 Other useful filters:
 - `--max-missing` (default 1.0), `--min-maf` (default 0.0)
@@ -110,8 +122,7 @@ pipeline.compute_population_structure(n_pcs=5)
 
 # 4. Run Analysis (runs in parallel by default)
 pipeline.run_analysis(
-    methods=['GLM', 'MLM', 'MLM_Hybrid'],
-    hybrid_params={'screen_threshold': 1e-4},
+    methods=['GLM', 'MLM', 'FARMCPU', 'BLINK'],
     alpha=0.05
 )
 ```
@@ -119,7 +130,7 @@ pipeline.run_analysis(
 ## Input Formats
 
 ### Phenotype & Covariates
-CSV or TSV files with an **ID column** (e.g., `ID`, `Taxa`, `Sample`) and numeric columns for traits/covariates.
+CSV or TSV files with an **ID column** and numeric columns for traits/covariates. PANICLE auto-detects ID columns named `ID`, `id`, `IID`, `sample`, `Sample`, `Taxa`, `taxa`, `Genotype`, `genotype`, `Accession`, `accession` (if multiple, it uses the leftmost). If none match, it uses the first column. Use `--phenotype-id-column` (or `--covariate-id-column`) to specify a custom ID column name.
 
 ### Genotype
 *   **VCF/BCF**: `.vcf`, `.vcf.gz`, `.bcf` (Preferred for performance).

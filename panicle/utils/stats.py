@@ -57,36 +57,43 @@ def calculate_maf_from_genotypes(
     missing_value: int = -9,
     max_dosage: float = 2.0,
 ) -> np.ndarray:
-    """Calculate minor allele frequencies from genotype matrix
-    
+    """Calculate minor allele frequencies from genotype matrix (vectorized)
+
     Args:
         genotypes: Genotype matrix (individuals × markers)
         missing_value: Value representing missing data
         max_dosage: Maximum genotype dosage used when converting genotype means
             into allele frequencies (default 2.0 for diploids)
-        
+
     Returns:
         Array of minor allele frequencies for each marker
     """
-    n_individuals, n_markers = genotypes.shape
-    maf = np.zeros(n_markers)
-    
-    for i in range(n_markers):
-        marker = genotypes[:, i]
-        # Remove missing values
-        valid_mask = (marker != missing_value) & (~np.isnan(marker))
-        valid_genotypes = marker[valid_mask]
-        
-        if len(valid_genotypes) == 0:
-            maf[i] = 0.0
-            continue
-            
-        # Calculate allele frequency relative to the declared maximum dosage
-        allele_freq = np.mean(valid_genotypes) / max(max_dosage, 1e-12)
-        # MAF is minimum of freq and 1-freq
-        maf[i] = min(allele_freq, 1.0 - allele_freq)
-    
-    return maf
+    # Handle GenotypeMatrix wrapper if present (uses _data internally)
+    if hasattr(genotypes, '_data'):
+        genotypes = genotypes._data
+    elif hasattr(genotypes, 'data'):
+        genotypes = genotypes.data
+
+    # Ensure we have a numpy array (handles memmap too)
+    if not isinstance(genotypes, np.ndarray):
+        genotypes = np.asarray(genotypes)
+
+    # Create mask for valid (non-missing) values
+    # Handle both integer and float arrays (isnan only works on floats)
+    valid_mask = genotypes != missing_value
+    if np.issubdtype(genotypes.dtype, np.floating):
+        valid_mask = valid_mask & (~np.isnan(genotypes))
+
+    # Use masked array for efficient computation
+    masked_geno = np.ma.array(genotypes, mask=~valid_mask)
+
+    # Calculate mean per marker (column) - vectorized
+    allele_freq = masked_geno.mean(axis=0).filled(0.0) / max(max_dosage, 1e-12)
+
+    # MAF is minimum of freq and 1-freq
+    maf = np.minimum(allele_freq, 1.0 - allele_freq)
+
+    return np.asarray(maf)
 
 def genomic_inflation_factor(pvalues: np.ndarray) -> float:
     """Calculate genomic inflation factor (lambda)

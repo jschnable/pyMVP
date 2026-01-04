@@ -8,17 +8,17 @@ When you run a GWAS analysis, PANICLE creates the following files in your specif
 
 ```
 output_dir/
-├── GWAS_{trait}_all_results.csv                    # Full results for each trait
-├── GWAS_{trait}_significant.csv                     # Significant SNPs only
-├── GWAS_{trait}_{method}_manhattan.png         # Manhattan plot per method
-├── GWAS_{trait}_{method}_qq.png                # QQ plot per method
-└── GWAS_summary_by_traits_methods.csv               # Overall summary table
+├── GWAS_{trait}_all_results.csv.gz                 # Full results for each trait (gzip compressed)
+├── GWAS_{trait}_significant.csv                    # Significant SNPs only
+├── GWAS_{trait}_{method}_manhattan.png             # Manhattan plot per method
+├── GWAS_{trait}_{method}_qq.png                    # QQ plot per method
+└── GWAS_summary_by_traits_methods.csv              # Overall summary table
 ```
 
 Example for analyzing Height with MLM and GLM:
 ```
 my_results/
-├── GWAS_Height_all_results.csv
+├── GWAS_Height_all_results.csv.gz
 ├── GWAS_Height_significant.csv
 ├── GWAS_Height_GLM_manhattan.png
 ├── GWAS_Height_GLM_qq.png
@@ -27,13 +27,15 @@ my_results/
 └── GWAS_summary_by_traits_methods.csv
 ```
 
+**Note:** Full results files (`all_results.csv.gz`) are gzip compressed by default to save disk space (typically 10x smaller). Pandas reads these files automatically: `pd.read_csv('file.csv.gz')`.
+
 ---
 
 ## File Formats
 
-### 1. Full Results CSV: `GWAS_{trait}_all_results.csv`
+### 1. Full Results CSV: `GWAS_{trait}_all_results.csv.gz`
 
-Contains association statistics for **all markers** across **all methods** run for a trait.
+Contains association statistics for **all markers** across **all methods** run for a trait. This file is gzip compressed by default.
 
 #### Column Descriptions
 
@@ -72,8 +74,8 @@ rs789,Chr02,50432,G,A,0.12,0.045,-0.023,0.067,-0.019
 ```python
 import pandas as pd
 
-# Load results
-results = pd.read_csv('my_results/GWAS_Height_all_results.csv')
+# Load results (pandas reads .gz files automatically)
+results = pd.read_csv('my_results/GWAS_Height_all_results.csv.gz')
 
 # Get top 10 SNPs by MLM p-value
 top_snps = results.nsmallest(10, 'MLM_P')
@@ -127,18 +129,25 @@ Overall summary table for all traits and methods analyzed.
 | `Method` | string | GWAS method used |
 | `Significant_Hits` | integer | Number of markers passing threshold |
 | `Threshold` | float | P-value threshold used (if applicable) |
+| `Lambda_GC` | float | Genomic inflation factor (λ). Values > 1.0 may indicate population stratification |
+| `N_Samples` | integer | Number of samples analyzed for this trait (after QC) |
+| `N_Markers` | integer | Number of markers tested |
+| `Runtime_Seconds` | float | Analysis time in seconds for this trait |
 | `Info` | string | Additional method-specific information |
 
 #### Example:
 
 ```csv
-Trait,Method,Significant_Hits,Threshold,Info
-Height,GLM,45,2.94e-07,
-Height,MLM,32,2.94e-07,
-Height,MLM_Hybrid,38,2.94e-07,
-FloweringTime,GLM,12,2.94e-07,
-FloweringTime,MLM,8,2.94e-07,
+Trait,Method,Significant_Hits,Threshold,Lambda_GC,N_Samples,N_Markers,Runtime_Seconds,Info
+Height,GLM,45,2.94e-07,1.02,850,500000,12.5,Bonferroni (markers)
+Height,MLM,32,2.94e-07,0.98,850,500000,45.2,Bonferroni (markers)
+FloweringTime,GLM,12,2.94e-07,1.15,848,500000,11.8,Bonferroni (markers)
 ```
+
+**Notes on Lambda_GC:**
+- λ ≈ 1.0: Well-controlled for population structure
+- λ > 1.1: May indicate population stratification - consider using MLM or more PCs
+- λ > 1.3: Likely significant population stratification - a warning is printed during analysis
 
 ---
 

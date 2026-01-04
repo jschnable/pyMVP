@@ -455,7 +455,8 @@ def create_manhattan_plot(pvalues: np.ndarray,
 
     handles, labels = ax.get_legend_handles_labels()
     if labels:
-        ax.legend(loc='best', fontsize=8)
+        # Use fixed position - 'best' is extremely slow with millions of points
+        ax.legend(loc='upper right', fontsize=8)
 
     plt.tight_layout()
     return fig
@@ -819,7 +820,8 @@ def create_qq_plot(pvalues: np.ndarray,
     ax.set_ylabel(r'Observed $-\log_{10}(P)$')
     ax.set_title(f'{title}\nλ = {lambda_gc:.3f}')
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    # Use fixed position - 'best' is extremely slow with millions of points
+    ax.legend(loc='upper left')
 
     plt.tight_layout()
     return fig
@@ -856,7 +858,7 @@ def create_pvalue_density_plot(pvalues: np.ndarray,
     ax1.set_xlabel('P-value')
     ax1.set_ylabel('Density')
     ax1.set_title('P-value Distribution')
-    ax1.legend()
+    ax1.legend(loc='upper right')
     ax1.grid(True, alpha=0.3)
 
     # Histogram of -log10 p-values
@@ -1034,7 +1036,8 @@ def create_multi_panel_manhattan(results_dict: Dict,
     # Add legend only once (top axis) if labels exist
     handles, labels = axes[0].get_legend_handles_labels()
     if labels:
-        axes[0].legend(loc='best', fontsize=8)
+        # Use fixed position - 'best' is extremely slow with millions of points
+        axes[0].legend(loc='upper right', fontsize=8)
 
     # Add a figure-level title if highlighting QTNs
     if true_qtns is not None:

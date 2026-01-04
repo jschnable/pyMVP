@@ -158,6 +158,7 @@ def load_phenotype_file(filepath: Union[str, Path],
             df = pd.read_csv(filepath, sep='\t', **read_kwargs)
     
     # Standardize column names
+    detected_id_column = None
     if id_column not in df.columns:
         # Try common ID column names (select leftmost if multiple are present)
         possible_id_cols = [
@@ -175,14 +176,20 @@ def load_phenotype_file(filepath: Union[str, Path],
                         present_candidates, present_candidates[0]
                     )
                 )
-            df = df.rename(columns={present_candidates[0]: 'ID'})
+            detected_id_column = present_candidates[0]
+            print(f"   Auto-detected ID column: '{detected_id_column}'")
+            df = df.rename(columns={detected_id_column: 'ID'})
         else:
             # Use first column as ID (emit a gentle warning)
             first_col = df.columns[0]
             warnings.warn(
                 "No recognized ID column found; using first column '{}' as ID.".format(first_col)
             )
+            detected_id_column = first_col
+            print(f"   Using first column as ID: '{detected_id_column}'")
             df = df.rename(columns={first_col: 'ID'})
+    else:
+        print(f"   Using specified ID column: '{id_column}'")
     
     # Auto-detect trait columns if not specified
     if trait_columns is None:

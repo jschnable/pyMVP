@@ -44,7 +44,7 @@ python 01_basic_gwas.py \
     --phenotype my_phenos.csv \
     --genotype my_genos.vcf.gz \
     --trait Height \
-    --output ./custom_results
+    --outputdir ./custom_results
 ```
 
 Example with the small sorghum marker set:
@@ -54,7 +54,7 @@ python 02_mlm_with_structure.py \
     --phenotype ../sorghum_data/SbDiv_NE2021_Phenos_spats.csv \
     --genotype ../sorghum_data/SbDiv_RNAseq_GeneticMarkers_Mangal2025.vcf.gz \
     --trait DaysToFlower \
-    --output ../preview_gwas_plots/example02_sorghum
+    --outputdir ../preview_gwas_plots/example02_sorghum
 ```
 
 ## Example Details

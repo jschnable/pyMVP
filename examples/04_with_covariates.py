@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument("--covariate-file", default=str(HERE / "example_covariates.csv"))
     parser.add_argument("--covariate-columns", default="DaysToFlower")
     parser.add_argument("--n-pcs", type=int, default=3)
-    parser.add_argument("--output", default="./example04_results")
+    parser.add_argument("--outputdir", default="./example04_results")
     return parser.parse_args()
 
 def main():
@@ -50,7 +50,7 @@ def main():
     args = parse_args()
 
     # Initialize pipeline
-    pipeline = GWASPipeline(output_dir=args.output)
+    pipeline = GWASPipeline(output_dir=args.outputdir)
 
     # Load data including external covariates
     print("\n1. Loading data with covariates...")
@@ -91,7 +91,7 @@ def main():
     print("\n" + "=" * 70)
     print("Analysis Complete!")
     print("=" * 70)
-    print(f"\nResults saved to: {args.output}/")
+    print(f"\nResults saved to: {args.outputdir}/")
     print("\nCovariates used in analysis:")
     if covariate_list:
         print(f"- External: {', '.join(covariate_list)}")

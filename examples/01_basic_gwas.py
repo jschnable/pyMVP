@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument("--genotype", default=str(HERE / "example_genotypes.vcf.gz"))
     parser.add_argument("--map", default=None)
     parser.add_argument("--trait", default="PlantHeight")
-    parser.add_argument("--output", default="./example01_results")
+    parser.add_argument("--outputdir", default="./example01_results")
     return parser.parse_args()
 
 def main():
@@ -40,7 +40,7 @@ def main():
     args = parse_args()
 
     # Initialize the pipeline with output directory
-    pipeline = GWASPipeline(output_dir=args.output)
+    pipeline = GWASPipeline(output_dir=args.outputdir)
 
     # Load phenotype and genotype data
     print("\n1. Loading data...")
@@ -65,7 +65,7 @@ def main():
     print("\n" + "=" * 70)
     print("Analysis Complete!")
     print("=" * 70)
-    print(f"\nResults saved to: {args.output}/")
+    print(f"\nResults saved to: {args.outputdir}/")
     print(f"- GWAS_{args.trait}_all_results.csv       (all markers)")
     print(f"- GWAS_{args.trait}_significant.csv       (significant markers only)")
     print(f"- GWAS_{args.trait}_GLM_manhattan.png (Manhattan plot)")

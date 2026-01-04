@@ -105,7 +105,7 @@ def main():
             setattr(args, flag, False)
     
     # Initialize Pipeline
-    pipeline = GWASPipeline(output_dir=args.output)
+    pipeline = GWASPipeline(output_dir=args.outputdir)
     
     # 1. Load Data
     traits = [t.strip() for t in args.traits.split(',')] if args.traits else None
@@ -122,6 +122,7 @@ def main():
 
     pipeline.load_data(
         phenotype_file=args.phenotype,
+        phenotype_id_column=args.phenotype_id_column,
         genotype_file=args.genotype,
         map_file=args.map,
         genotype_format=args.format,

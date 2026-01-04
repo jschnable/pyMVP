@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--map", default=None)
     parser.add_argument("--trait", default="PlantHeight")
     parser.add_argument("--n-pcs", type=int, default=5)
-    parser.add_argument("--output", default="./example02_results")
+    parser.add_argument("--outputdir", default="./example02_results")
     return parser.parse_args()
 
 def main():
@@ -46,7 +46,7 @@ def main():
     args = parse_args()
 
     # Initialize pipeline
-    pipeline = GWASPipeline(output_dir=args.output)
+    pipeline = GWASPipeline(output_dir=args.outputdir)
 
     # Load data
     print("\n1. Loading data...")
@@ -82,7 +82,7 @@ def main():
     print("\n" + "=" * 70)
     print("Analysis Complete!")
     print("=" * 70)
-    print(f"\nResults saved to: {args.output}/")
+    print(f"\nResults saved to: {args.outputdir}/")
     print("\nCompare with GLM:")
     print("- MLM typically has better control of false positives")
     print("- Check lambda_GC in QQ plots (should be closer to 1.0)")

@@ -20,9 +20,10 @@ from ..data.loaders import (
     load_covariate_file, match_individuals, detect_file_format
 )
 from ..utils.stats import (
-    calculate_maf_from_genotypes, 
+    calculate_maf_from_genotypes,
     genomic_inflation_factor
 )
+from ..utils.compression import to_csv_gzip, PIGZ_AVAILABLE
 from ..utils.data_types import GenotypeMatrix, AssociationResults
 from ..utils.effective_tests import estimate_effective_tests_from_genotype
 from ..association.farmcpu_resampling import (
@@ -233,7 +234,8 @@ class GWASPipeline:
                   covariate_file: Optional[str] = None,
                   covariate_columns: Optional[List[str]] = None,
                   covariate_id_column: str = 'ID',
-                  loader_kwargs: Optional[Dict[str, Any]] = None):
+                  loader_kwargs: Optional[Dict[str, Any]] = None,
+                  phenotype_id_column: str = 'ID'):
         """
         Load and validate phenotype, genotype, and optional covariate data.
 
@@ -241,8 +243,7 @@ class GWASPipeline:
         genotype_matrix, phenotype_df, geno_map, and optionally covariate_df attributes.
 
         Args:
-            phenotype_file (str): Path to phenotype CSV file. First column must be 'ID'
-                                or individual identifiers, remaining columns are traits.
+            phenotype_file (str): Path to phenotype CSV file. Must include an ID column.
             genotype_file (str): Path to genotype file. Supported formats:
                                 - VCF/VCF.GZ: Standard variant call format
                                 - HapMap: TASSEL HapMap format
@@ -262,6 +263,7 @@ class GWASPipeline:
             loader_kwargs (dict, optional): Additional arguments for genotype loader:
                 - compute_effective_tests (bool): Calculate M_eff (Li et al. 2012)
                 - effective_test_kwargs (dict): Parameters for effective test calculation
+            phenotype_id_column (str): Column name for sample IDs in phenotype file.
 
         Sets:
             self.phenotype_df: DataFrame with 'ID' column + trait columns
@@ -303,7 +305,11 @@ class GWASPipeline:
 
         # 1. Phenotype
         try:
-            self.phenotype_df = load_phenotype_file(phenotype_file, trait_columns=trait_columns)
+            self.phenotype_df = load_phenotype_file(
+                phenotype_file,
+                trait_columns=trait_columns,
+                id_column=phenotype_id_column,
+            )
             self.log(f"   Loaded {len(self.phenotype_df)} individuals with {len(self.phenotype_df.columns) - 1} traits")
         except Exception as e:
             raise ValueError(f"Error loading phenotype file: {e}")
@@ -466,8 +472,9 @@ class GWASPipeline:
         Args:
             n_pcs (int): Number of principal components to compute. Set to 0 to skip PCA.
                        Default: 3
-            calculate_kinship (bool): Whether to calculate kinship matrix. Required for
-                                    FarmCPU and BLINK methods. Default: True
+            calculate_kinship (bool): Whether to calculate kinship matrix. Only required
+                                    for MLM. Default: True (but can skip if only using
+                                    GLM, FarmCPU, or BLINK)
 
         Sets:
             self.pcs: ndarray of shape (n_individuals, n_pcs) if n_pcs > 0
@@ -491,7 +498,8 @@ class GWASPipeline:
             - PCs are automatically used as covariates in subsequent run_analysis() calls
             - PCs are combined with any external covariates loaded via covariate_file
             - Kinship calculation uses VanRaden (2008) method: K = XX' / m
-            - MLM and Hybrid MLM now use LOCO kinship internally and do not require this matrix
+            - Only MLM requires the kinship matrix; GLM, FarmCPU, and BLINK do not use it
+            - If you skip kinship here, run_analysis() will auto-compute it when MLM is requested
             - Recommended to use 3-10 PCs depending on population structure complexity
         """
         if self.genotype_matrix is None:
@@ -511,7 +519,9 @@ class GWASPipeline:
         else:
             self.pcs = np.zeros((self.genotype_matrix.n_individuals, 0))
             self.pc_names = []
-            self.log("   Skipping PCA (n_pcs=0)")
+            self.log("   WARNING: Running with 0 PCs. This may lead to inflated p-values if")
+            self.log("            your samples have population structure. Consider using --n-pcs 3")
+            self.log("            or higher to control for population stratification.")
 
         # Kinship
         if calculate_kinship:
@@ -557,6 +567,14 @@ class GWASPipeline:
         if not selected_traits:
             raise ValueError("No valid traits found to analyze.")
 
+        # Auto-compute kinship if MLM is requested but kinship not yet computed
+        methods_upper_check = [m.upper() for m in methods]
+        if 'MLM' in methods_upper_check and self.kinship is None:
+            self.log("   MLM requested but kinship not computed. Auto-computing kinship...")
+            kinship_start = time.time()
+            self.kinship = PANICLE_K_VanRaden(self.genotype_matrix, verbose=False)
+            self.log(f"   Kinship computed in {time.time() - kinship_start:.2f}s, shape: {self.kinship.shape}")
+
         # 2. Bonferroni / Thresholding Logic
         n_markers = self.genotype_matrix.n_markers
         bonferroni_denom = float(n_markers)
@@ -586,16 +604,19 @@ class GWASPipeline:
         
         for trait_name in selected_traits:
             self.log(f"\n-- Analyzing Trait: {trait_name} --")
-            
+            trait_start_time = time.time()
+
             # Prepare Trait-Specific Data (remove missing pheno/covs)
             trait_data = self._prepare_trait_data(trait_name)
             if not trait_data:
                 continue
-                
+
             y_sub, g_sub, cov_sub, k_sub = trait_data
+            n_samples_trait = y_sub.shape[0]
 
             # Run Methods (Parallel Execution)
             method_results = {}
+            method_lambda_gc = {}  # Track lambda GC for each method
             
             # Setup params for FarmCPU/BLINK
             fc_params = farmcpu_params or {}
@@ -619,31 +640,33 @@ class GWASPipeline:
                 fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
                 fc_qtn_source = 'FarmCPU QTN threshold'
 
-            # Identify parallelizable methods
+            # Identify parallelizable methods (case-insensitive matching)
+            # Note: method names passed to worker must match worker's expected case
+            methods_upper = [m.upper() for m in methods]
             parallel_methods = []
-            if 'GLM' in methods: parallel_methods.append('GLM')
-            if 'MLM' in methods: parallel_methods.append('MLM')
-            if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
-            if 'BLINK' in methods: parallel_methods.append('BLINK')
+            if 'GLM' in methods_upper: parallel_methods.append('GLM')
+            if 'MLM' in methods_upper: parallel_methods.append('MLM')
+            if 'FARMCPU' in methods_upper: parallel_methods.append('FARMCPU')
+            if 'BLINK' in methods_upper: parallel_methods.append('BLINK')
 
             # Track method-specific thresholds for plotting/reporting
             # Note: Keys must match the result names returned from parallel workers
             # (e.g., 'FarmCPU' not 'FARMCPU', 'BLINK' not 'blink')
-            if 'FARMCPU' in methods:
+            if 'FARMCPU' in methods_upper:
                 # FarmCPU applies multiple testing correction internally
                 # Use the same denominator for reporting consistency
                 method_thresholds['FarmCPU'] = fc_qtn_corrected  # Match worker return name
                 method_threshold_sources['FarmCPU'] = fc_qtn_source
-            if 'BLINK' in methods:
+            if 'BLINK' in methods_upper:
                 method_thresholds['BLINK'] = base_threshold
                 method_threshold_sources['BLINK'] = threshold_source
-            if 'GLM' in methods:
+            if 'GLM' in methods_upper:
                 method_thresholds['GLM'] = base_threshold
                 method_threshold_sources['GLM'] = threshold_source
-            if 'MLM' in methods:
+            if 'MLM' in methods_upper:
                 method_thresholds['MLM'] = base_threshold
                 method_threshold_sources['MLM'] = threshold_source
-            if 'FarmCPUResampling' in methods:
+            if 'FARMCPURESAMPLING' in methods_upper:
                 if 'resampling_significance_threshold' in fc_params:
                     resampling_thresh = fc_params['resampling_significance_threshold']
                     resampling_source = 'Resampling significance threshold'
@@ -654,7 +677,7 @@ class GWASPipeline:
                 method_threshold_sources['FarmCPUResampling'] = resampling_source
 
             # Resampling usually handled separately or sequentially due to complexity
-            run_resampling = 'FarmCPUResampling' in methods
+            run_resampling = 'FARMCPURESAMPLING' in methods_upper
 
             # Only run parallel executor if there are parallel methods to run
             if parallel_methods:
@@ -682,7 +705,12 @@ class GWASPipeline:
                             else:
                                 method_results[res_name] = res_obj
                                 if lambda_gc is not None:
+                                    method_lambda_gc[res_name] = lambda_gc
                                     self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
+                                    if lambda_gc > 1.3:
+                                        self.log(f"   WARNING: Genomic inflation factor ({lambda_gc:.3f}) > 1.3 for {res_name}.")
+                                        self.log(f"            This suggests population stratification or other confounding.")
+                                        self.log(f"            Consider using MLM or adding more PCs to control inflation.")
                         except Exception as exc:
                             self.log(f"   {m_name} generated an exception: {exc}")
 
@@ -711,12 +739,17 @@ class GWASPipeline:
                      self.log(f"   FarmCPU Resampling Failed: {e}")
 
             # Save and Report for this trait
+            trait_runtime = time.time() - trait_start_time
             trait_summary = self._save_trait_results(
-                trait_name, method_results, 
-                base_threshold, alpha, effective_tests_count, 
+                trait_name, method_results,
+                base_threshold, alpha, effective_tests_count,
                 max_genotype_dosage, outputs, threshold_source,
                 method_thresholds=method_thresholds,
-                method_threshold_sources=method_threshold_sources
+                method_threshold_sources=method_threshold_sources,
+                method_lambda_gc=method_lambda_gc,
+                n_samples=n_samples_trait,
+                n_markers=n_markers,
+                runtime_seconds=trait_runtime
             )
             summary_rows.extend(trait_summary)
 
@@ -726,6 +759,10 @@ class GWASPipeline:
             sum_path = self.output_dir / "GWAS_summary_by_traits_methods.csv"
             summary_df.to_csv(sum_path, index=False)
             self.log(f"\nSaved global summary to {sum_path}")
+
+        # Hint about pigz for faster compression
+        if 'all_marker_pvalues' in outputs and not PIGZ_AVAILABLE:
+            self.log("\nTip: Install 'pigz' for faster parallel gzip compression (apt install pigz)")
 
         self.log("\nGWAS Analysis Completed Successfully.")
 
@@ -786,19 +823,18 @@ class GWASPipeline:
              
         return y_final, g_final, cov_final, k_final
 
-    def _save_trait_results(self, trait_name, results, threshold, alpha, n_tests, max_dosage, outputs, threshold_source, method_thresholds=None, method_threshold_sources=None):
+    def _save_trait_results(self, trait_name, results, threshold, alpha, n_tests, max_dosage, outputs, threshold_source, method_thresholds=None, method_threshold_sources=None, method_lambda_gc=None, n_samples=None, n_markers=None, runtime_seconds=None):
         """Internal helper to save tables and plots"""
         
         summary_data = []
         base_df = self.geno_map.to_dataframe().copy() if hasattr(self.geno_map, 'to_dataframe') else pd.DataFrame()
-        
-        # Calculate MAF (once for all methods)
-        # Note: Ideally do this on the subset used for analysis, but doing it on full set is common approximation
-        # Or re-calc on subset.
-        # Using full set for reporting generally ok.
-        maf = calculate_maf_from_genotypes(self.genotype_matrix, max_dosage=max_dosage)
-        base_df['MAF'] = maf
-        
+
+        # Only calculate MAF if we're saving marker-level results
+        need_maf = 'all_marker_pvalues' in outputs or 'significant_marker_pvalues' in outputs
+        if need_maf:
+            maf = calculate_maf_from_genotypes(self.genotype_matrix, max_dosage=max_dosage)
+            base_df['MAF'] = maf
+
         all_res_df = base_df.copy()
         sig_snps = []
         hits_by_method = {}
@@ -833,6 +869,10 @@ class GWASPipeline:
                     'Trait': trait_name, 'Method': method,
                     'Significant_Hits': len(resampling_hit_snps),
                     'Threshold': rmip_hit_threshold,
+                    'Lambda_GC': float('nan'),  # Not applicable for resampling
+                    'N_Samples': n_samples,
+                    'N_Markers': n_markers,
+                    'Runtime_Seconds': round(runtime_seconds, 2) if runtime_seconds else None,
                     'Info': f"{method_source}; RMIP>={rmip_hit_threshold}; Runs={Res.total_runs}; Clustered={Res.cluster_mode}"
                 })
 
@@ -867,10 +907,17 @@ class GWASPipeline:
             hits_by_method[method] = hits
             n_sig = int(hits.sum())
             
+            # Get lambda GC for this method
+            lambda_gc_value = (method_lambda_gc or {}).get(method, float('nan'))
+
             summary_data.append({
                 'Trait': trait_name, 'Method': method,
                 'Significant_Hits': n_sig,
                 'Threshold': method_threshold,
+                'Lambda_GC': round(lambda_gc_value, 3) if not np.isnan(lambda_gc_value) else float('nan'),
+                'N_Samples': n_samples,
+                'N_Markers': n_markers,
+                'Runtime_Seconds': round(runtime_seconds, 2) if runtime_seconds else None,
                 'Info': method_source
             })
             
@@ -911,7 +958,9 @@ class GWASPipeline:
             all_res_df = all_res_df[base_df.columns.tolist() + method_columns]
 
         if 'all_marker_pvalues' in outputs:
-            all_res_df.to_csv(self.output_dir / f"GWAS_{trait_name}_all_results.csv", index=False)
+            # Use gzip compression for large results files (typically 10x smaller)
+            # Uses pigz for parallel compression if available
+            to_csv_gzip(all_res_df, self.output_dir / f"GWAS_{trait_name}_all_results.csv.gz", index=False)
             
         if resampling_hit_snps:
             resampling_mask = all_res_df['SNP'].astype(str).isin(resampling_hit_snps).to_numpy()
