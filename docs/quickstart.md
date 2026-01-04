@@ -79,8 +79,8 @@ After running the analysis, your output directory will contain:
 my_gwas_results/
 ├── GWAS_Height_all_results.csv           # Full results for Height
 ├── GWAS_Height_significant.csv           # Only significant SNPs
-├── GWAS_Height_GLM_GWAS_manhattan.png   # Manhattan plot
-├── GWAS_Height_GLM_GWAS_qq.png          # QQ plot
+├── GWAS_Height_GLM_manhattan.png   # Manhattan plot
+├── GWAS_Height_GLM_qq.png          # QQ plot
 ├── GWAS_FloweringTime_all_results.csv   # Full results for FloweringTime
 └── GWAS_summary_by_traits_methods.csv   # Summary statistics
 ```

@@ -9,8 +9,9 @@ from typing import Union, Tuple, Optional, Dict, List, Any
 import warnings
 import time
 import sys
+import os
 
-from ..utils.data_types import GenotypeMatrix, GenotypeMap
+from ..utils.data_types import GenotypeMatrix, GenotypeMap, impute_major_allele_inplace
 from ..utils.memmap_utils import load_full_from_metadata
 from ..utils.effective_tests import estimate_effective_tests_from_genotype
 try:
@@ -450,7 +451,8 @@ def load_genotype_file(filepath: Union[str, Path],
         geno_np, individual_ids, geno_map_df = _load_genotype_plink(str(filepath), **kwargs)
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
+        is_imputed = getattr(geno_map_df, 'attrs', {}).get('is_imputed', False)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles, is_imputed=is_imputed)
         geno_map = GenotypeMap(
             geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df)
         )
@@ -471,7 +473,8 @@ def load_genotype_file(filepath: Union[str, Path],
         geno_np, individual_ids, geno_map_df = _load_genotype_hapmap(str(filepath), **kwargs)
         # Deduplicate genotype sample IDs centrally
         individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles)
+        is_imputed = getattr(geno_map_df, 'attrs', {}).get('is_imputed', False)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles, is_imputed=is_imputed)
         geno_map = GenotypeMap(
             geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df)
         )
@@ -487,6 +490,33 @@ def load_genotype_file(filepath: Union[str, Path],
         return geno_matrix, individual_ids, geno_map
 
     if file_format in ['csv', 'tsv', 'numeric']:
+        cache_base = str(filepath)
+        cache_geno = cache_base + '.panicle.v2.geno.npy'
+        cache_ind = cache_base + '.panicle.v2.ind.txt'
+        cache_map = cache_base + '.panicle.v2.map.csv'
+        force_recache = bool(kwargs.get('force_recache', False))
+
+        geno_np = None
+        individual_ids: List[str] | None = None
+        geno_map_df = None
+        loaded_from_cache = False
+        try:
+            if not force_recache:
+                if os.path.exists(cache_geno) and os.path.exists(cache_ind) and os.path.exists(cache_map):
+                    src_mtime = os.path.getmtime(filepath)
+                    if (os.path.getmtime(cache_geno) > src_mtime and
+                        os.path.getmtime(cache_ind) > src_mtime and
+                        os.path.getmtime(cache_map) > src_mtime):
+                        print(f"   [Cache] Loading binary cache for {filepath}...")
+                        geno_np = np.load(cache_geno, mmap_mode='r')
+                        with open(cache_ind, 'r') as f:
+                            individual_ids = [line.strip() for line in f]
+                        geno_map_df = pd.read_csv(cache_map)
+                        geno_map_df.attrs["is_imputed"] = True
+                        loaded_from_cache = True
+        except Exception as e:
+            print(f"   [Cache] Failed to load cache: {e}")
+
         # Load as CSV/TSV with numeric genotypes
         if file_format == 'csv':
             separator = ','
@@ -496,40 +526,59 @@ def load_genotype_file(filepath: Union[str, Path],
             separator = _detect_numeric_separator(filepath)
 
         # Use fast, consistent parsing and avoid mixed-type inference
-        df = pd.read_csv(filepath, sep=separator, low_memory=False)
+        if not loaded_from_cache:
+            df = pd.read_csv(filepath, sep=separator, low_memory=False)
 
-        # First column should be individual IDs
-        individual_ids = df.iloc[:, 0].astype(str).tolist()
+            # First column should be individual IDs
+            individual_ids = df.iloc[:, 0].astype(str).tolist()
 
-        # Remaining columns are markers
-        marker_names = df.columns[1:].tolist()
-        data_df = df.iloc[:, 1:]
+            # Remaining columns are markers
+            marker_names = df.columns[1:].tolist()
+            data_df = df.iloc[:, 1:]
 
-        # Vectorized conversion to numeric with robust NA handling
-        # Coerce any non-numeric (e.g., 'NA', 'N', '.') to NaN, then fill with sentinel -9
-        data_df = data_df.apply(pd.to_numeric, errors='coerce')
-        data_df = data_df.fillna(-9)
+            # Vectorized conversion to numeric with robust NA handling
+            # Coerce any non-numeric (e.g., 'NA', 'N', '.') to NaN, then fill with sentinel -9
+            data_df = data_df.apply(pd.to_numeric, errors='coerce')
+            data_df = data_df.fillna(-9)
 
-        # Cast to compact integer type; -9 and 0/1/2 fit in int8
-        try:
-            genotype_matrix = data_df.to_numpy(dtype=np.int8, copy=False)
-        except Exception:
-            # Fallback path in case of unexpected wide range; use int16
-            genotype_matrix = data_df.to_numpy(dtype=np.int16, copy=False)
+            # Cast to compact integer type; -9 and 0/1/2 fit in int8
+            try:
+                geno_np = data_df.to_numpy(dtype=np.int8, copy=False)
+            except Exception:
+                # Fallback path in case of unexpected wide range; use int16
+                geno_np = data_df.to_numpy(dtype=np.int16, copy=False)
+
+            impute_major_allele_inplace(geno_np, missing_value=-9)
+
+            # Create basic GenotypeMap (assumes no map file provided)
+            geno_map_df = pd.DataFrame({
+                'SNP': marker_names,
+                'CHROM': [1] * len(marker_names),  # Default to chromosome 1
+                'POS': list(range(1, len(marker_names) + 1))  # Sequential positions
+            })
+            geno_map_df.attrs["is_imputed"] = True
+
+            try:
+                print(f"   [Cache] Saving binary cache to {cache_base}.panicle.v2.*")
+                np.save(cache_geno, geno_np)
+                with open(cache_ind, 'w') as f:
+                    for ind in individual_ids:
+                        f.write(f"{ind}\n")
+                geno_map_df.to_csv(cache_map, index=False)
+            except Exception as e:
+                print(f"   [Cache] Warning: Failed to save cache: {e}")
+
+        if geno_np is None or individual_ids is None or geno_map_df is None:
+            raise ValueError("Failed to load genotype data from CSV/TSV")
 
         # Deduplicate genotype sample IDs centrally
-        individual_ids, genotype_matrix = _deduplicate_genotype_samples(individual_ids, genotype_matrix)
+        individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
 
         # Create GenotypeMatrix
-        geno_matrix = GenotypeMatrix(genotype_matrix, precompute_alleles=precompute_alleles)
+        geno_matrix = GenotypeMatrix(geno_np, precompute_alleles=precompute_alleles, is_imputed=True)
 
-        # Create basic GenotypeMap (assumes no map file provided)
-        map_data = pd.DataFrame({
-            'SNP': marker_names,
-            'CHROM': [1] * len(marker_names),  # Default to chromosome 1
-            'POS': list(range(1, len(marker_names) + 1))  # Sequential positions
-        })
-        geno_map = GenotypeMap(map_data)
+        # Create GenotypeMap
+        geno_map = GenotypeMap(geno_map_df)
         if compute_effective_tests:
             effective_tests_kwargs = effective_test_kwargs or {}
             geno_map.metadata["effective_tests"] = estimate_effective_tests_from_genotype(
@@ -557,7 +606,8 @@ def load_genotype_vcf(filepath: Union[str, Path], **kwargs) -> Tuple[GenotypeMat
     geno_np, individual_ids, geno_map_df = _load_genotype_vcf(str(filepath), **kwargs)
     # Deduplicate genotype sample IDs centrally
     individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-    geno_matrix = GenotypeMatrix(geno_np)
+    is_imputed = getattr(geno_map_df, 'attrs', {}).get('is_imputed', False)
+    geno_matrix = GenotypeMatrix(geno_np, is_imputed=is_imputed)
     geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
     return geno_matrix, individual_ids, geno_map
 
@@ -573,7 +623,8 @@ def load_genotype_plink(filepath: Union[str, Path], **kwargs) -> Tuple[GenotypeM
     geno_np, individual_ids, geno_map_df = _load_genotype_plink(str(filepath), **kwargs)
     # Deduplicate genotype sample IDs centrally
     individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-    geno_matrix = GenotypeMatrix(geno_np)
+    is_imputed = getattr(geno_map_df, 'attrs', {}).get('is_imputed', False)
+    geno_matrix = GenotypeMatrix(geno_np, is_imputed=is_imputed)
     geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
     return geno_matrix, individual_ids, geno_map
 
@@ -587,7 +638,8 @@ def load_genotype_hapmap(filepath: Union[str, Path], **kwargs) -> Tuple[Genotype
     geno_np, individual_ids, geno_map_df = _load_genotype_hapmap(str(filepath), **kwargs)
     # Deduplicate genotype sample IDs centrally
     individual_ids, geno_np = _deduplicate_genotype_samples(individual_ids, geno_np)
-    geno_matrix = GenotypeMatrix(geno_np)
+    is_imputed = getattr(geno_map_df, 'attrs', {}).get('is_imputed', False)
+    geno_matrix = GenotypeMatrix(geno_np, is_imputed=is_imputed)
     geno_map = GenotypeMap(geno_map_df if isinstance(geno_map_df, pd.DataFrame) else pd.DataFrame(geno_map_df))
     return geno_matrix, individual_ids, geno_map
 

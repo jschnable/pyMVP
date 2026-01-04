@@ -204,8 +204,8 @@ pipeline.run_analysis(
 **Output Files** (per trait):
 - `GWAS_{trait}_all_results.csv`: Full association results for all markers
 - `GWAS_{trait}_significant.csv`: Only significant markers (p < threshold)
-- `GWAS_{trait}_{method}_GWAS_manhattan.png`: Manhattan plot
-- `GWAS_{trait}_{method}_GWAS_qq.png`: QQ plot
+- `GWAS_{trait}_{method}_manhattan.png`: Manhattan plot
+- `GWAS_{trait}_{method}_qq.png`: QQ plot
 - `GWAS_summary_by_traits_methods.csv`: Summary table (shared across traits)
 
 **Example:**

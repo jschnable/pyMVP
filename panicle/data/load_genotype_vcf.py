@@ -30,6 +30,7 @@ try:
     import numpy as np
 except Exception as e:  # pragma: no cover
     raise ImportError("NumPy is required: pip install numpy")
+from panicle.utils.data_types import impute_major_allele_inplace
 
 
 MISSING = -9
@@ -473,9 +474,10 @@ def load_genotype_vcf(
         })
 
     if use_cyvcf2:
-        # Fast path using cyvcf2
-        from cyvcf2 import VCF  # type: ignore
-        vcf = VCF(vcf_path)
+        # Fast path using cyvcf2 (reuse threaded reader created above)
+        if vcf is None:
+            from cyvcf2 import VCF  # type: ignore
+            vcf = VCF(vcf_path, threads=n_threads)
         individual_ids = list(vcf.samples)
         n = len(individual_ids)
         if n == 0:
@@ -555,12 +557,8 @@ def load_genotype_vcf(
                 # If we have 2 (allele 2), sum is > 2, which logic below might clamp or accept? 
                 # pyMVP expects 0,1,2.
                 
-                # Compute dosage
-                # We mask missing first to avoid summing -1s
-                # Use a temp array to calculate sums safely
-                safe_alleles = alleles.copy()
-                safe_alleles[missing_mask] = 0 # Dummy value
-                dosages = np.sum(safe_alleles, axis=1)
+                # Compute dosage directly; missing handled by mask below
+                dosages = np.sum(alleles, axis=1)
                 
                 # Cast to int16 for consider_variant
                 col = dosages.astype(np.int16)
@@ -846,28 +844,11 @@ def load_genotype_vcf(
     try:
         # Impute missing values (-9) before caching
         # This avoids repeated -9 checks in downstream kinship/MLM code
-        missing_mask = (geno == MISSING)
-        n_missing = missing_mask.sum()
+        n_missing = impute_major_allele_inplace(geno, missing_value=MISSING)
         if n_missing > 0:
-            print(f"   [Cache] Imputing {n_missing:,} missing values ({100*n_missing/geno.size:.2f}%)...")
-            # Vectorized major allele computation per marker
-            n_individuals, n_markers = geno.shape
-
-            # Count occurrences of 0, 1, 2 per marker (excluding -9)
-            counts_0 = np.sum((geno == 0), axis=0)
-            counts_1 = np.sum((geno == 1), axis=0)
-            counts_2 = np.sum((geno == 2), axis=0)
-
-            # Stack counts and find argmax (major allele index)
-            counts = np.stack([counts_0, counts_1, counts_2], axis=0)  # shape (3, n_markers)
-            major_alleles = np.argmax(counts, axis=0).astype(geno.dtype)  # 0, 1, or 2
-
-            # Broadcast major alleles to missing positions
-            # geno[missing_mask] = major_alleles broadcasted
-            major_broadcast = np.broadcast_to(major_alleles, geno.shape)
-            geno[missing_mask] = major_broadcast[missing_mask]
-
-            print(f"   [Cache] Imputation complete")
+            print(f"   [Cache] Imputed {n_missing:,} missing values ({100*n_missing/geno.size:.2f}%)")
+        if hasattr(geno_map, "attrs"):
+            geno_map.attrs["is_imputed"] = True
 
         # Save only if successful
         print(f"   [Cache] Saving binary cache to {cache_base}.panicle.v2.*")

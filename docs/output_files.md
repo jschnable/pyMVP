@@ -10,8 +10,8 @@ When you run a GWAS analysis, PANICLE creates the following files in your specif
 output_dir/
 ├── GWAS_{trait}_all_results.csv                    # Full results for each trait
 ├── GWAS_{trait}_significant.csv                     # Significant SNPs only
-├── GWAS_{trait}_{method}_GWAS_manhattan.png         # Manhattan plot per method
-├── GWAS_{trait}_{method}_GWAS_qq.png                # QQ plot per method
+├── GWAS_{trait}_{method}_manhattan.png         # Manhattan plot per method
+├── GWAS_{trait}_{method}_qq.png                # QQ plot per method
 └── GWAS_summary_by_traits_methods.csv               # Overall summary table
 ```
 
@@ -20,10 +20,10 @@ Example for analyzing Height with MLM and GLM:
 my_results/
 ├── GWAS_Height_all_results.csv
 ├── GWAS_Height_significant.csv
-├── GWAS_Height_GLM_GWAS_manhattan.png
-├── GWAS_Height_GLM_GWAS_qq.png
-├── GWAS_Height_MLM_GWAS_manhattan.png
-├── GWAS_Height_MLM_GWAS_qq.png
+├── GWAS_Height_GLM_manhattan.png
+├── GWAS_Height_GLM_qq.png
+├── GWAS_Height_MLM_manhattan.png
+├── GWAS_Height_MLM_qq.png
 └── GWAS_summary_by_traits_methods.csv
 ```
 
@@ -98,10 +98,10 @@ Same columns as `all_results.csv`, plus:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `Method` | string | Which method detected this SNP as significant |
+| `Method` | string | Methods that detected this SNP as significant (pipe-separated) |
 
 #### Notes:
-- A SNP may appear multiple times if significant in multiple methods
+- Each SNP appears once; the `Method` column lists all significant methods separated by `|`
 - Threshold used is shown in the summary file
 - Default threshold: Bonferroni correction (0.05 / n_markers)
 
@@ -109,8 +109,7 @@ Same columns as `all_results.csv`, plus:
 
 ```csv
 SNP,CHROM,POS,REF,ALT,MAF,GLM_P,GLM_Effect,MLM_P,MLM_Effect,Method
-rs123,Chr01,100234,A,G,0.23,0.0000012,0.045,0.0000089,0.042,GLM
-rs123,Chr01,100234,A,G,0.23,0.0000012,0.045,0.0000089,0.042,MLM
+rs123,Chr01,100234,A,G,0.23,0.0000012,0.045,0.0000089,0.042,GLM|MLM
 rs456,Chr05,892341,T,C,0.31,0.089,0.012,0.0000023,0.051,MLM
 ```
 
@@ -145,7 +144,7 @@ FloweringTime,MLM,8,2.94e-07,
 
 ## Visualization Outputs
 
-### 4. Manhattan Plot: `GWAS_{trait}_{method}_GWAS_manhattan.png`
+### 4. Manhattan Plot: `GWAS_{trait}_{method}_manhattan.png`
 
 Standard Manhattan plot showing -log₁₀(P-value) across the genome.
 
@@ -163,7 +162,7 @@ Standard Manhattan plot showing -log₁₀(P-value) across the genome.
 
 ---
 
-### 5. QQ Plot: `GWAS_{trait}_{method}_GWAS_qq.png`
+### 5. QQ Plot: `GWAS_{trait}_{method}_qq.png`
 
 Quantile-quantile plot comparing observed vs. expected P-values.
 
@@ -195,17 +194,20 @@ Contains Resample Model Inclusion Probability (RMIP) for each marker.
 | `CHROM` | string | Chromosome |
 | `POS` | integer | Position |
 | `RMIP` | float | Fraction of resampling runs where SNP was selected (0.0 to 1.0) |
-| `Frequency` | integer | Number of times SNP was selected across runs |
+| `Trait` | string | Trait name |
+| `ClusterMembers` | string | Cluster membership details (only when clustering is enabled) |
 
 **Example:**
 ```csv
-SNP,CHROM,POS,RMIP,Frequency
-rs123,Chr01,100234,0.95,95
-rs456,Chr05,892341,0.72,72
+SNP,CHROM,POS,RMIP,Trait
+rs123,Chr01,100234,0.95,FloweringTime
+rs456,Chr05,892341,0.72,FloweringTime
 ```
 
 **Notes:**
 - RMIP results are written to a separate file and are not included in `GWAS_{trait}_all_results.csv`.
+- Markers are counted as significant for `GWAS_{trait}_significant.csv` when `RMIP >= 0.1`.
+- Resampling uses the FarmCPU QTN threshold by default unless a resampling-specific threshold is provided.
 
 **Interpretation:**
 - RMIP > 0.8: Strong evidence for association
@@ -218,18 +220,18 @@ rs456,Chr05,892341,0.72,72
 
 PANICLE may create cached files to speed up repeated analyses:
 
-### VCF Cache Files
+### Genotype Cache Files
 
-When loading VCF files, PANICLE creates binary cache files (v2, pre-imputed):
+When loading genotype files, PANICLE creates binary cache files (v2, pre-imputed):
 
 ```
-{vcf_filename}.panicle.v2.geno.npy       # Genotype matrix (binary, pre-imputed)
-{vcf_filename}.panicle.v2.ind.txt        # Individual IDs
-{vcf_filename}.panicle.v2.map.csv        # Genetic map
+{genotype_filename}.panicle.v2.geno.npy  # Genotype matrix (binary, pre-imputed)
+{genotype_filename}.panicle.v2.ind.txt   # Individual IDs
+{genotype_filename}.panicle.v2.map.csv   # Genetic map
 ```
 
 **Notes:**
-- Automatically created on first VCF load
+- Automatically created on first load (VCF/BCF/PLINK/HapMap/CSV/TSV)
 - Dramatically speeds up subsequent loads
 - Safe to delete (will be regenerated)
 - Can be large (similar size to original VCF)

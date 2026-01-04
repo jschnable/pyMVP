@@ -17,11 +17,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Tuple
+import os
 
 try:
     import numpy as np
 except Exception:
     raise ImportError("NumPy is required: pip install numpy")
+from panicle.utils.data_types import impute_major_allele_inplace
 
 MISSING = -9
 
@@ -96,6 +98,7 @@ def load_genotype_plink(
     max_missing: float = 1.0,
     min_maf: float = 0.0,
     return_pandas: bool = True,
+    force_recache: bool = False,
 ):
     """
     Load PLINK 1 .bed genotype data.
@@ -107,8 +110,33 @@ def load_genotype_plink(
     - max_missing: drop variants with missing rate > threshold (0..1]
     - min_maf: drop variants with minor allele frequency < threshold
     - return_pandas: return geno_map as pandas.DataFrame if pandas is available
+    - force_recache: ignore any existing cache and rebuild it
     """
     bed_path, bim_path, fam_path = _resolve_plink_paths(prefix_or_bed, bim, fam)
+
+    # Cache version 2: pre-imputed, matches VCF cache behavior
+    cache_base = str(bed_path)
+    cache_geno = cache_base + '.panicle.v2.geno.npy'
+    cache_ind = cache_base + '.panicle.v2.ind.txt'
+    cache_map = cache_base + '.panicle.v2.map.csv'
+
+    try:
+        if not force_recache:
+            if os.path.exists(cache_geno) and os.path.exists(cache_ind) and os.path.exists(cache_map):
+                newest_src = max(os.path.getmtime(bed_path), os.path.getmtime(bim_path), os.path.getmtime(fam_path))
+                if (os.path.getmtime(cache_geno) > newest_src and
+                    os.path.getmtime(cache_ind) > newest_src and
+                    os.path.getmtime(cache_map) > newest_src):
+                    print(f"   [Cache] Loading binary cache for {bed_path}...")
+                    geno_matrix = np.load(cache_geno, mmap_mode='r')
+                    with open(cache_ind, 'r') as f:
+                        individual_ids = [line.strip() for line in f]
+                    import pandas as pd  # type: ignore
+                    geno_map = pd.read_csv(cache_map)
+                    geno_map.attrs["is_imputed"] = True
+                    return geno_matrix, individual_ids, geno_map
+    except Exception as e:
+        print(f"   [Cache] Failed to load cache: {e}")
 
     # Read sample IDs and map first (for integrity checks)
     individual_ids = _read_fam_ids(fam_path)
@@ -175,5 +203,22 @@ def load_genotype_plink(
     else:
         geno_map = geno_map.loc[np.where(keep_mask)[0]].reset_index(drop=True)
 
-    return Xi, individual_ids, geno_map
+    impute_major_allele_inplace(Xi, missing_value=MISSING)
+    if hasattr(geno_map, "attrs"):
+        geno_map.attrs["is_imputed"] = True
 
+    try:
+        print(f"   [Cache] Saving binary cache to {cache_base}.panicle.v2.*")
+        np.save(cache_geno, Xi)
+        with open(cache_ind, 'w') as f:
+            for ind in individual_ids:
+                f.write(f"{ind}\n")
+        import pandas as pd  # type: ignore
+        if isinstance(geno_map, list):
+            pd.DataFrame(geno_map).to_csv(cache_map, index=False)
+        else:
+            geno_map.to_csv(cache_map, index=False)
+    except Exception as e:
+        print(f"   [Cache] Warning: Failed to save cache: {e}")
+
+    return Xi, individual_ids, geno_map

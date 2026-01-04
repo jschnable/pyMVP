@@ -113,8 +113,8 @@ Recommended for numeric genotype matrices and for LOCO-based methods like `MLM_H
 
 - `GWAS_{trait}_all_results.csv` - Full association results
 - `GWAS_{trait}_significant.csv` - Significant SNPs only
-- `GWAS_{trait}_{method}_GWAS_manhattan.png` - Manhattan plot
-- `GWAS_{trait}_{method}_GWAS_qq.png` - QQ plot
+- `GWAS_{trait}_{method}_manhattan.png` - Manhattan plot
+- `GWAS_{trait}_{method}_qq.png` - QQ plot
 
 See [Output Files](output_files.md) for detailed format specifications.
 
@@ -142,7 +142,7 @@ See [Output Files](output_files.md) for detailed format specifications.
 
 ## Performance Tips
 
-1. **Use binary genotype formats** - VCF.GZ is cached automatically
+1. **Use binary genotype formats** - Genotype files are cached automatically (VCF/BCF/PLINK/HapMap/CSV/TSV)
 2. **Filter low MAF variants** before analysis
 3. **Start with GLM** for initial screening
 4. **Use Hybrid MLM** instead of full LRT for production analyses

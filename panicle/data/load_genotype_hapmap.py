@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Tuple
+import os
 import io
 import gzip
 
@@ -21,6 +22,7 @@ try:
     import numpy as np
 except Exception:
     raise ImportError("NumPy is required: pip install numpy")
+from panicle.utils.data_types import impute_major_allele_inplace
 
 MISSING = -9
 
@@ -110,6 +112,7 @@ def load_genotype_hapmap(
     max_missing: float = 1.0,
     min_maf: float = 0.0,
     return_pandas: bool = True,
+    force_recache: bool = False,
 ) -> Tuple[np.ndarray, List[str], object]:
     """
     Load HapMap .hmp(.txt) file and return (geno_matrix, individual_ids, geno_map).
@@ -117,7 +120,32 @@ def load_genotype_hapmap(
     - HapMap is biallelic by design; we code 0/1/2 as REF/het/ALT by alleles field.
     - Indel handling is conservative: only A/C/G/T base codes are recognized; all others (except N) → missing,
       unless the cell is an exact REF or ALT base.
+    - force_recache: ignore any existing cache and rebuild it.
     """
+    # Cache version 2: pre-imputed, matches VCF cache behavior
+    cache_base = str(hapmap_path)
+    cache_geno = cache_base + '.panicle.v2.geno.npy'
+    cache_ind = cache_base + '.panicle.v2.ind.txt'
+    cache_map = cache_base + '.panicle.v2.map.csv'
+
+    try:
+        if not force_recache:
+            if os.path.exists(cache_geno) and os.path.exists(cache_ind) and os.path.exists(cache_map):
+                src_mtime = os.path.getmtime(hapmap_path)
+                if (os.path.getmtime(cache_geno) > src_mtime and
+                    os.path.getmtime(cache_ind) > src_mtime and
+                    os.path.getmtime(cache_map) > src_mtime):
+                    print(f"   [Cache] Loading binary cache for {hapmap_path}...")
+                    geno_matrix = np.load(cache_geno, mmap_mode='r')
+                    with open(cache_ind, 'r') as f:
+                        individual_ids = [line.strip() for line in f]
+                    import pandas as pd  # type: ignore
+                    geno_map = pd.read_csv(cache_map)
+                    geno_map.attrs["is_imputed"] = True
+                    return geno_matrix, individual_ids, geno_map
+    except Exception as e:
+        print(f"   [Cache] Failed to load cache: {e}")
+
     individual_ids: List[str] | None = None
     columns: List[np.ndarray] = []
     map_rows: List[dict] = []
@@ -190,6 +218,7 @@ def load_genotype_hapmap(
         geno_mat = np.zeros((len(individual_ids or []), 0), dtype=np.int8)
     else:
         geno_mat = np.column_stack(columns).astype(np.int8, copy=False)
+    impute_major_allele_inplace(geno_mat, missing_value=MISSING)
 
     # Build geno_map
     if return_pandas:
@@ -200,6 +229,22 @@ def load_genotype_hapmap(
             geno_map = map_rows
     else:
         geno_map = map_rows
+    if hasattr(geno_map, "attrs"):
+        geno_map.attrs["is_imputed"] = True
+
+    try:
+        print(f"   [Cache] Saving binary cache to {cache_base}.panicle.v2.*")
+        np.save(cache_geno, geno_mat)
+        with open(cache_ind, 'w') as f:
+            for ind in individual_ids:
+                f.write(f"{ind}\n")
+        import pandas as pd  # type: ignore
+        if isinstance(geno_map, list):
+            pd.DataFrame(geno_map).to_csv(cache_map, index=False)
+        else:
+            geno_map.to_csv(cache_map, index=False)
+    except Exception as e:
+        print(f"   [Cache] Warning: Failed to save cache: {e}")
 
     if individual_ids is None:
         raise ValueError('Invalid HapMap: missing header')
@@ -207,4 +252,3 @@ def load_genotype_hapmap(
         raise AssertionError('Row count mismatch')
 
     return geno_mat, individual_ids, geno_map
-

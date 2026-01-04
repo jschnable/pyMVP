@@ -27,6 +27,7 @@ def test_load_genotype_csv_effective_tests_and_dedup(tmp_path) -> None:
     assert individual_ids == ["I1", "I2"]  # duplicate I1 dropped
     assert genotype.shape == (2, 2)
     assert isinstance(genotype, GenotypeMatrix)
+    assert genotype.is_imputed is True
     assert geno_map.metadata.get("effective_tests") is not None
     assert set(geno_map.chromosomes.astype(str).unique()) == {"1"}
     assert geno_map.positions.iloc[-1] == 2
@@ -48,6 +49,7 @@ def test_load_genotype_numeric_detects_separator(tmp_path) -> None:
 
     assert individual_ids == ["A", "B"]
     np.testing.assert_array_equal(genotype[:, :], np.array([[0, 1], [1, 2]], dtype=np.int8))
+    assert genotype.is_imputed is True
     assert list(geno_map.snp_ids) == ["snp1", "snp2"]
 
 
@@ -89,10 +91,12 @@ def test_load_genotype_vcf_plink_hapmap_monkeypatched(monkeypatch, tmp_path) -> 
     assert map_vcf.n_markers == 2
 
     genotype_plink, ids_plink, _ = loaders.load_genotype_file(tmp_path / "file.bed", file_format="plink")
+    assert genotype_plink.is_imputed is True
     assert ids_plink == ["A", "B"]
     np.testing.assert_array_equal(genotype_plink[:, :], np.array([[0, 1], [2, 2]], dtype=np.int8))
 
     genotype_hmp, ids_hmp, _ = loaders.load_genotype_file(tmp_path / "file.hmp", file_format="hapmap")
+    assert genotype_hmp.is_imputed is True
     assert ids_hmp == ["A", "B"]
     np.testing.assert_array_equal(genotype_hmp[:, :], np.array([[0, 1], [2, 2]], dtype=np.int8))
 

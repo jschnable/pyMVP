@@ -127,6 +127,8 @@ CSV or TSV files with an **ID column** (e.g., `ID`, `Taxa`, `Sample`) and numeri
 *   **PLINK**: `.bed` + `.bim` + `.fam`.
 *   **HapMap**: `.hmp.txt`.
 
+**Performance notes:** VCF is typically the slowest format on the first run, but PANICLE caches parsed marker data so subsequent loads are competitive with other formats. BCF is roughly ~2x faster than VCF on the first run, and PLINK/bed is roughly ~4x faster than VCF on the first run (exact speedups depend on marker count, sample size, and hardware).
+
 ## Tips
 
 1.  **Effective Tests**: Use `--compute-effective-tests` to calculate a less stringent, more accurate Bonferroni threshold based on marker linkage (`Me`).

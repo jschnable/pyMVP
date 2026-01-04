@@ -86,7 +86,7 @@ def test_panicle_farmcpu_resampling_runs_and_counts(monkeypatch) -> None:
     def fake_farmcpu(**kwargs):
         return DummyResult([1e-9, 0.2])
 
-    monkeypatch.setattr(fr, "MVP_FarmCPU", fake_farmcpu, raising=False)
+    monkeypatch.setattr(fr, "PANICLE_FarmCPU", fake_farmcpu, raising=False)
 
     phe = np.column_stack([np.arange(6), np.linspace(0.0, 1.0, 6)])
     geno = np.zeros((6, 2), dtype=np.int8)
@@ -116,7 +116,7 @@ def test_panicle_farmcpu_resampling_clusters_and_reports(monkeypatch) -> None:
     def fake_farmcpu(**kwargs):
         return DummyResult()
 
-    monkeypatch.setattr(fr, "MVP_FarmCPU", fake_farmcpu, raising=False)
+    monkeypatch.setattr(fr, "PANICLE_FarmCPU", fake_farmcpu, raising=False)
 
     phe = np.column_stack([np.arange(8), np.linspace(0.0, 1.0, 8)])
     geno = np.array(

@@ -79,7 +79,7 @@ def main():
     print("=" * 70)
     print(f"\nResults saved to: {args.output}/")
     print(f"- GWAS_{args.trait}_FarmCPUResampling_RMIP.csv")
-    print(f"- GWAS_{args.trait}_FarmCPUResampling_FarmCPUResampling_rmip_manhattan.png")
+    print(f"- GWAS_{args.trait}_FarmCPUResampling_rmip_manhattan.png")
 
 
 if __name__ == "__main__":

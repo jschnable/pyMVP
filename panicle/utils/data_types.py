@@ -111,6 +111,23 @@ class GenotypeMap:
         return new_map
 
 
+def impute_major_allele_inplace(geno: np.ndarray, missing_value: int = -9) -> int:
+    """Fill missing values in-place with the per-marker major allele (0/1/2)."""
+    if geno.size == 0:
+        return 0
+    missing_mask = geno == missing_value
+    n_missing = int(missing_mask.sum())
+    if n_missing == 0:
+        return 0
+    counts_0 = np.sum(geno == 0, axis=0)
+    counts_1 = np.sum(geno == 1, axis=0)
+    counts_2 = np.sum(geno == 2, axis=0)
+    major_alleles = np.argmax(np.stack([counts_0, counts_1, counts_2], axis=0), axis=0)
+    major_alleles = major_alleles.astype(geno.dtype, copy=False)
+    geno[missing_mask] = np.broadcast_to(major_alleles, geno.shape)[missing_mask]
+    return n_missing
+
+
 class GenotypeMatrix:
     """Memory-efficient genotype matrix with lazy loading support
     

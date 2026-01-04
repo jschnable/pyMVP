@@ -560,22 +560,22 @@ class GWASPipeline:
         # 2. Bonferroni / Thresholding Logic
         n_markers = self.genotype_matrix.n_markers
         bonferroni_denom = float(n_markers)
-        threshold_source = "markers"
+        threshold_source = "Bonferroni (markers)"
         
         if significance is not None:
              base_threshold = significance
              self.log(f"   Using fixed significance threshold: {base_threshold}")
              effective_tests_count = float('nan') # User override
-             threshold_source = "fixed"
+             threshold_source = "Fixed p-value"
         else:
              # Logic to choose denominator
              if n_eff:
                  bonferroni_denom = float(n_eff)
-                 threshold_source = "effective"
+                 threshold_source = "Bonferroni (effective tests)"
              elif use_effective_tests and self.effective_tests_info and self.effective_tests_info.get("Me"):
                  bonferroni_denom = float(self.effective_tests_info["Me"])
                  self.log(f"   Using effective tests (Me={bonferroni_denom}) for Bonferroni.")
-                 threshold_source = "effective"
+                 threshold_source = "Bonferroni (effective tests)"
              
              base_threshold = alpha / max(bonferroni_denom, 1.0)
              effective_tests_count = bonferroni_denom
@@ -610,6 +610,15 @@ class GWASPipeline:
             elif n_eff:
                 effective_n = n_eff
 
+            fc_qtn_alpha = fc_params.get('QTN_threshold', 0.01)
+            if fc_params.get('QTN_threshold_is_corrected'):
+                fc_qtn_corrected = fc_qtn_alpha
+                fc_qtn_source = 'FarmCPU QTN threshold (corrected)'
+            else:
+                fc_n_tests = effective_n if effective_n else n_markers
+                fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
+                fc_qtn_source = 'FarmCPU QTN threshold'
+
             # Identify parallelizable methods
             parallel_methods = []
             if 'GLM' in methods: parallel_methods.append('GLM')
@@ -621,17 +630,10 @@ class GWASPipeline:
             # Note: Keys must match the result names returned from parallel workers
             # (e.g., 'FarmCPU' not 'FARMCPU', 'BLINK' not 'blink')
             if 'FARMCPU' in methods:
-                fc_qtn_alpha = fc_params.get('QTN_threshold', 0.01)
                 # FarmCPU applies multiple testing correction internally
                 # Use the same denominator for reporting consistency
-                if fc_params.get('QTN_threshold_is_corrected'):
-                    fc_qtn_corrected = fc_qtn_alpha
-                    method_threshold_sources['FarmCPU'] = 'FarmCPU QTN threshold (corrected)'
-                else:
-                    fc_n_tests = effective_n if effective_n else n_markers
-                    fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
-                    method_threshold_sources['FarmCPU'] = 'FarmCPU QTN threshold'
                 method_thresholds['FarmCPU'] = fc_qtn_corrected  # Match worker return name
+                method_threshold_sources['FarmCPU'] = fc_qtn_source
             if 'BLINK' in methods:
                 method_thresholds['BLINK'] = base_threshold
                 method_threshold_sources['BLINK'] = threshold_source
@@ -641,6 +643,15 @@ class GWASPipeline:
             if 'MLM' in methods:
                 method_thresholds['MLM'] = base_threshold
                 method_threshold_sources['MLM'] = threshold_source
+            if 'FarmCPUResampling' in methods:
+                if 'resampling_significance_threshold' in fc_params:
+                    resampling_thresh = fc_params['resampling_significance_threshold']
+                    resampling_source = 'Resampling significance threshold'
+                else:
+                    resampling_thresh = fc_qtn_corrected
+                    resampling_source = 'FarmCPU QTN threshold (default)'
+                method_thresholds['FarmCPUResampling'] = resampling_thresh
+                method_threshold_sources['FarmCPUResampling'] = resampling_source
 
             # Resampling usually handled separately or sequentially due to complexity
             run_resampling = 'FarmCPUResampling' in methods
@@ -680,7 +691,7 @@ class GWASPipeline:
                  try:
                      self.log("   Running FarmCPU Resampling (Sequential)...")
                      runs = fc_params.get('resampling_runs', 100)
-                     sig_thresh = fc_params.get('resampling_significance_threshold', 5e-8)
+                     sig_thresh = method_thresholds.get('FarmCPUResampling', fc_qtn_corrected)
                      mask_prop = fc_params.get('resampling_mask_proportion', 0.1)
                      cluster = fc_params.get('resampling_cluster_markers', False)
                      ld_thresh = fc_params.get('resampling_ld_threshold', 0.7)
@@ -790,8 +801,18 @@ class GWASPipeline:
         
         all_res_df = base_df.copy()
         sig_snps = []
-        
-        for method, Res in results.items():
+        hits_by_method = {}
+        resampling_hit_snps = set()
+        rmip_hit_threshold = 0.1
+
+        preferred_order = ['GLM', 'MLM', 'FarmCPU', 'BLINK', 'FarmCPUResampling']
+        ordered_methods = [m for m in preferred_order if m in results]
+        ordered_methods.extend([m for m in results if m not in ordered_methods])
+
+        output_prefix_base = str(self.output_dir / f"GWAS_{trait_name}")
+
+        for method in ordered_methods:
+            Res = results[method]
             method_threshold = (method_thresholds or {}).get(method, threshold)
             method_source = (method_threshold_sources or {}).get(method, threshold_source)
             method_alpha = alpha if method_threshold == threshold else None
@@ -801,11 +822,18 @@ class GWASPipeline:
                 # Handle Resampling
                 res_file = self.output_dir / f"GWAS_{trait_name}_{method}_RMIP.csv"
                 df = Res.to_dataframe()
+                if 'Chr' in df.columns or 'Pos' in df.columns:
+                    df = df.rename(columns={'Chr': 'CHROM', 'Pos': 'POS'})
+                if 'RMIP' in df.columns:
+                    resampling_hit_snps = set(
+                        df.loc[df['RMIP'] >= rmip_hit_threshold, 'SNP'].astype(str)
+                    )
                 df.to_csv(res_file, index=False)
                 summary_data.append({
                     'Trait': trait_name, 'Method': method,
-                    'Significant_Hits': len(df),
-                    'Info': f"Runs={Res.total_runs}"
+                    'Significant_Hits': len(resampling_hit_snps),
+                    'Threshold': rmip_hit_threshold,
+                    'Info': f"{method_source}; RMIP>={rmip_hit_threshold}; Runs={Res.total_runs}; Clustered={Res.cluster_mode}"
                 })
 
                 # Generate RMIP Manhattan plot
@@ -814,7 +842,7 @@ class GWASPipeline:
                         report = PANICLE_Report(
                             results=Res,
                             map_data=self.geno_map,
-                            output_prefix=str(self.output_dir / f"GWAS_{trait_name}_{method}"),
+                            output_prefix=output_prefix_base,
                             plot_types=['manhattan'],
                             verbose=False,
                             save_plots=True
@@ -836,19 +864,16 @@ class GWASPipeline:
             
             # Check significance
             hits = Res.pvalues <= method_threshold
-            n_sig = hits.sum()
+            hits_by_method[method] = hits
+            n_sig = int(hits.sum())
             
             summary_data.append({
                 'Trait': trait_name, 'Method': method,
                 'Significant_Hits': n_sig,
-                'Threshold': method_threshold
+                'Threshold': method_threshold,
+                'Info': method_source
             })
             
-            if n_sig > 0:
-                 sub = all_res_df.loc[hits].copy()
-                 sub['Method'] = method
-                 sig_snps.append(sub)
-
             # Plots
             if 'manhattan' in outputs or 'qq' in outputs:
                 try:
@@ -857,8 +882,8 @@ class GWASPipeline:
                     if 'qq' in outputs: plot_types.append('qq')
                     
                     report = PANICLE_Report(
-                        results=Res, map_data=self.geno_map,
-                        output_prefix=str(self.output_dir / f"GWAS_{trait_name}_{method}"),
+                        results={method: Res}, map_data=self.geno_map,
+                        output_prefix=output_prefix_base,
                         plot_types=plot_types,
                         threshold=method_threshold,
                         threshold_alpha=method_alpha,
@@ -877,10 +902,37 @@ class GWASPipeline:
                     self.log(f"   Plotting error {method}: {e}")
 
         # Save merged tables
+        method_columns = []
+        for method in ordered_methods:
+            if method == 'FarmCPUResampling':
+                continue
+            method_columns.extend([f'{method}_P', f'{method}_Effect'])
+        if method_columns:
+            all_res_df = all_res_df[base_df.columns.tolist() + method_columns]
+
         if 'all_marker_pvalues' in outputs:
             all_res_df.to_csv(self.output_dir / f"GWAS_{trait_name}_all_results.csv", index=False)
             
-        if sig_snps and 'significant_marker_pvalues' in outputs:
-            pd.concat(sig_snps).to_csv(self.output_dir / f"GWAS_{trait_name}_significant.csv", index=False)
+        if resampling_hit_snps:
+            resampling_mask = all_res_df['SNP'].astype(str).isin(resampling_hit_snps).to_numpy()
+            hits_by_method['FarmCPUResampling'] = resampling_mask
+
+        if hits_by_method and 'significant_marker_pvalues' in outputs:
+            n_markers = all_res_df.shape[0]
+            method_labels = [[] for _ in range(n_markers)]
+            for method in ordered_methods:
+                hits = hits_by_method.get(method)
+                if hits is None or not np.any(hits):
+                    continue
+                for idx in np.where(hits)[0]:
+                    method_labels[idx].append(method)
+
+            any_hits = np.array([bool(labels) for labels in method_labels], dtype=bool)
+            if np.any(any_hits):
+                sig_df = all_res_df.loc[any_hits].copy()
+                sig_df['Method'] = [
+                    "|".join(method_labels[idx]) for idx in np.where(any_hits)[0]
+                ]
+                sig_df.to_csv(self.output_dir / f"GWAS_{trait_name}_significant.csv", index=False)
             
         return summary_data

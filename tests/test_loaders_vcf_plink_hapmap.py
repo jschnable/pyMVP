@@ -166,8 +166,9 @@ def test_load_genotype_hapmap_filters_and_codes(tmp_path) -> None:
     )
 
     assert ids == ["S1", "S2"]
-    np.testing.assert_array_equal(geno, np.array([[0, 1, -9], [2, 0, 2]], dtype=np.int8))
+    np.testing.assert_array_equal(geno, np.array([[0, 1, 2], [2, 0, 2]], dtype=np.int8))
     assert list(geno_map["SNP"]) == ["snp1", "snp2", "snp3"]
+    assert getattr(geno_map, "attrs", {}).get("is_imputed") is True
 
 
 def test_load_genotype_hapmap_applies_missingness_and_indel_filter(tmp_path) -> None:
