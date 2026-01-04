@@ -69,7 +69,7 @@ Supported formats:
 
 ### Genetic Map File Format (Optional but recommended)
 CSV/TSV with `SNP`, `CHROM`, and `POS` columns (case-insensitive aliases like `Chr`, `Pos` are accepted).
-Recommended for numeric genotype matrices and for LOCO-based methods like `MLM_Hybrid`.
+Recommended for numeric genotype matrices and for LOCO-based methods like `MLM`.
 
 ## Understanding the Output
 
@@ -184,31 +184,12 @@ pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
 pipeline.run_analysis(
     traits=['MyTrait'],
     methods=['GLM', 'MLM', 'FarmCPU', 'BLINK']
-    # Add 'MLM_Hybrid' or 'FarmCPUResampling' if needed (resampling is slow)
+    # Add 'FarmCPUResampling' if needed (resampling is slow)
 )
 
 # All results are in the same all_results.csv file
 results = pd.read_csv('method_comparison/GWAS_MyTrait_all_results.csv')
 # Contains GLM_P, MLM_P, FarmCPU_P, BLINK_P columns
-```
-
-### Scenario 5: Hybrid MLM for Increased Power
-
-```python
-pipeline = GWASPipeline(output_dir='./hybrid_analysis')
-pipeline.load_data(phenotype_file='phenos.csv', genotype_file='genos.vcf.gz')
-# For CSV/TSV genotypes, provide map_file with SNP/CHROM/POS columns
-pipeline.align_samples()
-pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
-
-# Use Hybrid MLM: fast Wald screen + exact LRT for top hits
-pipeline.run_analysis(
-    traits=['MyTrait'],
-    methods=['MLM_Hybrid'],
-    hybrid_params={
-        'screen_threshold': 1e-4  # Re-test markers with p < 1e-4 using LRT
-    }
-)
 ```
 
 ## Advanced Options
@@ -262,12 +243,11 @@ pipeline.run_analysis(
 **Solution:** Check that individual IDs match exactly between phenotype and genotype files (case-sensitive).
 
 ### Problem: "Kinship matrix missing"
-**Solution:** Run `pipeline.compute_population_structure(calculate_kinship=True)` for FarmCPU/BLINK or MLM without a map. For LOCO/Hybrid methods, ensure a map is available (VCF/PLINK/HapMap or `map_file`).
+**Solution:** Run `pipeline.compute_population_structure(calculate_kinship=True)` for FarmCPU/BLINK or MLM without a map. For LOCO methods, ensure a map is available (VCF/PLINK/HapMap or `map_file`).
 
 ### Problem: Analysis is very slow
 **Solution:**
 - Use GLM for initial screening (much faster)
-- Use Hybrid MLM instead of full LRT
 - Avoid FarmCPUResampling unless you need RMIP stability
 - Consider filtering low MAF variants before analysis
 

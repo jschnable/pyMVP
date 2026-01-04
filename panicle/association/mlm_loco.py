@@ -5,12 +5,15 @@ This module is intentionally standalone so it can be removed cleanly if LOCO
 is not adopted.
 """
 
+import time
+import warnings
 from typing import Optional, Union, Tuple, Dict
 import numpy as np
 
 from ..utils.data_types import GenotypeMatrix, AssociationResults
 from ..matrix.kinship_loco import PANICLE_K_VanRaden_LOCO, LocoKinship, _extract_chromosomes, _group_markers_by_chrom
-from .mlm import PANICLE_MLM
+from .mlm import PANICLE_MLM, estimate_variance_components_brent, _calculate_neg_ml_likelihood
+from .lrt import fit_marker_lrt
 
 # Check for joblib availability
 try:
@@ -81,8 +84,14 @@ def PANICLE_MLM_LOCO(phe: np.ndarray,
                  vc_method: str = "BRENT",
                  maxLine: int = 1000,
                  cpu: int = 1,
+                 lrt_refinement: bool = True,
+                 screen_threshold: float = 1e-4,
                  verbose: bool = True) -> AssociationResults:
     """Run MLM with LOCO kinship matrices grouped by chromosome.
+
+    By default, markers with promising Wald p-values (< screen_threshold) are
+    re-tested using the exact Likelihood Ratio Test (LRT) for more accurate
+    p-values. This provides LRT-quality results with minimal runtime overhead.
 
     Args:
         phe: Phenotype matrix (n_individuals × 2), columns [ID, trait_value]
@@ -93,6 +102,8 @@ def PANICLE_MLM_LOCO(phe: np.ndarray,
         vc_method: Variance component estimation method ["BRENT"]
         maxLine: Batch size for processing markers
         cpu: Number of CPU cores for parallel chromosome processing
+        lrt_refinement: Apply LRT refinement to top hits (default: True)
+        screen_threshold: P-value threshold for LRT refinement (default: 1e-4)
         verbose: Print progress information
 
     Returns:
@@ -189,5 +200,104 @@ def PANICLE_MLM_LOCO(phe: np.ndarray,
             effects[indices] = res.effects
             std_errors[indices] = res.se
             p_values[indices] = res.pvalues
+
+    # -------------------------------------------------------------------------
+    # LRT Refinement Phase (if enabled)
+    # -------------------------------------------------------------------------
+    if lrt_refinement:
+        candidate_indices = np.where(p_values < screen_threshold)[0]
+        n_candidates = len(candidate_indices)
+
+        if verbose:
+            print(f"LRT refinement: {n_candidates} candidates (p < {screen_threshold})")
+
+        if n_candidates > 0:
+            # Extract phenotype values and setup covariates
+            trait_values = phe[:, 1].astype(np.float64)
+            trait_values = np.nan_to_num(trait_values, nan=0.0, posinf=0.0, neginf=0.0)
+            n_individuals = len(trait_values)
+
+            if CV is not None:
+                CV_clean = np.nan_to_num(CV.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+                X = np.column_stack([np.ones(n_individuals), CV_clean])
+            else:
+                X = np.ones((n_individuals, 1))
+
+            # Cache for null models by chromosome
+            null_cache: Dict[str, Dict[str, np.ndarray]] = {}
+
+            def _get_null_model(chrom: str) -> Dict[str, np.ndarray]:
+                if chrom in null_cache:
+                    return null_cache[chrom]
+
+                eigen = loco_kinship.get_eigen(chrom)
+                eigenvals = np.maximum(
+                    np.nan_to_num(np.asarray(eigen['eigenvals'], dtype=np.float64), nan=1e-6, posinf=1e6, neginf=1e-6),
+                    1e-6
+                )
+                eigenvecs = np.nan_to_num(np.asarray(eigen['eigenvecs'], dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                    y_transformed = eigenvecs.T @ trait_values
+                    X_transformed = eigenvecs.T @ X
+                y_transformed = np.nan_to_num(y_transformed, nan=0.0, posinf=0.0, neginf=0.0)
+                X_transformed = np.nan_to_num(X_transformed, nan=0.0, posinf=0.0, neginf=0.0)
+
+                delta_null, vg_null, ve_null = estimate_variance_components_brent(
+                    y_transformed, X_transformed, eigenvals, verbose=False, use_ml=True
+                )
+                h2_null = vg_null / (vg_null + ve_null) if (vg_null + ve_null) > 0 else 0.0
+                null_neg_loglik = _calculate_neg_ml_likelihood(h2_null, y_transformed, X_transformed, eigenvals)
+
+                payload = {
+                    "eigenvals": eigenvals,
+                    "eigenvecs": eigenvecs,
+                    "y_transformed": y_transformed,
+                    "X_transformed": X_transformed,
+                    "null_neg_loglik": null_neg_loglik,
+                }
+                null_cache[chrom] = payload
+                return payload
+
+            # Process candidates
+            start_time = time.time()
+            for i, marker_idx in enumerate(candidate_indices):
+                if verbose and i % 10 == 0:
+                    print(f"  Refining marker {i+1}/{n_candidates}...", end='\r')
+
+                chrom = str(chrom_values[marker_idx])
+                null_model = _get_null_model(chrom)
+
+                # Get genotype
+                if isinstance(geno, GenotypeMatrix):
+                    g_raw = geno.get_batch_imputed(marker_idx, marker_idx+1).flatten()
+                else:
+                    g_raw = geno[:, marker_idx]
+
+                g_raw = np.nan_to_num(np.asarray(g_raw, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+                # Transform genotype
+                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                    g_transformed = null_model["eigenvecs"].T @ g_raw
+                g_transformed = np.nan_to_num(g_transformed, nan=0.0, posinf=0.0, neginf=0.0)
+
+                # Run LRT
+                lrt_stat, lrt_p, lrt_beta, lrt_se = fit_marker_lrt(
+                    null_model["y_transformed"],
+                    null_model["X_transformed"],
+                    g_transformed,
+                    null_model["eigenvals"],
+                    null_model["null_neg_loglik"]
+                )
+
+                # Update results if LRT model is numerically stable
+                if np.isfinite(lrt_p) and np.isfinite(lrt_beta) and np.isfinite(lrt_se):
+                    p_values[marker_idx] = lrt_p
+                    effects[marker_idx] = lrt_beta
+                    std_errors[marker_idx] = lrt_se
+
+            duration = time.time() - start_time
+            if verbose:
+                print(f"  LRT refinement complete in {duration:.2f}s ({duration/max(1,n_candidates):.3f}s/marker)")
 
     return AssociationResults(effects=effects, se=std_errors, pvalues=p_values)

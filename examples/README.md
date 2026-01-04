@@ -8,7 +8,6 @@ This directory contains example scripts demonstrating different PANICLE workflow
 |---------|-------------|------------|------|
 | [01_basic_gwas.py](01_basic_gwas.py) | Simplest GWAS with GLM | Beginner | 2 min |
 | [02_mlm_with_structure.py](02_mlm_with_structure.py) | MLM with population structure correction | Beginner | 5 min |
-| [03_hybrid_mlm.py](03_hybrid_mlm.py) | Hybrid MLM for increased power | Intermediate | 10 min |
 | [04_with_covariates.py](04_with_covariates.py) | Including external covariates | Intermediate | 5 min |
 | [05_reading_results.py](05_reading_results.py) | Analyzing and visualizing results | Intermediate | 5 min |
 | [06_farmcpu_resampling.py](06_farmcpu_resampling.py) | FarmCPU resampling with RMIP output | Intermediate | 10 min |
@@ -75,24 +74,11 @@ pipeline.run_analysis(traits=['Height'], methods=['GLM'])
 ### 02: MLM with Population Structure
 **What it does:** Uses kinship matrix and PCs to control for population structure
 **When to use:** Diverse populations, related individuals
-**Output:** Corrected association results
+**Output:** Corrected association results with automatic LRT refinement for top hits
 
 ```python
 pipeline.compute_population_structure(n_pcs=5, calculate_kinship=True)
 pipeline.run_analysis(traits=['Height'], methods=['MLM'])
-```
-
-### 03: Hybrid MLM
-**What it does:** Combines fast Wald screening with exact LRT for top hits
-**When to use:** Need accurate p-values with minimal runtime cost
-**Output:** LRT-refined results for significant markers
-
-```python
-pipeline.run_analysis(
-    traits=['Height'],
-    methods=['MLM_Hybrid'],
-    hybrid_params={'screen_threshold': 1e-4}
-)
 ```
 
 ### 04: With Covariates

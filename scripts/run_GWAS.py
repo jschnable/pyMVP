@@ -53,8 +53,6 @@ def normalize_methods(methods):
         "FARMCPURESAMPLING": "FarmCPUResampling",
         "RESAMPLING": "FarmCPUResampling",
         "BLINK": "BLINK",
-        "HYBRIDMLM": "HybridMLM",
-        "MLM_HYBRID": "HybridMLM",
     }
 
     normalized = []

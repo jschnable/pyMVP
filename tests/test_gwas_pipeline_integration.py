@@ -279,10 +279,10 @@ def test_gwas_pipeline_with_covariates(synthetic_data, tmp_path):
     assert not results_df['MLM_P'].isna().any()
 
 
-def test_gwas_pipeline_hybrid_mlm(synthetic_data, tmp_path):
-    """Test the new Hybrid MLM method."""
+def test_gwas_pipeline_mlm_with_lrt_refinement(synthetic_data, tmp_path):
+    """Test MLM with LRT refinement (previously Hybrid MLM)."""
 
-    output_dir = tmp_path / "gwas_results_hybrid"
+    output_dir = tmp_path / "gwas_results_mlm_lrt"
 
     pipeline = GWASPipeline(output_dir=str(output_dir))
 
@@ -297,10 +297,10 @@ def test_gwas_pipeline_hybrid_mlm(synthetic_data, tmp_path):
     pipeline.align_samples()
     pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
 
-    # Run Hybrid MLM
+    # Run MLM (which now includes LRT refinement by default)
     pipeline.run_analysis(
         traits=['Height'],
-        methods=['MLM_Hybrid'],
+        methods=['MLM'],
         outputs=['all_marker_pvalues']
     )
 
@@ -310,14 +310,12 @@ def test_gwas_pipeline_hybrid_mlm(synthetic_data, tmp_path):
 
     results_df = pd.read_csv(results_file)
 
-    # Hybrid MLM should have columns with MLM_Hybrid prefix
-    # Check for either MLM_Hybrid_P or just the LRT results
-    assert 'MLM_Hybrid_P' in results_df.columns or 'LRT_P' in results_df.columns
+    # MLM should have standard MLM_P column
+    assert 'MLM_P' in results_df.columns
 
     # Verify p-values are valid
-    p_col = 'MLM_Hybrid_P' if 'MLM_Hybrid_P' in results_df.columns else 'LRT_P'
-    assert results_df[p_col].min() >= 0.0
-    assert results_df[p_col].max() <= 1.0
+    assert results_df['MLM_P'].min() >= 0.0
+    assert results_df['MLM_P'].max() <= 1.0
 
 
 def test_gwas_pipeline_multiple_traits(synthetic_data, tmp_path):

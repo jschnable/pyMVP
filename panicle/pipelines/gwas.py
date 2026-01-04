@@ -37,10 +37,9 @@ from ..association.blink import PANICLE_BLINK
 from ..matrix.pca import PANICLE_PCA
 from ..matrix.kinship import PANICLE_K_VanRaden
 from ..visualization.manhattan import PANICLE_Report
-from ..association.hybrid_mlm import PANICLE_MLM_Hybrid
 
 # Helper function for parallel execution
-def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, hybrid_params, max_iterations, base_threshold, n_markers, n_eff=None, alpha=0.05):
+def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, max_iterations, base_threshold, n_markers, n_eff=None, alpha=0.05):
     """Worker function to run a single GWAS method in a separate process."""
     try:
         if method == 'GLM':
@@ -100,23 +99,9 @@ def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params
             # We skip this in parallel worker for now or pass trait_name?
             # It's better to keep resampling sequential if complex, or pass trait_name.
             # Let's support it if trivial.
-            # PANICLE_FarmCPUResampling requires trait_name. 
-            # PANICLE_FarmCPUResampling requires trait_name. 
+            # PANICLE_FarmCPUResampling requires trait_name.
+            # PANICLE_FarmCPUResampling requires trait_name.
             pass
-
-        elif method == 'HybridMLM':
-            if map_data is None:
-                return ('HybridMLM', None, None, "Genotype map missing")
-
-            h_params = hybrid_params or {}
-            res = PANICLE_MLM_Hybrid(
-                phe=y_sub, geno=g_sub, map_data=map_data, CV=cov_sub,
-                screen_threshold=h_params.get('screen_threshold', 1e-4),
-                maxLine=h_params.get('max_line', 1000),
-                verbose=False
-            )
-            lambda_gc = genomic_inflation_factor(res.pvalues)
-            return ('HybridMLM', res, lambda_gc, None)
 
         return (method, None, None, f"Unknown method {method}")
 
@@ -539,7 +524,7 @@ class GWASPipeline:
         
         self.log_step("Population structure", step_start)
 
-    def run_analysis(self, 
+    def run_analysis(self,
                      traits: Optional[List[str]] = None,
                      methods: List[str] = ['GLM', 'MLM', 'FARMCPU', 'BLINK'],
                      max_iterations: int = 10,
@@ -550,7 +535,6 @@ class GWASPipeline:
                      max_genotype_dosage: float = 2.0,
                      farmcpu_params: Optional[Dict] = None,
                      blink_params: Optional[Dict] = None,
-                     hybrid_params: Optional[Dict] = None,
                      outputs: List[str] = list(OUTPUT_CHOICES)):
         """
         Run GWAS analysis for specified traits and methods.
@@ -559,10 +543,6 @@ class GWASPipeline:
             raise ValueError("Data not loaded.")
 
         self.log_step("Step 4: Running GWAS analysis")
-
-        # Normalize method names (allow user-friendly aliases)
-        # 'MLM_Hybrid' is the documented name, 'HybridMLM' is the internal name
-        methods = [m if m != 'MLM_Hybrid' else 'HybridMLM' for m in methods]
 
         # 1. Trait Selection
         available_traits = [c for c in self.phenotype_df.columns if c != 'ID' and pd.api.types.is_numeric_dtype(self.phenotype_df[c])]
@@ -636,7 +616,6 @@ class GWASPipeline:
             if 'MLM' in methods: parallel_methods.append('MLM')
             if 'FARMCPU' in methods: parallel_methods.append('FARMCPU')
             if 'BLINK' in methods: parallel_methods.append('BLINK')
-            if 'HybridMLM' in methods: parallel_methods.append('HybridMLM')
 
             # Track method-specific thresholds for plotting/reporting
             # Note: Keys must match the result names returned from parallel workers
@@ -677,7 +656,7 @@ class GWASPipeline:
                             method,
                             y_sub, g_sub, cov_sub, k_sub,
                             self.geno_map,
-                            fc_params, blk_params, hybrid_params,
+                            fc_params, blk_params,
                             max_iterations, base_threshold, n_markers,
                             effective_n, alpha  # Pass n_eff and alpha for FarmCPU
                         ): method for method in parallel_methods
@@ -719,10 +698,6 @@ class GWASPipeline:
                      self.log(f"   Resampling identified {len(res.entries)} markers.")
                  except Exception as e:
                      self.log(f"   FarmCPU Resampling Failed: {e}")
-
-            # Convert internal method names back to user-friendly documented names
-            if 'HybridMLM' in method_results:
-                method_results['MLM_Hybrid'] = method_results.pop('HybridMLM')
 
             # Save and Report for this trait
             trait_summary = self._save_trait_results(

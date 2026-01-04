@@ -172,7 +172,6 @@ pipeline.run_analysis(
     max_genotype_dosage=2.0,
     farmcpu_params=None,
     blink_params=None,
-    hybrid_params=None,
     outputs=['all_marker_pvalues', 'significant_marker_pvalues', 'manhattan', 'qq']
 )
 ```
@@ -181,8 +180,7 @@ pipeline.run_analysis(
 - `traits` (list, optional): Which traits to analyze. If None, analyzes all numeric columns in phenotype data
 - `methods` (list): GWAS methods to run. Options:
   - `'GLM'`: General Linear Model (fast, no population structure correction)
-  - `'MLM'`: Mixed Linear Model (accounts for population structure via kinship)
-  - `'MLM_Hybrid'`: Hybrid MLM (Wald screen + LRT refinement for top hits)
+  - `'MLM'`: Mixed Linear Model with LOCO kinship (includes automatic LRT refinement for top hits)
   - `'FarmCPU'`: Fixed and random model Circulating Probability Unification
   - `'BLINK'`: Bayesian-information and Linkage-disequilibrium Iteratively Nested Keyway
 - `max_iterations` (int): Maximum iterations for iterative methods (FarmCPU, BLINK). Default: 10
@@ -193,9 +191,6 @@ pipeline.run_analysis(
 - `max_genotype_dosage` (float): Maximum genotype dosage for MAF calculation. Default: 2.0
 - `farmcpu_params` (dict, optional): Parameters for FarmCPU
 - `blink_params` (dict, optional): Parameters for BLINK
-- `hybrid_params` (dict, optional): Parameters for Hybrid MLM:
-  - `screen_threshold` (float): P-value cutoff for LRT refinement. Default: 1e-4
-  - `max_line` (int): Batch size for processing. Default: 1000
 - `outputs` (list): Which outputs to generate. Options:
   - `'all_marker_pvalues'`: Full results CSV
   - `'significant_marker_pvalues'`: Significant SNPs only CSV
@@ -215,11 +210,10 @@ pipeline.run_analysis(
 
 **Example:**
 ```python
-# Run MLM and Hybrid MLM
+# Run MLM for multiple traits
 pipeline.run_analysis(
     traits=['Height', 'FloweringTime'],
-    methods=['MLM', 'MLM_Hybrid'],
-    hybrid_params={'screen_threshold': 1e-4}
+    methods=['MLM']
 )
 
 # Run all methods with custom threshold
@@ -261,7 +255,7 @@ results = PANICLE_GLM(
 
 ### `PANICLE_MLM()`
 
-Mixed Linear Model association test.
+Mixed Linear Model association test with global kinship matrix.
 
 ```python
 from panicle.association.mlm import PANICLE_MLM
@@ -283,22 +277,24 @@ results = PANICLE_MLM(
 
 ---
 
-### `PANICLE_MLM_Hybrid()`
+### `PANICLE_MLM_LOCO()`
 
-Hybrid MLM: LOCO Wald test screening + LRT refinement for top hits.
+MLM with LOCO (Leave-One-Chromosome-Out) kinship and automatic LRT refinement.
 
 ```python
-from panicle.association.hybrid_mlm import PANICLE_MLM_Hybrid
+from panicle.association.mlm_loco import PANICLE_MLM_LOCO
 
-results = PANICLE_MLM_Hybrid(
+results = PANICLE_MLM_LOCO(
     phe,                    # Phenotype array (n × 2)
     geno,                   # Genotype matrix (n × m)
     map_data,               # Genetic map (required for LOCO)
     loco_kinship=None,      # Pre-computed LOCO kinship (optional)
     CV=None,                # Covariates (n × p)
+    vc_method='BRENT',      # Variance component estimation
+    maxLine=1000,           # Batch size
+    cpu=1,                  # Number of CPU cores
+    lrt_refinement=True,    # Apply LRT refinement to top hits
     screen_threshold=1e-4,  # P-value cutoff for LRT refinement
-    maxLine=1000,
-    cpu=1,
     verbose=True
 )
 ```
@@ -307,7 +303,9 @@ results = PANICLE_MLM_Hybrid(
 
 **Notes:**
 - Requires `map_data` with chromosome information for LOCO kinship
+- By default, markers with Wald p-value < 1e-4 are re-tested using exact LRT
 - If `loco_kinship` is not provided, it will be computed automatically
+- Set `lrt_refinement=False` to skip LRT refinement (faster, Wald p-values only)
 
 ---
 
