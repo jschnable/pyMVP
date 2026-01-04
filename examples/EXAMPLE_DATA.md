@@ -8,14 +8,14 @@ This directory contains real sorghum data curated for testing and demonstration 
 - **Description**: Plant height measurements from field trials
 - **Source**: Subset of SbDiv diversity panel grown in Nebraska 2021
 - **Samples**: 738 individuals
-- **Traits**: 1 (PlantHeight, in meters)
-- **Format**: CSV with columns `ID,PlantHeight`
+- **Traits**: 2 (PlantHeight in meters, DaysToFlower in days)
+- **Format**: CSV with columns `ID,PlantHeight,DaysToFlower`
 
 ### `example_genotypes.vcf.gz`
 - **Description**: SNP genotype data
 - **Source**: RNA-seq derived markers from SbDiv diversity panel
 - **Samples**: 738 individuals (matching phenotypes)
-- **Markers**: 1,000 SNPs across all 10 chromosomes
+- **Markers**: 6,533 SNPs across all 10 chromosomes
 - **Format**: Compressed VCF (standard variant call format)
 
 ### `example_covariates.csv`
@@ -30,13 +30,11 @@ This directory contains real sorghum data curated for testing and demonstration 
 
 The example data was created by:
 1. Extracting all 738 samples that have both genotype and phenotype data
-2. Randomly sampling 997 markers from the full 170,072 marker dataset
-3. **Including 3 key significant markers** from published GWAS results:
-   - `Chr06_44163616` (p = 5.46e-11) - Most significant on chromosome 6
-   - `Chr07_63464311` (p = 1.55e-07) - Most significant on chromosome 7
-   - `Chr09_60149640` (p = 5.30e-08) - Most significant on chromosome 9
+2. Including all Bonferroni-significant markers from an MLM run on PlantHeight
+3. Adding 5,000 random markers sampled across all 10 chromosomes
 
-These three markers are known to be associated with plant height variation and ensure that the example data can demonstrate detection of real genetic associations.
+This keeps true signals in the dataset while providing a realistic background of
+random markers for benchmarking and demos.
 
 ## Usage
 
@@ -71,19 +69,18 @@ pipeline.run_analysis(traits=['PlantHeight'], methods=['MLM'])
 ## Expected Results
 
 When analyzing this data with appropriate population structure correction (MLM or MLM_Hybrid):
-- You should detect significant associations on chromosomes 6, 7, and 9
-- The chromosome 6 QTL typically shows the strongest signal
+- You should detect many of the included significant PlantHeight markers
 - Lambda GC inflation factors should be reasonable (~1.0-1.3) with proper correction
 
 ## Data Size
 
-- Phenotype file: ~11 KB (text)
-- Genotype file: ~132 KB (compressed VCF)
-- Covariate file: ~11 KB (text)
-- Total: ~154 KB
+- Phenotype file: ~31 KB (text)
+- Genotype file: ~1.0 MB (compressed VCF)
+- Covariate file: ~18 KB (text)
+- Total: ~1.1 MB
 
 This small dataset allows for:
-- Fast testing (~10-30 seconds per analysis)
+- Fast testing (~10-60 seconds per analysis)
 - Demonstration of all PANICLE features
 - Verification of installation and setup
 - Learning the PANICLE workflow

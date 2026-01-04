@@ -22,16 +22,9 @@ def _format_threshold_label(threshold: float,
     """Human-readable label for the significance line."""
     if threshold is None or threshold <= 0:
         return None
-    if alpha is None or n_tests is None or not np.isfinite(n_tests):
+    if alpha is None:
         return f"Threshold p={threshold:.2g}"
-    src = (source or "").lower()
-    if src.startswith("eff"):
-        basis = "effective markers"
-    elif src.startswith("mark"):
-        basis = "markers"
-    else:
-        basis = src if src else "markers"
-    return f"α={alpha:g} ({basis}: n={n_tests:g})"
+    return f"α={alpha:g}"
 
 
 def _compute_marker_gap_y(ax, data_span: float, point_size: float) -> float:
@@ -509,11 +502,13 @@ def create_rmip_manhattan_plot(result: FarmCPUResamplingResults,
                     rmip_values[idx] = float(count) * scale
 
             highlight_mask = rmip_values > 0
+            plot_mask = highlight_mask
         else:
             chromosomes = result.chromosomes
             positions = result.positions
             rmip_values = result.rmip_values
             highlight_mask = np.ones_like(rmip_values, dtype=bool)
+            plot_mask = highlight_mask
 
         if rmip_values.size == 0:
             ax.set_xlabel('Chromosome', fontsize=12)
@@ -533,6 +528,8 @@ def create_rmip_manhattan_plot(result: FarmCPUResamplingResults,
             colors=colors,
             point_size=point_size,
             highlight_mask=highlight_mask,
+            plot_mask=plot_mask,
+            decimate=False,
             highlight_kwargs={'s': point_size * 1.6,
                               'facecolors': 'none',
                               'edgecolors': 'black',
@@ -542,6 +539,8 @@ def create_rmip_manhattan_plot(result: FarmCPUResamplingResults,
     except Exception as exc:
         warnings.warn(f"Falling back to sequential RMIP plotting: {exc}")
         rmip_values = np.asarray(result.rmip_values, dtype=np.float64)
+        if rmip_values.size:
+            rmip_values = rmip_values[rmip_values > 0]
         plot_manhattan_sequential(ax, rmip_values, point_size=point_size)
 
     ax.set_xlabel('Chromosome', fontsize=12)
@@ -575,7 +574,9 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
                                  point_size: float = 3.0, map_data: Optional[GenotypeMap] = None,
                                  true_qtns: Optional[List[str]] = None,
                                  highlight_mask: Optional[np.ndarray] = None,
-                                 highlight_kwargs: Optional[Dict] = None):
+                                 highlight_kwargs: Optional[Dict] = None,
+                                 plot_mask: Optional[np.ndarray] = None,
+                                 decimate: bool = True):
     """Plot Manhattan plot with actual chromosomal positions"""
 
     unique_chromosomes = np.unique(chromosomes)
@@ -619,6 +620,8 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
     highlight_kwargs = highlight_kwargs or {}
     if highlight_mask is not None and highlight_mask.shape != log_pvalues.shape:
         raise ValueError("highlight_mask must match the shape of the plotted values")
+    if plot_mask is not None and plot_mask.shape != log_pvalues.shape:
+        raise ValueError("plot_mask must match the shape of the plotted values")
 
     for i, chrom in enumerate(unique_chromosomes):
         chrom_mask = chromosomes == chrom
@@ -658,28 +661,40 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
         decimate_log_thresh = 1.0
         keep_fraction = 0.10  # Keep 5% of noise points
         
+        chrom_plot_mask = np.ones_like(chrom_log_pvals, dtype=bool)
+        if plot_mask is not None:
+            chrom_plot_mask = plot_mask[indices_ordered]
+
         sig_mask = chrom_log_pvals >= decimate_log_thresh
         noise_mask = ~sig_mask
+        if plot_mask is not None:
+            sig_mask &= chrom_plot_mask
+            noise_mask &= chrom_plot_mask
         
-        # Plot all significant points
-        if np.any(sig_mask):
-            ax.scatter(plot_positions[sig_mask], chrom_log_pvals[sig_mask],
-                      c=color, s=point_size, alpha=0.8, edgecolors='none')
-            
-        # Plot subsampled noise points
-        if np.any(noise_mask):
-            noise_indices = np.where(noise_mask)[0]
-            n_noise = len(noise_indices)
-            n_keep = max(1000, int(n_noise * keep_fraction))
-            
-            if n_keep < n_noise:
-                # Deterministic subsampling for reproducibility (visuals shouldn't flicker)
-                np.random.seed(42 + i) 
-                keep_indices = np.random.choice(noise_indices, n_keep, replace=False)
-                ax.scatter(plot_positions[keep_indices], chrom_log_pvals[keep_indices],
+        if decimate:
+            # Plot all significant points
+            if np.any(sig_mask):
+                ax.scatter(plot_positions[sig_mask], chrom_log_pvals[sig_mask],
                           c=color, s=point_size, alpha=0.8, edgecolors='none')
-            else:
-                 ax.scatter(plot_positions[noise_mask], chrom_log_pvals[noise_mask],
+                
+            # Plot subsampled noise points
+            if np.any(noise_mask):
+                noise_indices = np.where(noise_mask)[0]
+                n_noise = len(noise_indices)
+                n_keep = max(1000, int(n_noise * keep_fraction))
+                
+                if n_keep < n_noise:
+                    # Deterministic subsampling for reproducibility (visuals shouldn't flicker)
+                    np.random.seed(42 + i) 
+                    keep_indices = np.random.choice(noise_indices, n_keep, replace=False)
+                    ax.scatter(plot_positions[keep_indices], chrom_log_pvals[keep_indices],
+                              c=color, s=point_size, alpha=0.8, edgecolors='none')
+                else:
+                     ax.scatter(plot_positions[noise_mask], chrom_log_pvals[noise_mask],
+                              c=color, s=point_size, alpha=0.8, edgecolors='none')
+        else:
+            if np.any(chrom_plot_mask):
+                ax.scatter(plot_positions[chrom_plot_mask], chrom_log_pvals[chrom_plot_mask],
                           c=color, s=point_size, alpha=0.8, edgecolors='none')
 
         if highlight_mask is not None:

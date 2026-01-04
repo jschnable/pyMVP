@@ -645,10 +645,14 @@ class GWASPipeline:
                 fc_qtn_alpha = fc_params.get('QTN_threshold', 0.01)
                 # FarmCPU applies multiple testing correction internally
                 # Use the same denominator for reporting consistency
-                fc_n_tests = effective_n if effective_n else n_markers
-                fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
+                if fc_params.get('QTN_threshold_is_corrected'):
+                    fc_qtn_corrected = fc_qtn_alpha
+                    method_threshold_sources['FarmCPU'] = 'FarmCPU QTN threshold (corrected)'
+                else:
+                    fc_n_tests = effective_n if effective_n else n_markers
+                    fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
+                    method_threshold_sources['FarmCPU'] = 'FarmCPU QTN threshold'
                 method_thresholds['FarmCPU'] = fc_qtn_corrected  # Match worker return name
-                method_threshold_sources['FarmCPU'] = 'FarmCPU QTN threshold'
             if 'BLINK' in methods:
                 method_thresholds['BLINK'] = base_threshold
                 method_threshold_sources['BLINK'] = threshold_source

@@ -29,7 +29,7 @@ For 5M markers with 10k individuals, expect ~200-400MB working memory
 
 from typing import Optional, Union, List, Tuple, Dict, Any
 import numpy as np
-from scipy import linalg, special
+from scipy import linalg, special, stats
 
 from ..utils.data_types import GenotypeMatrix, GenotypeMap, AssociationResults
 from .glm import PANICLE_GLM
@@ -842,20 +842,32 @@ def PANICLE_FarmCPU(phe: np.ndarray,
     # Converted to p-values only at the end for final output
     P: Optional[np.ndarray] = None
 
-    # Track historical p-values for pseudo-QTNs (for substitution)
-    # Key: marker index, Value: list of p-values from iterations before it became a covariate
+    # Track historical statistics for pseudo-QTNs (for substitution)
+    # Key: marker index, Value: statistic from iteration before it became a covariate
+    # We store the LAST valid values before the QTN was added as covariate
     qtn_pvalue_history: Dict[int, List[float]] = {}
+    qtn_effect_history: Dict[int, float] = {}  # Effect from before becoming QTN
+    qtn_se_history: Dict[int, float] = {}      # SE from before becoming QTN
 
     # Results storage
     final_effects: Optional[np.ndarray] = None
     final_se: Optional[np.ndarray] = None
     final_pvalues: Optional[np.ndarray] = None
+    final_df_full: Optional[int] = None
     the_cv = CV  # Current covariates (updated each iteration)
 
     # Cache first iteration results to avoid redundant GLM call on early stop
     first_iter_effects: Optional[np.ndarray] = None
     first_iter_se: Optional[np.ndarray] = None
     first_iter_pvalues: Optional[np.ndarray] = None
+
+    # Track previous iteration's effects/SE for storing QTN history
+    prev_effects: Optional[np.ndarray] = None
+    prev_se: Optional[np.ndarray] = None
+
+    # Track last iteration's covariate summaries for final substitution
+    final_cov_effect_summary: Optional[np.ndarray] = None
+    final_cov_se_summary: Optional[np.ndarray] = None
 
     while not is_done:
         the_loop += 1
@@ -952,7 +964,7 @@ def PANICLE_FarmCPU(phe: np.ndarray,
             keep_mask = np.asarray(keep_mask).ravel()
             keep_mask = keep_mask[:seq_qtn.size]
             seq_qtn = seq_qtn[keep_mask]
-            seq_qtn_t = seq_qtn_t[:seq_qtn.size][keep_mask]
+            seq_qtn_t = seq_qtn_t[keep_mask]
 
             # Remove NaN entries
             valid_mask = ~np.isnan(seq_qtn_t)
@@ -1028,6 +1040,12 @@ def PANICLE_FarmCPU(phe: np.ndarray,
         else:
             the_cv = CV
 
+        # Degrees of freedom for marker tests in this iteration's GLM
+        n_fixed = 1 + (the_cv.shape[1] if the_cv is not None else 0)
+        df_full = int(n_individuals - n_fixed - 1)
+        if df_full <= 0:
+            raise ValueError("Degrees of freedom must be positive; check covariates/QTNs")
+
         # Step 9: Run GLM with updated covariates
         # Use cov_pvalue_agg for memory-efficient aggregation when QTNs exist
         # This avoids creating a huge (n_markers × n_covariates) 2D array
@@ -1059,9 +1077,10 @@ def PANICLE_FarmCPU(phe: np.ndarray,
         else:
             P = glm_result.pvalues.copy()
 
-        # Get aggregated covariate p-values for substitution (if available)
-        # Note: cov_pvalue_summary still contains p-values, will convert to t-stats
+        # Get aggregated covariate statistics for substitution (if available)
         cov_pvalue_summary = getattr(glm_result, "cov_pvalue_summary", None)
+        cov_effect_summary = getattr(glm_result, "cov_effect_summary", None)
+        cov_se_summary = getattr(glm_result, "cov_se_summary", None)
 
         # Cache first iteration results for potential early stop (avoid redundant GLM)
         if the_loop == 1:
@@ -1069,15 +1088,23 @@ def PANICLE_FarmCPU(phe: np.ndarray,
             first_iter_se = se.copy()
             first_iter_pvalues = P.copy()  # Contains |t|-statistics
 
-        # Step 10: Track t-statistics for pseudo-QTNs BEFORE they become covariates
-        # (for substitution later)
-        if my_prior is not None:
+        # Step 10: Track statistics for pseudo-QTNs BEFORE they become covariates
+        # Store effect/SE from PREVIOUS iteration (before becoming covariate)
+        # These values are valid; after becoming a QTN, the marker's effect is collinear
+        if my_prior is not None and prev_effects is not None:
             for qtn_idx in seq_qtn:
                 if qtn_idx not in qtn_pvalue_history:
-                    # First time seeing this QTN - record its |t| from PREVIOUS iteration
+                    # First time seeing this QTN - record its stats from PREVIOUS iteration
                     qtn_pvalue_history[qtn_idx] = [my_prior[qtn_idx]]
+                    # Store effect and SE from before it became a covariate
+                    qtn_effect_history[qtn_idx] = prev_effects[qtn_idx]
+                    qtn_se_history[qtn_idx] = prev_se[qtn_idx]
                 # Always add current |t| (even though it's confounded when QTN is covariate)
                 qtn_pvalue_history[qtn_idx].append(P[qtn_idx])
+
+        # Save current effects/SE for next iteration's history tracking
+        prev_effects = effects.copy()
+        prev_se = se.copy()
 
         # Step 11: Substitute pseudo-QTN t-statistics using covariate statistics
         # When using return_t_stats=True, cov_pvalue_summary already contains t-stats
@@ -1126,9 +1153,46 @@ def PANICLE_FarmCPU(phe: np.ndarray,
         final_effects = effects
         final_se = se
         final_pvalues = P  # Contains |t|-statistics until converted at end
+        final_df_full = df_full
+        # Keep the last iteration's covariate summaries for final substitution
+        final_cov_effect_summary = cov_effect_summary
+        final_cov_se_summary = cov_se_summary
 
     # Convert t-statistics back to p-values for final output
-    final_pvalues = _t_stat_to_pvalue(final_pvalues)
+    final_tstats = final_pvalues
+    final_pvalues = _t_stat_to_pvalue(final_tstats)
+    if seq_qtn_save.size > 0 and final_df_full is not None and final_df_full > 0:
+        qtn_indices = seq_qtn_save.astype(int, copy=False)
+        qtn_t = np.abs(final_tstats[qtn_indices])
+        final_pvalues[qtn_indices] = 2.0 * stats.t.sf(qtn_t, final_df_full)
+
+    # Substitute effects and SE for pseudo-QTNs
+    # Use the covariate effect from the final model (mean across all marker tests)
+    # This gives the QTN's conditional effect accounting for all other covariates
+    n_user_cov = CV.shape[1] if CV is not None else 0
+    qtn_start_idx = 1 + n_user_cov  # [intercept, user_covs..., QTN_1, ...]
+
+    for i, qtn_idx in enumerate(seq_qtn_save):
+        cov_idx = qtn_start_idx + i
+        # Prefer aggregated covariate effect from final model (accounts for all covariates)
+        if final_cov_effect_summary is not None and cov_idx < len(final_cov_effect_summary):
+            effect_val = final_cov_effect_summary[cov_idx]
+            if np.isfinite(effect_val):
+                final_effects[qtn_idx] = effect_val
+            elif qtn_idx in qtn_effect_history:
+                # Fallback to pre-covariate value
+                final_effects[qtn_idx] = qtn_effect_history[qtn_idx]
+        elif qtn_idx in qtn_effect_history:
+            final_effects[qtn_idx] = qtn_effect_history[qtn_idx]
+
+        if final_cov_se_summary is not None and cov_idx < len(final_cov_se_summary):
+            se_val = final_cov_se_summary[cov_idx]
+            if np.isfinite(se_val):
+                final_se[qtn_idx] = se_val
+            elif qtn_idx in qtn_se_history:
+                final_se[qtn_idx] = qtn_se_history[qtn_idx]
+        elif qtn_idx in qtn_se_history:
+            final_se[qtn_idx] = qtn_se_history[qtn_idx]
 
     # Create results object
     result = AssociationResults(

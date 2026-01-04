@@ -220,12 +220,12 @@ PANICLE may create cached files to speed up repeated analyses:
 
 ### VCF Cache Files
 
-When loading VCF files, PANICLE creates binary cache files:
+When loading VCF files, PANICLE creates binary cache files (v2, pre-imputed):
 
 ```
-{vcf_filename}.panicle.geno.npy       # Genotype matrix (binary)
-{vcf_filename}.panicle.ind.txt        # Individual IDs
-{vcf_filename}.panicle.map.csv        # Genetic map
+{vcf_filename}.panicle.v2.geno.npy       # Genotype matrix (binary, pre-imputed)
+{vcf_filename}.panicle.v2.ind.txt        # Individual IDs
+{vcf_filename}.panicle.v2.map.csv        # Genetic map
 ```
 
 **Notes:**
@@ -237,9 +237,9 @@ When loading VCF files, PANICLE creates binary cache files:
 **Example:**
 ```
 genotypes.vcf.gz                      # Original (21 MB)
-genotypes.vcf.gz.panicle.geno.npy      # Cached genotypes (120 MB)
-genotypes.vcf.gz.panicle.ind.txt       # Cached IDs (6 KB)
-genotypes.vcf.gz.panicle.map.csv       # Cached map (5.4 MB)
+genotypes.vcf.gz.panicle.v2.geno.npy   # Cached genotypes (120 MB)
+genotypes.vcf.gz.panicle.v2.ind.txt    # Cached IDs (6 KB)
+genotypes.vcf.gz.panicle.v2.map.csv    # Cached map (5.4 MB)
 ```
 
 ---

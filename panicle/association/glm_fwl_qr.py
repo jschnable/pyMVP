@@ -279,8 +279,12 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
                 cov_pval_max = np.full(n_fixed, -np.inf, dtype=np.float64)  # Will use max() to find max p
             cov_pval_sum = np.zeros(n_fixed, dtype=np.float64)
             cov_pval_count = np.zeros(n_fixed, dtype=np.int64)
+            # Also track covariate effects and SEs for proper QTN effect estimation
+            cov_effect_sum = np.zeros(n_fixed, dtype=np.float64)
+            cov_se_ssq = np.zeros(n_fixed, dtype=np.float64)  # Sum of squared SEs for pooling
         else:
             cov_pval_min = cov_pval_max = cov_pval_sum = cov_pval_count = None
+            cov_effect_sum = cov_se_ssq = None
 
     batch_size = max(1, min(maxLine, m))
     is_imputed = use_gm and geno.is_imputed
@@ -329,7 +333,7 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
                     df_full, df_reduced, diag_iXX, effects, ses, pvals,
                     return_cov_stats and not use_cov_agg, n_fixed,
                     cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count,
-                    return_t_stats
+                    return_t_stats, cov_effect_sum, cov_se_ssq
                 )
     else:
         # Simple sequential processing for small datasets
@@ -350,7 +354,7 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
                 df_full, df_reduced, diag_iXX, effects, ses, pvals,
                 return_cov_stats and not use_cov_agg, n_fixed,
                 cov_pval_min, cov_pval_max, cov_pval_sum, cov_pval_count,
-                return_t_stats
+                return_t_stats, cov_effect_sum, cov_se_ssq
             )
 
     if verbose:
@@ -410,6 +414,17 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         cov_summary[~np.isfinite(cov_summary)] = default_val
         result.cov_pvalue_summary = cov_summary
 
+        # Compute mean covariate effects and pooled SEs
+        if cov_effect_sum is not None:
+            with np.errstate(invalid='ignore'):
+                cov_effect_mean = cov_effect_sum / np.maximum(cov_pval_count, 1)
+                # Pooled SE: sqrt(mean(SE^2))
+                cov_se_pooled = np.sqrt(cov_se_ssq / np.maximum(cov_pval_count, 1))
+            cov_effect_mean[cov_pval_count == 0] = 0.0
+            cov_se_pooled[cov_pval_count == 0] = np.nan
+            result.cov_effect_summary = cov_effect_mean
+            result.cov_se_summary = cov_se_pooled
+
     return result
 
 
@@ -436,12 +451,15 @@ def _process_glm_batch(
     cov_pval_max: Optional[np.ndarray] = None,
     cov_pval_sum: Optional[np.ndarray] = None,
     cov_pval_count: Optional[np.ndarray] = None,
-    return_t_stats: bool = False
+    return_t_stats: bool = False,
+    cov_effect_sum: Optional[np.ndarray] = None,
+    cov_se_ssq: Optional[np.ndarray] = None
 ) -> None:
     """Process a single batch of genotypes for GLM statistics.
 
     If cov_pval_* arrays are provided, updates running aggregates for covariate
-    p-values without storing the full 2D arrays.
+    p-values without storing the full 2D arrays. Also tracks covariate effects
+    and SEs for proper QTN effect estimation.
     """
     prof_start = time.perf_counter() if _PROFILE_GLM_BATCH else None
 
@@ -572,25 +590,33 @@ def _process_glm_batch(
                 t_col = t_valid[:, col]
                 t_col[bad] = 0.0 if return_t_stats else np.nan  # Invalid gets t=0
                 valid_t = t_col[~bad]
+                n_valid = len(valid_t)
 
                 if return_t_stats:
                     # Aggregate t-statistics directly (skip erfc)
                     # For t-stats: max = most significant, min = least significant
-                    if len(valid_t) > 0:
+                    if n_valid > 0:
                         cov_pval_min[col] = max(cov_pval_min[col], np.max(valid_t))  # "min p" = max |t|
                         cov_pval_max[col] = min(cov_pval_max[col], np.min(valid_t)) if np.isfinite(cov_pval_max[col]) else np.min(valid_t)  # "max p" = min |t|
                         cov_pval_sum[col] += np.sum(valid_t)
-                        cov_pval_count[col] += len(valid_t)
+                        cov_pval_count[col] += n_valid
                 else:
                     # Compute p-values (original behavior)
                     p_col = _fast_t_pvalue(t_col, df_valid)
                     p_col[bad] = 1.0
                     valid_p = p_col[~bad]
-                    if len(valid_p) > 0:
+                    if n_valid > 0:
                         cov_pval_min[col] = min(cov_pval_min[col], np.min(valid_p))
                         cov_pval_max[col] = max(cov_pval_max[col], np.max(valid_p))
                         cov_pval_sum[col] += np.sum(valid_p)
-                        cov_pval_count[col] += len(valid_p)
+                        cov_pval_count[col] += n_valid
+
+                # Also track covariate effects and SEs for QTN substitution
+                if cov_effect_sum is not None and n_valid > 0:
+                    valid_effects = b_valid[~bad, col]
+                    valid_ses = se_valid[~bad, col]
+                    cov_effect_sum[col] += np.sum(valid_effects)
+                    cov_se_ssq[col] += np.sum(valid_ses ** 2)
 
         # Store only marker results (1D)
         effects[start:end] = beta_marker

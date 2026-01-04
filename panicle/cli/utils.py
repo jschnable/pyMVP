@@ -78,6 +78,32 @@ def parse_args():
                        default=list(OUTPUT_CHOICES),
                        help="Outputs to generate")
 
+    # FarmCPU resampling options
+    parser.add_argument("--resampling", action='store_true',
+                       help="Enable FarmCPU resampling")
+    parser.add_argument("--farmcpu-resampling-runs", type=int, default=100,
+                       help="Number of FarmCPU resampling runs")
+    parser.add_argument("--farmcpu-resampling-mask-proportion", type=float, default=0.1,
+                       help="Proportion of phenotype values masked per resampling run")
+    parser.add_argument("--farmcpu-resampling-significance", type=float, default=None,
+                       help="Fixed p-value threshold for resampling (overrides alpha)")
+    parser.add_argument("--farmcpu-resampling-alpha", type=float, default=None,
+                       help="Alpha for resampling Bonferroni threshold (alpha/n)")
+    parser.add_argument("--farmcpu-resampling-cluster", action='store_true',
+                       help="Cluster resampling hits by LD")
+    parser.add_argument("--farmcpu-resampling-ld-threshold", type=float, default=0.7,
+                       help="LD threshold for resampling clustering")
+    parser.add_argument("--farmcpu-resampling-seed", type=int, default=None,
+                       help="Random seed for resampling")
+
+    # FarmCPU thresholds
+    parser.add_argument("--farmcpu-qtn-threshold", type=float, default=None,
+                       help="Fixed p-value threshold for FarmCPU QTN selection")
+    parser.add_argument("--farmcpu-qtn-alpha", type=float, default=None,
+                       help="Alpha for FarmCPU QTN Bonferroni threshold (alpha/n)")
+    parser.add_argument("--farmcpu-p-threshold", type=float, default=None,
+                       help="Fixed p-value threshold for FarmCPU early stopping")
+
     # Loader options (simplified subset)
     parser.add_argument("--drop-monomorphic", action='store_true', dest='drop_monomorphic',
                        help="Drop monomorphic markers (now default behavior, kept for backward compatibility)")

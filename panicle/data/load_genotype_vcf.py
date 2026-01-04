@@ -311,6 +311,7 @@ def load_genotype_vcf(
     min_maf=0.0,
     return_pandas=True,
     backend='auto',  # 'auto', 'cyvcf2', 'builtin'
+    force_recache=False,
 ):
     """
     Load a VCF file and return (geno_matrix, individual_ids, geno_map).
@@ -322,6 +323,8 @@ def load_genotype_vcf(
     - drop_monomorphic: drop variants with all non-missing 0 or all 2
     - max_missing: drop variants with missing rate > threshold (0..1]
     - min_maf: drop variants with minor allele frequency < threshold
+      (missing calls treated as major allele for filtering)
+    - force_recache: if True, ignore any existing cache and overwrite it
     - return_pandas: return geno_map as pandas.DataFrame if pandas is available
     - backend: 'auto' (defaults to builtin for VCF/VCF.GZ), 'cyvcf2', or 'builtin'
     """
@@ -340,33 +343,30 @@ def load_genotype_vcf(
     
     # Check if cache exists and is fresh
     try:
-        if os.path.exists(cache_geno) and os.path.exists(cache_ind) and os.path.exists(cache_map):
-            vcf_mtime = os.path.getmtime(vcf_path)
-            if (os.path.getmtime(cache_geno) > vcf_mtime and 
-                os.path.getmtime(cache_ind) > vcf_mtime and 
-                os.path.getmtime(cache_map) > vcf_mtime):
-                
-                print(f"   [Cache] Loading binary cache for {vcf_path}...")
-                
-                # Load Genotypes (memmap for speed/memory efficiency)
-                # We load as mmap_mode='r' to allow lazy loading if needed, but for now we might read it all?
-                # The pipeline usually expects in-memory or wrapping it.
-                # Let's load regular for now to match behavior, or memmap if very large?
-                # The user asked for optimization. Memmap is instant.
-                geno_matrix = np.load(cache_geno, mmap_mode='r')
-                
-                # Load Individuals
-                with open(cache_ind, 'r') as f:
-                    individual_ids = [line.strip() for line in f]
+        if not force_recache:
+            if os.path.exists(cache_geno) and os.path.exists(cache_ind) and os.path.exists(cache_map):
+                vcf_mtime = os.path.getmtime(vcf_path)
+                if (os.path.getmtime(cache_geno) > vcf_mtime and 
+                    os.path.getmtime(cache_ind) > vcf_mtime and 
+                    os.path.getmtime(cache_map) > vcf_mtime):
                     
-                # Load Map
-                geno_map = pd.read_csv(cache_map)
+                    print(f"   [Cache] Loading binary cache for {vcf_path}...")
+                    
+                    # Load Genotypes (memmap for speed/memory efficiency)
+                    geno_matrix = np.load(cache_geno, mmap_mode='r')
+                    
+                    # Load Individuals
+                    with open(cache_ind, 'r') as f:
+                        individual_ids = [line.strip() for line in f]
+                        
+                    # Load Map
+                    geno_map = pd.read_csv(cache_map)
 
-                # Mark that this data is from v2 cache (pre-imputed, no -9 values)
-                geno_map.attrs['is_imputed'] = True
+                    # Mark that this data is from v2 cache (pre-imputed, no -9 values)
+                    geno_map.attrs['is_imputed'] = True
 
-                # If memmapped, we return it as is. GenotypeMatrix handles it.
-                return geno_matrix, individual_ids, geno_map
+                    # If memmapped, we return it as is. GenotypeMatrix handles it.
+                    return geno_matrix, individual_ids, geno_map
     except Exception as e:
         print(f"   [Cache] Failed to load cache: {e}")
     # --- CACHING LOGIC END ---
@@ -449,11 +449,16 @@ def load_genotype_vcf(
             return
         # MAF filter
         if min_maf > 0.0:
-            mean_dos = float(np.mean(col[valid]))
-            denom = max(ploidy, 1)
-            maf = min(mean_dos / denom, 1.0 - (mean_dos / denom))
-            if maf < min_maf:
-                return
+            n_total = col.size
+            n_valid = int(np.count_nonzero(valid))
+            if n_valid > 0:
+                total_alleles = max(ploidy, 1) * n_total
+                valid_alleles = max(ploidy, 1) * n_valid
+                sum_dos = float(np.sum(col[valid]))
+                minor_count = min(sum_dos, valid_alleles - sum_dos)
+                maf = minor_count / max(total_alleles, 1.0)
+                if maf < min_maf:
+                    return
         # Finalize dtype and append to streaming writer
         col = col.astype(np.int8, copy=False)
         if writer is None:
@@ -492,11 +497,16 @@ def load_genotype_vcf(
             if miss_rate > max_missing:
                 return
             if min_maf > 0.0:
-                mean_dos = float(np.mean(col[valid]))
-                denom = max(ploidy, 1)
-                maf = min(mean_dos / denom, 1.0 - (mean_dos / denom))
-                if maf < min_maf:
-                    return
+                n_total = col.size
+                n_valid = int(np.count_nonzero(valid))
+                if n_valid > 0:
+                    total_alleles = max(ploidy, 1) * n_total
+                    valid_alleles = max(ploidy, 1) * n_valid
+                    sum_dos = float(np.sum(col[valid]))
+                    minor_count = min(sum_dos, valid_alleles - sum_dos)
+                    maf = minor_count / max(total_alleles, 1.0)
+                    if maf < min_maf:
+                        return
             col = col.astype(np.int8, copy=False)
             if writer is None:
                 writer = _DynamicInt8MatrixWriter(len(individual_ids))
@@ -889,6 +899,7 @@ def _main(argv):  # pragma: no cover
     p.add_argument('--drop-monomorphic', action='store_true')
     p.add_argument('--max-missing', type=float, default=1.0)
     p.add_argument('--min-maf', type=float, default=0.0)
+    p.add_argument('--force-recache', action='store_true', help='Rebuild and overwrite cache files')
     p.add_argument('--no-pandas', action='store_true', help='Return map as list instead of DataFrame')
     p.add_argument('--backend', choices=['auto','cyvcf2','builtin'], default='auto',
                    help='Choose parsing backend (auto prefers builtin for VCF, cyvcf2 for BCF)')
@@ -903,6 +914,7 @@ def _main(argv):  # pragma: no cover
         min_maf=args.min_maf,
         return_pandas=not args.no_pandas,
         backend=args.backend,
+        force_recache=args.force_recache,
     )
     print('Samples:', len(ids))
     print('Markers:', geno.shape[1])
@@ -912,7 +924,13 @@ def _main(argv):  # pragma: no cover
         col = geno[:, 0]
         mask = col != MISSING
         if mask.any():
-            maf = min(float(col[mask].mean()) / 2.0, 1.0 - float(col[mask].mean()) / 2.0)
+            n_total = col.size
+            n_valid = int(np.count_nonzero(mask))
+            total_alleles = 2 * n_total
+            valid_alleles = 2 * n_valid
+            sum_dos = float(np.sum(col[mask]))
+            minor_count = min(sum_dos, valid_alleles - sum_dos)
+            maf = minor_count / max(total_alleles, 1.0)
             print('First marker MAF ~', round(maf, 4))
     # Print first few map rows
     if hasattr(gmap, 'head'):

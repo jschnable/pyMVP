@@ -11,14 +11,15 @@ This directory contains example scripts demonstrating different PANICLE workflow
 | [03_hybrid_mlm.py](03_hybrid_mlm.py) | Hybrid MLM for increased power | Intermediate | 10 min |
 | [04_with_covariates.py](04_with_covariates.py) | Including external covariates | Intermediate | 5 min |
 | [05_reading_results.py](05_reading_results.py) | Analyzing and visualizing results | Intermediate | 5 min |
+| [06_farmcpu_resampling.py](06_farmcpu_resampling.py) | FarmCPU resampling with RMIP output | Intermediate | 10 min |
 
 ## Running the Examples
 
 ### Prerequisites
 
 **Example data files are provided!** This directory includes:
-- `example_phenotypes.csv`: Plant height data for 738 sorghum lines
-- `example_genotypes.vcf.gz`: 1,000 SNP markers (includes known significant QTLs)
+- `example_phenotypes.csv`: Plant height + flowering time data for 738 sorghum lines
+- `example_genotypes.vcf.gz`: 6,533 SNP markers (PlantHeight significant markers + 5,000 random markers across all 10 chromosomes)
 - `example_covariates.csv`: Flowering time data for use as a covariate
 
 See [EXAMPLE_DATA.md](EXAMPLE_DATA.md) for details about the dataset.
@@ -37,12 +38,24 @@ cd examples
 python 01_basic_gwas.py
 ```
 
-Or with custom data:
+Or with custom data (all examples accept CLI overrides):
 
 ```bash
 python 01_basic_gwas.py \
     --phenotype my_phenos.csv \
-    --genotype my_genos.vcf.gz
+    --genotype my_genos.vcf.gz \
+    --trait Height \
+    --output ./custom_results
+```
+
+Example with the small sorghum marker set:
+
+```bash
+python 02_mlm_with_structure.py \
+    --phenotype ../sorghum_data/SbDiv_NE2021_Phenos_spats.csv \
+    --genotype ../sorghum_data/SbDiv_RNAseq_GeneticMarkers_Mangal2025.vcf.gz \
+    --trait DaysToFlower \
+    --output ../preview_gwas_plots/example02_sorghum
 ```
 
 ## Example Details
@@ -105,6 +118,24 @@ pipeline.load_data(
 import pandas as pd
 results = pd.read_csv('results/GWAS_Height_all_results.csv')
 sig_snps = results[results['MLM_P'] < 0.05/len(results)]
+```
+
+### 06: FarmCPU Resampling (RMIP)
+**What it does:** Repeats FarmCPU with phenotype masking to estimate RMIP
+**When to use:** Stabilizing marker discovery with resampling
+**Output:** RMIP table and RMIP Manhattan plot
+
+```python
+resampling_threshold = 0.05 / n_markers
+pipeline.run_analysis(
+    traits=['PlantHeight'],
+    methods=['FarmCPUResampling'],
+    farmcpu_params={
+        'resampling_runs': 50,
+        'resampling_mask_proportion': 0.1,
+        'resampling_significance_threshold': resampling_threshold
+    }
+)
 ```
 
 ## Using Your Own Data

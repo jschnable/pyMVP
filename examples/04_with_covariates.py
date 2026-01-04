@@ -17,25 +17,52 @@ External covariates can help control for:
 - Other measured confounders
 """
 
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from panicle.pipelines.gwas import GWASPipeline
+
+HERE = Path(__file__).resolve().parent
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Example 04: GWAS with Covariates")
+    parser.add_argument("--phenotype", default=str(HERE / "example_phenotypes.csv"))
+    parser.add_argument("--genotype", default=str(HERE / "example_genotypes.vcf.gz"))
+    parser.add_argument("--map", default=None)
+    parser.add_argument("--trait", default="PlantHeight")
+    parser.add_argument("--covariate-file", default=str(HERE / "example_covariates.csv"))
+    parser.add_argument("--covariate-columns", default="DaysToFlower")
+    parser.add_argument("--n-pcs", type=int, default=3)
+    parser.add_argument("--output", default="./example04_results")
+    return parser.parse_args()
 
 def main():
     print("=" * 70)
     print("EXAMPLE 04: GWAS with External Covariates")
     print("=" * 70)
 
+    args = parse_args()
+
     # Initialize pipeline
-    pipeline = GWASPipeline(output_dir='./example04_results')
+    pipeline = GWASPipeline(output_dir=args.output)
 
     # Load data including external covariates
     print("\n1. Loading data with covariates...")
+    covariate_list = [c.strip() for c in args.covariate_columns.split(',') if c.strip()]
     pipeline.load_data(
-        phenotype_file='example_phenotypes.csv',
-        genotype_file='example_genotypes.vcf.gz',
-        covariate_file='example_covariates.csv',  # Contains DaysToFlower
-        covariate_columns=['DaysToFlower']        # Use flowering time as covariate
+        phenotype_file=args.phenotype,
+        genotype_file=args.genotype,
+        map_file=args.map,
+        covariate_file=args.covariate_file,
+        covariate_columns=covariate_list
     )
-    print("   Loaded covariate: DaysToFlower")
+    print(f"   Loaded covariate(s): {', '.join(covariate_list) if covariate_list else 'None'}")
 
     # Align samples
     print("\n2. Aligning samples...")
@@ -45,27 +72,34 @@ def main():
     # PCs will be automatically combined with external covariates
     print("\n3. Computing population structure...")
     pipeline.compute_population_structure(
-        n_pcs=3,
+        n_pcs=args.n_pcs,
         calculate_kinship=True
     )
-    print("   Final covariates: DaysToFlower, PC1, PC2, PC3")
+    if covariate_list:
+        cov_label = ", ".join(covariate_list + [f"PC{i + 1}" for i in range(args.n_pcs)])
+    else:
+        cov_label = ", ".join([f"PC{i + 1}" for i in range(args.n_pcs)])
+    print(f"   Final covariates: {cov_label}")
 
     # Run MLM with combined covariates
     print("\n4. Running MLM with all covariates...")
     pipeline.run_analysis(
-        traits=['PlantHeight'],
+        traits=[args.trait],
         methods=['MLM']
     )
 
     print("\n" + "=" * 70)
     print("Analysis Complete!")
     print("=" * 70)
-    print("\nResults saved to: ./example04_results/")
+    print(f"\nResults saved to: {args.output}/")
     print("\nCovariates used in analysis:")
-    print("- External: DaysToFlower (from example_covariates.csv)")
-    print("- PCs: PC1, PC2, PC3 (for population structure)")
+    if covariate_list:
+        print(f"- External: {', '.join(covariate_list)}")
+    else:
+        print("- External: None")
+    print(f"- PCs: {', '.join([f'PC{i + 1}' for i in range(args.n_pcs)])}")
     print("\nThis helps control for:")
-    print("- Correlation between flowering time and plant height")
+    print("- Trait correlations or measured confounders")
     print("- Population stratification")
     print("- Increases power to detect height-specific genetic associations")
     print("\nNext steps:")

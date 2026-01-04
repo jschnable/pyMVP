@@ -17,40 +17,66 @@ Use when:
 - Avoiding false positives is critical
 """
 
-from panicle.pipelines.gwas import GWASPipeline
-import pandas as pd
-import numpy as np
+import argparse
+import sys
+from pathlib import Path
 import time
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from panicle.pipelines.gwas import GWASPipeline
+
+HERE = Path(__file__).resolve().parent
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Example 03: Hybrid MLM")
+    parser.add_argument("--phenotype", default=str(HERE / "example_phenotypes.csv"))
+    parser.add_argument("--genotype", default=str(HERE / "example_genotypes.vcf.gz"))
+    parser.add_argument("--map", default=None)
+    parser.add_argument("--trait", default="PlantHeight")
+    parser.add_argument("--screen-threshold", type=float, default=1e-4)
+    parser.add_argument("--n-pcs", type=int, default=3)
+    parser.add_argument("--output", default="./example03_results")
+    return parser.parse_args()
 
 def main():
     print("=" * 70)
     print("EXAMPLE 03: Hybrid MLM for Increased Power")
     print("=" * 70)
 
+    args = parse_args()
+
     # Initialize pipeline
-    pipeline = GWASPipeline(output_dir='./example03_results')
+    pipeline = GWASPipeline(output_dir=args.output)
 
     # Load data
     print("\n1. Loading data...")
     pipeline.load_data(
-        phenotype_file='example_phenotypes.csv',
-        genotype_file='example_genotypes.vcf.gz'
+        phenotype_file=args.phenotype,
+        genotype_file=args.genotype,
+        map_file=args.map
     )
 
     pipeline.align_samples()
 
     # Compute population structure
     print("\n2. Computing population structure...")
-    pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
+    pipeline.compute_population_structure(n_pcs=args.n_pcs, calculate_kinship=True)
 
     # Run both standard MLM and Hybrid MLM together for comparison
     print("\n3. Running standard MLM and Hybrid MLM...")
     start_time = time.time()
     pipeline.run_analysis(
-        traits=['PlantHeight'],
+        traits=[args.trait],
         methods=['MLM', 'MLM_Hybrid'],
         hybrid_params={
-            'screen_threshold': 1e-4  # Refine markers with p < 0.0001
+            'screen_threshold': args.screen_threshold  # Refine markers with p < threshold
         }
     )
     total_time = time.time() - start_time
@@ -62,7 +88,8 @@ def main():
     print(f"Combined runtime: {total_time:.2f} seconds")
 
     # Load and compare p-values
-    results = pd.read_csv('example03_results/GWAS_PlantHeight_all_results.csv')
+    results_path = Path(args.output) / f"GWAS_{args.trait}_all_results.csv"
+    results = pd.read_csv(results_path)
 
     # Check which columns are available
     if 'MLM_P' in results.columns and 'MLM_Hybrid_P' in results.columns:

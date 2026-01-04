@@ -95,6 +95,9 @@ PANICLE_FarmCPU_*/
 *.jpeg
 *.pdf
 *.png
+*.panicle.geno.npy
+*.panicle.ind.txt
+*.panicle.map.csv
 *.csv
 *.tsv
 *.txt
@@ -102,7 +105,7 @@ PANICLE_FarmCPU_*/
 *.out
 !examples/example_phenotypes.csv
 !examples/example_covariates.csv
-!examples/example_genotypes.vcf.gz.panicle.map.csv
+!examples/example_genotypes.vcf.gz
 
 # Internal artifacts and reports
 artifacts/
