@@ -43,54 +43,46 @@ def PANICLE_K_VanRaden(M: Union[GenotypeMatrix, np.ndarray],
     
     if verbose:
         print(f"Calculating kinship matrix for {n_individuals} individuals, {n_markers} markers")
-    
-    # Initialize kinship matrix
-    kin = np.zeros((n_individuals, n_individuals), dtype=np.float64)
-    
+
+    # Initialize kinship matrix in float32 for faster BLAS operations
+    kin = np.zeros((n_individuals, n_individuals), dtype=np.float32)
+
     if verbose:
         print("Computing kinship matrix in batches...")
-    
+
     # Process markers in batches to manage memory
     n_batches = (n_markers + maxLine - 1) // maxLine
-    
+
     for batch_idx in range(n_batches):
         start_marker = batch_idx * maxLine
         end_marker = min(start_marker + maxLine, n_markers)
-        
+
         if verbose and n_batches > 1:
             print(f"Processing batch {batch_idx + 1}/{n_batches} (markers {start_marker}-{end_marker-1})")
-        
-        # Get batch of markers
+
+        # Get batch of markers in float32 (faster BLAS, sufficient precision for kinship)
         if isinstance(genotype, GenotypeMatrix):
-            # Use major-genotype imputed data to match rMVP
-            Z_batch = genotype.get_batch_imputed(start_marker, end_marker).astype(np.float64)
+            # get_batch_imputed handles missing values and returns requested dtype
+            Z_batch = genotype.get_batch_imputed(start_marker, end_marker, dtype=np.float32)
         else:
-            Z_batch = genotype[:, start_marker:end_marker].astype(np.float64)
-        
+            Z_batch = genotype[:, start_marker:end_marker].astype(np.float32)
+            # Handle missing values for raw numpy arrays
+            missing_mask = (Z_batch == -9) | np.isnan(Z_batch)
+            if missing_mask.any():
+                Z_batch[missing_mask] = 0.0
+
         # Center the genotype matrix by subtracting per-marker means (2p)
-        means_batch = np.nanmean(Z_batch, axis=0) # Use nanmean to be safe
-        
-        # Check for NaNs in means (e.g. all missing column)
-        means_batch[np.isnan(means_batch)] = 0.0
-        
+        # Use regular mean since get_batch_imputed already handles missing values
+        means_batch = np.mean(Z_batch, axis=0)
         Z_batch -= means_batch[np.newaxis, :]
-        
-        # Sanitize Z_batch (handle residual NaNs/Infs)
-        if not np.all(np.isfinite(Z_batch)):
-            if verbose and batch_idx == 0:
-                 print("Warning: Z_batch contains NaNs or Infs. Replacing with 0.")
-            Z_batch[~np.isfinite(Z_batch)] = 0.0
-        
+
         # Compute cross products: kin += Z_batch @ Z_batch.T
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                kin += Z_batch @ Z_batch.T
-        except Exception as e:
-            # Fallback for extremely large values?
-            print(f"Error in kinship matmul batch {batch_idx}: {e}")
-            raise
-    
+        with np.errstate(over='ignore', invalid='ignore'):
+            kin += Z_batch @ Z_batch.T
+
+    # Convert to float64 for final operations (normalization needs precision)
+    kin = kin.astype(np.float64)
+
     if verbose:
         print("Symmetrizing and normalizing kinship matrix...")
     
