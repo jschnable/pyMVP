@@ -402,8 +402,48 @@ def create_manhattan_plot(pvalues: np.ndarray,
         matplotlib Figure object
     """
 
+    def _select_plot_mask(pvals: np.ndarray) -> np.ndarray:
+        n_points = len(pvals)
+        if n_points == 0:
+            return np.zeros(0, dtype=bool)
+
+        k_top = min(10000, n_points)
+
+        safe_pvals = np.asarray(pvals, dtype=float)
+        safe_pvals = np.where(np.isfinite(safe_pvals), safe_pvals, np.nan)
+        safe_pvals = np.where(safe_pvals <= 0, 1e-300, safe_pvals)
+        safe_pvals = np.where(safe_pvals > 1, 1.0, safe_pvals)
+
+        top_indices = np.argpartition(safe_pvals, k_top - 1)[:k_top]
+
+        keep_mask = np.zeros(n_points, dtype=bool)
+        if k_top > 0:
+            keep_mask[top_indices] = True
+
+        log_pvals = -np.log10(safe_pvals)
+        log_bins = np.floor(log_pvals).astype(int)
+        max_bin = int(log_bins.max()) if log_bins.size else 0
+        rng = np.random.default_rng(42)
+
+        for bin_id in range(max_bin + 1):
+            bin_indices = np.flatnonzero(log_bins == bin_id)
+            if bin_indices.size == 0:
+                continue
+            candidates = bin_indices[~keep_mask[bin_indices]]
+            if candidates.size == 0:
+                continue
+            n_keep = min(5000, candidates.size)
+            if n_keep < candidates.size:
+                selected = rng.choice(candidates, size=n_keep, replace=False)
+            else:
+                selected = candidates
+            keep_mask[selected] = True
+
+        return keep_mask
+
     # Convert p-values to -log10 scale
     log_pvalues = -np.log10(pvalues)
+    plot_mask = _select_plot_mask(pvalues)
 
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -417,16 +457,17 @@ def create_manhattan_plot(pvalues: np.ndarray,
             # Create Manhattan plot with chromosomal positions
             plot_manhattan_with_positions(
                 ax, chromosomes, positions, log_pvalues,
-                colors=colors, point_size=point_size, 
-                map_data=map_data, true_qtns=true_qtns
+                colors=colors, point_size=point_size,
+                map_data=map_data, true_qtns=true_qtns,
+                plot_mask=plot_mask, decimate=False
             )
         except Exception as e:
             warnings.warn(f"Could not use map data for positioning: {e}")
             # Fallback to sequential plotting
-            plot_manhattan_sequential(ax, log_pvalues, point_size=point_size)
+            plot_manhattan_sequential(ax, log_pvalues, point_size=point_size, plot_mask=plot_mask)
     else:
         # Sequential plotting without chromosomal information
-        plot_manhattan_sequential(ax, log_pvalues, point_size=point_size)
+        plot_manhattan_sequential(ax, log_pvalues, point_size=point_size, plot_mask=plot_mask)
 
     # Add only significance threshold (no suggestive threshold)
     if threshold > 0:
@@ -754,10 +795,18 @@ def plot_manhattan_with_positions(ax, chromosomes: np.ndarray, positions: np.nda
             ax.spines[spine].set_visible(False)
 
 
-def plot_manhattan_sequential(ax, log_pvalues: np.ndarray, point_size: float = 3.0):
+def plot_manhattan_sequential(ax,
+                              log_pvalues: np.ndarray,
+                              point_size: float = 3.0,
+                              plot_mask: Optional[np.ndarray] = None):
     """Plot Manhattan plot with sequential marker positions"""
 
     positions = np.arange(len(log_pvalues))
+    if plot_mask is not None:
+        if plot_mask.shape != log_pvalues.shape:
+            raise ValueError("plot_mask must match the shape of the plotted values")
+        positions = positions[plot_mask]
+        log_pvalues = log_pvalues[plot_mask]
     ax.scatter(positions, log_pvalues, c='blue', s=point_size, alpha=0.8, edgecolors='none')
     ax.set_xlabel('Chromosome', fontsize=12)
     ax.margins(x=0)
@@ -795,30 +844,49 @@ def create_qq_plot(pvalues: np.ndarray,
         ax.set_title(title)
         return fig
 
-    # Sort p-values
-    observed_pvals = np.sort(valid_pvals)
-    n = len(observed_pvals)
+    n = len(valid_pvals)
 
-    # Expected p-values under null hypothesis
-    expected_pvals = np.arange(1, n + 1) / (n + 1)
+    # Approximate quantiles via log-spaced histogram (avoids full sort).
+    log_pvals = np.log10(valid_pvals)
+    min_logp = float(np.min(log_pvals))
+    max_logp = 0.0
+    bins = min(2000, max(50, int(np.sqrt(n))))
+    edges = np.linspace(min_logp, max_logp, bins + 1)
+    counts, _ = np.histogram(log_pvals, bins=edges)
+    if counts.sum() == 0:
+        ax.text(0.5, 0.5, 'No valid p-values for Q-Q plot',
+               ha='center', va='center', transform=ax.transAxes)
+        ax.set_title(title)
+        return fig
 
-    # Convert to -log10 scale
-    obs_log = -np.log10(observed_pvals)
-    exp_log = -np.log10(expected_pvals)
+    cdf = np.cumsum(counts).astype(float)
+    mid_cdf = (cdf - (counts / 2.0)) / n
+    mid_logp = (edges[:-1] + edges[1:]) / 2.0
+    nonzero = counts > 0
 
-    # Plot observed vs expected
+    exp_log = -np.log10(mid_cdf[nonzero])
+    obs_log = -mid_logp[nonzero]
+
+    # Plot observed vs expected (histogram-based approximation)
     ax.scatter(exp_log, obs_log, alpha=0.6, s=2, edgecolors='none')
 
     # Add diagonal line (null hypothesis)
     max_val = max(np.max(exp_log), np.max(obs_log))
     ax.plot([0, max_val], [0, max_val], 'r--', alpha=0.8, label='Null hypothesis')
 
-    # Calculate lambda (genomic inflation factor) using shared utility
-    lambda_gc = genomic_inflation_factor(observed_pvals)
+    # Calculate lambda (genomic inflation factor) on a random subset for speed
+    lambda_sample = valid_pvals
+    lambda_is_approx = False
+    if n > 200000:
+        rng = np.random.default_rng(0)
+        lambda_sample = rng.choice(valid_pvals, size=200000, replace=False)
+        lambda_is_approx = True
+    lambda_gc = genomic_inflation_factor(lambda_sample)
 
     ax.set_xlabel(r'Expected $-\log_{10}(P)$')
     ax.set_ylabel(r'Observed $-\log_{10}(P)$')
-    ax.set_title(f'{title}\nλ = {lambda_gc:.3f}')
+    lambda_prefix = "λ≈" if lambda_is_approx else "λ ="
+    ax.set_title(f'{title}\n{lambda_prefix} {lambda_gc:.3f}')
     ax.grid(True, alpha=0.3)
     # Use fixed position - 'best' is extremely slow with millions of points
     ax.legend(loc='upper left')

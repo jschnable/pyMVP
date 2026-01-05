@@ -135,11 +135,8 @@ def main():
     
     # 2. Align
     pipeline.align_samples()
-    
-    # 3. Structure
-    pipeline.compute_population_structure(n_pcs=args.n_pcs)
 
-    # 4. Run Analysis
+    # 3. Resolve methods/outputs before computing population structure
     methods = []
     if args.glm: methods.append('GLM')
     if args.mlm: methods.append('MLM')
@@ -151,8 +148,14 @@ def main():
         methods.extend([m for m in args.methods.split(',') if m.strip()])
 
     valid_methods = normalize_methods(methods)
-    
+
     outputs = normalize_outputs(args.outputs)
+
+    # 4. Structure (kinship only needed for MLM)
+    need_kinship = 'MLM' in valid_methods
+    pipeline.compute_population_structure(n_pcs=args.n_pcs, calculate_kinship=need_kinship)
+
+    # 5. Run Analysis
 
     def _resolve_denom() -> float:
         if args.n_eff:

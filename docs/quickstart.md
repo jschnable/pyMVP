@@ -79,23 +79,23 @@ After running the analysis, your output directory will contain:
 
 ```
 my_gwas_results/
-├── GWAS_Height_all_results.csv.gz        # Full results for Height (gzip compressed)
+├── GWAS_Height_all_results.csv        # Full results for Height
 ├── GWAS_Height_significant.csv           # Only significant SNPs
 ├── GWAS_Height_GLM_manhattan.png         # Manhattan plot
 ├── GWAS_Height_GLM_qq.png                # QQ plot
-├── GWAS_FloweringTime_all_results.csv.gz # Full results for FloweringTime
+├── GWAS_FloweringTime_all_results.csv # Full results for FloweringTime
 └── GWAS_summary_by_traits_methods.csv    # Summary statistics
 ```
 
-**Note:** Full results files are gzip compressed by default to save disk space (typically 10x smaller). You can read them directly with pandas: `pd.read_csv('file.csv.gz')`.
+**Note:** Full results files are written as plain CSV by default. You can gzip them yourself if disk space is a concern.
 
 ### Reading Your Results
 
 ```python
 import pandas as pd
 
-# Load full results (pandas reads .gz files automatically)
-results = pd.read_csv('my_gwas_results/GWAS_Height_all_results.csv.gz')
+# Load full results
+results = pd.read_csv('my_gwas_results/GWAS_Height_all_results.csv')
 
 # Results contain:
 # - SNP: Marker ID
@@ -191,8 +191,8 @@ pipeline.run_analysis(
     # Add 'FarmCPUResampling' if needed (resampling is slow)
 )
 
-# All results are in the same all_results.csv.gz file
-results = pd.read_csv('method_comparison/GWAS_MyTrait_all_results.csv.gz')
+# All results are in the same all_results.csv file
+results = pd.read_csv('method_comparison/GWAS_MyTrait_all_results.csv')
 # Contains GLM_P, MLM_P, FarmCPU_P, BLINK_P columns
 ```
 

@@ -68,6 +68,13 @@ def calculate_maf_from_genotypes(
     Returns:
         Array of minor allele frequencies for each marker
     """
+    # Fast path for pre-imputed GenotypeMatrix (no missing values).
+    if hasattr(genotypes, '_data') and getattr(genotypes, 'is_imputed', False):
+        data = genotypes._data
+        allele_freq = data.mean(axis=0) / max(max_dosage, 1e-12)
+        maf = np.minimum(allele_freq, 1.0 - allele_freq)
+        return np.asarray(maf)
+
     # Handle GenotypeMatrix wrapper if present (uses _data internally)
     if hasattr(genotypes, '_data'):
         genotypes = genotypes._data
@@ -96,22 +103,21 @@ def calculate_maf_from_genotypes(
     return np.asarray(maf)
 
 def genomic_inflation_factor(pvalues: np.ndarray) -> float:
-    """Calculate genomic inflation factor (lambda)
-    
-    Args:
-        pvalues: Array of p-values
-        
-    Returns:
-        Genomic inflation factor (lambda)
+    """Calculate genomic inflation factor (lambda).
+
+    Uses a fast closed-form inverse for df=1: chi2.isf(p) = 2 * erfcinv(p)^2.
     """
-    valid_pvals = pvalues[np.isfinite(pvalues) & (pvalues > 0)]
+    valid_pvals = pvalues[np.isfinite(pvalues) & (pvalues > 0) & (pvalues <= 1)]
     if len(valid_pvals) == 0:
         return 1.0
-        
-    chi2_values = stats.chi2.ppf(1 - valid_pvals, df=1)
+
+    # Avoid scipy.stats.chi2.ppf overhead for df=1
+    from scipy.special import erfcinv
+    clipped = np.clip(valid_pvals, 1e-300, 1.0)
+    chi2_values = 2.0 * (erfcinv(clipped) ** 2)
     median_chi2 = np.median(chi2_values)
-    expected_median = stats.chi2.ppf(0.5, df=1)
-    
+    expected_median = 0.454936423119572  # chi2.ppf(0.5, df=1)
+
     lambda_gc = median_chi2 / expected_median
     return lambda_gc
 

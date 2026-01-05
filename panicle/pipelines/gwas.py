@@ -23,7 +23,6 @@ from ..utils.stats import (
     calculate_maf_from_genotypes,
     genomic_inflation_factor
 )
-from ..utils.compression import to_csv_gzip, PIGZ_AVAILABLE
 from ..utils.data_types import GenotypeMatrix, AssociationResults
 from ..utils.effective_tests import estimate_effective_tests_from_genotype
 from ..association.farmcpu_resampling import (
@@ -198,6 +197,7 @@ class GWASPipeline:
         self.genotype_matrix: Optional[GenotypeMatrix] = None
         self.geno_map = None  # GenotypeMap or similar object
         self.individual_ids: List[str] = []
+        self._matched_indices: Optional[np.ndarray] = None
         
         self.covariate_df: Optional[pd.DataFrame] = None
         self.covariate_names: List[str] = []
@@ -209,9 +209,29 @@ class GWASPipeline:
         self.pcs: Optional[np.ndarray] = None
         self.pc_names: List[str] = []
         self.kinship: Optional[np.ndarray] = None
+        self._structure_indices: Optional[np.ndarray] = None
+        # Cache the genotype subset from compute_population_structure for reuse
+        self._structure_genotype: Optional[GenotypeMatrix] = None
+
+        self._structure_n_pcs: int = 0
+
+        self._trait_cache_indices: Optional[np.ndarray] = None
+        self._trait_cache_n_pcs: Optional[int] = None
+        self._trait_cache_need_kinship: Optional[bool] = None
+        self._trait_cache_genotype: Optional[GenotypeMatrix] = None
+        self._trait_cache_pcs: Optional[np.ndarray] = None
+        self._trait_cache_kinship: Optional[np.ndarray] = None
         
         # Analysis State
         self.results: Dict[str, Dict[str, Any]] = {}  # {trait: {method: result}}
+
+    def _clear_trait_cache(self) -> None:
+        self._trait_cache_indices = None
+        self._trait_cache_n_pcs = None
+        self._trait_cache_need_kinship = None
+        self._trait_cache_genotype = None
+        self._trait_cache_pcs = None
+        self._trait_cache_kinship = None
         
     def log(self, message: str):
         """Internal logger (can be replaced with standard logging later)"""
@@ -302,6 +322,9 @@ class GWASPipeline:
         """
         step_start = time.time()
         self.log_step("Step 1: Loading and validating input data")
+        self._clear_trait_cache()
+        self._matched_indices = None
+        self._structure_indices = None
 
         # 1. Phenotype
         try:
@@ -428,6 +451,7 @@ class GWASPipeline:
 
         step_start = time.time()
         self.log_step("Step 2: Matching individuals between datasets")
+        self._clear_trait_cache()
 
         matched_phenotype, matched_covariate, matched_indices, summary = match_individuals(
             self.phenotype_df,
@@ -437,7 +461,11 @@ class GWASPipeline:
 
         # Update Pipeline State
         self.phenotype_df = matched_phenotype
-        self.genotype_matrix = self.genotype_matrix.subset_individuals(matched_indices)
+        self._matched_indices = np.asarray(matched_indices, dtype=int)
+        self.pcs = None
+        self.pc_names = []
+        self.kinship = None
+        self._structure_indices = None
         
         self.log(f"   Original phenotypes: {summary['n_phenotype_original']}")
         self.log(f"   Original genotypes: {summary['n_genotype_original']}")
@@ -500,24 +528,42 @@ class GWASPipeline:
             - Kinship calculation uses VanRaden (2008) method: K = XX' / m
             - Only MLM requires the kinship matrix; GLM, FarmCPU, and BLINK do not use it
             - If you skip kinship here, run_analysis() will auto-compute it when MLM is requested
+              and no map data is available
             - Recommended to use 3-10 PCs depending on population structure complexity
         """
         if self.genotype_matrix is None:
              raise ValueError("Genotype data missing.")
-        
+        if self._matched_indices is None:
+             raise ValueError("Samples not aligned. Call align_samples() first.")
+
+        self._structure_n_pcs = int(n_pcs)
+        self._clear_trait_cache()
+
         step_start = time.time()
         self.log_step("Step 3: Calculating population structure")
+        structure_indices = np.asarray(self._matched_indices, dtype=int)
+        is_full_geno = (
+            structure_indices.size == self.genotype_matrix.n_individuals
+            and np.array_equal(structure_indices, np.arange(self.genotype_matrix.n_individuals))
+        )
+        if is_full_geno:
+            geno_for_structure = self.genotype_matrix
+        else:
+            geno_for_structure = self.genotype_matrix.subset_individuals(structure_indices)
+        self._structure_indices = structure_indices
+        # Cache the genotype subset for reuse in _prepare_trait_data
+        self._structure_genotype = geno_for_structure
 
         # PCA
         if n_pcs > 0:
             try:
                 self.log(f"   Calculating {n_pcs} PCs...")
-                self.pcs = PANICLE_PCA(M=self.genotype_matrix, pcs_keep=n_pcs, verbose=False)
+                self.pcs = PANICLE_PCA(M=geno_for_structure, pcs_keep=n_pcs, verbose=False)
                 self.pc_names = [f'PC{i + 1}' for i in range(self.pcs.shape[1])]
             except Exception as e:
                 raise ValueError(f"Error calculating PCs: {e}")
         else:
-            self.pcs = np.zeros((self.genotype_matrix.n_individuals, 0))
+            self.pcs = np.zeros((geno_for_structure.n_individuals, 0))
             self.pc_names = []
             self.log("   WARNING: Running with 0 PCs. This may lead to inflated p-values if")
             self.log("            your samples have population structure. Consider using --n-pcs 3")
@@ -527,7 +573,7 @@ class GWASPipeline:
         if calculate_kinship:
             try:
                 self.log("   Calculating Kinship matrix...")
-                self.kinship = PANICLE_K_VanRaden(self.genotype_matrix, verbose=False)
+                self.kinship = PANICLE_K_VanRaden(geno_for_structure, verbose=False)
                 self.log(f"   Kinship shape: {self.kinship.shape}")
             except Exception as e:
                 raise ValueError(f"Error calculating kinship: {e}")
@@ -567,13 +613,9 @@ class GWASPipeline:
         if not selected_traits:
             raise ValueError("No valid traits found to analyze.")
 
-        # Auto-compute kinship if MLM is requested but kinship not yet computed
         methods_upper_check = [m.upper() for m in methods]
-        if 'MLM' in methods_upper_check and self.kinship is None:
-            self.log("   MLM requested but kinship not computed. Auto-computing kinship...")
-            kinship_start = time.time()
-            self.kinship = PANICLE_K_VanRaden(self.genotype_matrix, verbose=False)
-            self.log(f"   Kinship computed in {time.time() - kinship_start:.2f}s, shape: {self.kinship.shape}")
+        need_kinship = 'MLM' in methods_upper_check
+        structure_n_pcs = self._structure_n_pcs
 
         # 2. Bonferroni / Thresholding Logic
         n_markers = self.genotype_matrix.n_markers
@@ -607,7 +649,11 @@ class GWASPipeline:
             trait_start_time = time.time()
 
             # Prepare Trait-Specific Data (remove missing pheno/covs)
-            trait_data = self._prepare_trait_data(trait_name)
+            trait_data = self._prepare_trait_data(
+                trait_name,
+                n_pcs=structure_n_pcs,
+                need_kinship=need_kinship,
+            )
             if not trait_data:
                 continue
 
@@ -683,36 +729,58 @@ class GWASPipeline:
             if parallel_methods:
                 self.log(f"   Running parallel analysis for: {parallel_methods}")
 
-                with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, len(parallel_methods))) as executor:
-                    future_to_method = {
-                        executor.submit(
-                            _run_single_method,
-                            method,
-                            y_sub, g_sub, cov_sub, k_sub,
-                            self.geno_map,
-                            fc_params, blk_params,
-                            max_iterations, base_threshold, n_markers,
-                            effective_n, alpha  # Pass n_eff and alpha for FarmCPU
-                        ): method for method in parallel_methods
-                    }
+                if len(parallel_methods) == 1:
+                    method = parallel_methods[0]
+                    res_name, res_obj, lambda_gc, error = _run_single_method(
+                        method,
+                        y_sub, g_sub, cov_sub, k_sub,
+                        self.geno_map,
+                        fc_params, blk_params,
+                        max_iterations, base_threshold, n_markers,
+                        effective_n, alpha,
+                    )
+                    if error:
+                        self.log(f"   {method} Failed: {error}")
+                    else:
+                        method_results[res_name] = res_obj
+                        if lambda_gc is not None:
+                            method_lambda_gc[res_name] = lambda_gc
+                            self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
+                            if lambda_gc > 1.3:
+                                self.log(f"   WARNING: Genomic inflation factor ({lambda_gc:.3f}) > 1.3 for {res_name}.")
+                                self.log(f"            This suggests population stratification or other confounding.")
+                                self.log(f"            Consider using MLM or adding more PCs to control inflation.")
+                else:
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=min(4, len(parallel_methods))) as executor:
+                        future_to_method = {
+                            executor.submit(
+                                _run_single_method,
+                                method,
+                                y_sub, g_sub, cov_sub, k_sub,
+                                self.geno_map,
+                                fc_params, blk_params,
+                                max_iterations, base_threshold, n_markers,
+                                effective_n, alpha  # Pass n_eff and alpha for FarmCPU
+                            ): method for method in parallel_methods
+                        }
 
-                    for future in concurrent.futures.as_completed(future_to_method):
-                        m_name = future_to_method[future]
-                        try:
-                            res_name, res_obj, lambda_gc, error = future.result()
-                            if error:
-                                self.log(f"   {m_name} Failed: {error}")
-                            else:
-                                method_results[res_name] = res_obj
-                                if lambda_gc is not None:
-                                    method_lambda_gc[res_name] = lambda_gc
-                                    self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
-                                    if lambda_gc > 1.3:
-                                        self.log(f"   WARNING: Genomic inflation factor ({lambda_gc:.3f}) > 1.3 for {res_name}.")
-                                        self.log(f"            This suggests population stratification or other confounding.")
-                                        self.log(f"            Consider using MLM or adding more PCs to control inflation.")
-                        except Exception as exc:
-                            self.log(f"   {m_name} generated an exception: {exc}")
+                        for future in concurrent.futures.as_completed(future_to_method):
+                            m_name = future_to_method[future]
+                            try:
+                                res_name, res_obj, lambda_gc, error = future.result()
+                                if error:
+                                    self.log(f"   {m_name} Failed: {error}")
+                                else:
+                                    method_results[res_name] = res_obj
+                                    if lambda_gc is not None:
+                                        method_lambda_gc[res_name] = lambda_gc
+                                        self.log(f"   {res_name} Lambda (GC): {lambda_gc:.3f}")
+                                        if lambda_gc > 1.3:
+                                            self.log(f"   WARNING: Genomic inflation factor ({lambda_gc:.3f}) > 1.3 for {res_name}.")
+                                            self.log(f"            This suggests population stratification or other confounding.")
+                                            self.log(f"            Consider using MLM or adding more PCs to control inflation.")
+                            except Exception as exc:
+                                self.log(f"   {m_name} generated an exception: {exc}")
 
             # Specific handling for Resampling (Sequential)
             if run_resampling:
@@ -749,7 +817,8 @@ class GWASPipeline:
                 method_lambda_gc=method_lambda_gc,
                 n_samples=n_samples_trait,
                 n_markers=n_markers,
-                runtime_seconds=trait_runtime
+                runtime_seconds=trait_runtime,
+                geno_for_maf=g_sub
             )
             summary_rows.extend(trait_summary)
 
@@ -760,41 +829,139 @@ class GWASPipeline:
             summary_df.to_csv(sum_path, index=False)
             self.log(f"\nSaved global summary to {sum_path}")
 
-        # Hint about pigz for faster compression
-        if 'all_marker_pvalues' in outputs and not PIGZ_AVAILABLE:
-            self.log("\nTip: Install 'pigz' for faster parallel gzip compression (apt install pigz)")
-
         self.log("\nGWAS Analysis Completed Successfully.")
 
-    def _prepare_trait_data(self, trait_name):
+    def _prepare_trait_data(self, trait_name, n_pcs: int = 0, need_kinship: bool = False):
         """
         Handle missing data removal (phenotype & covariates).
         Returns (y_sub, g_sub, cov_sub, k_sub) or None if empty.
         """
+        if self._matched_indices is None:
+             raise ValueError("Samples not aligned. Call align_samples() first.")
         # 1. Phenotype subset
         y_vals = pd.to_numeric(self.phenotype_df[trait_name], errors='coerce').to_numpy()
         mask = np.isfinite(y_vals)
         
         # 2. Covariate subset (External + PCs)
-        cov_parts = []
+        ext_covs = None
         if self.covariate_df is not None:
              ext_covs = self.covariate_df[self.covariate_names].to_numpy(dtype=float)
-             cov_parts.append(ext_covs)
-        
-        if self.pcs is not None and self.pcs.size > 0:
-             cov_parts.append(self.pcs)
-             
-        if cov_parts:
-             full_cov = np.column_stack(cov_parts)
-             # Mask rows with missing covariates
-             cov_mask = np.isfinite(full_cov).all(axis=1)
+             cov_mask = np.isfinite(ext_covs).all(axis=1)
              mask = mask & cov_mask
-        else:
-             full_cov = None
 
         if mask.sum() == 0:
              self.log(f"   Skipping {trait_name}: No valid samples after QC.")
              return None
+
+        idx = np.where(mask)[0]
+        base_indices = np.asarray(self._matched_indices, dtype=int)
+        geno_idx = base_indices[idx]
+        is_full_geno = (
+            geno_idx.size == self.genotype_matrix.n_individuals
+            and np.array_equal(geno_idx, np.arange(self.genotype_matrix.n_individuals))
+        )
+
+        cache_hit = (
+            self._trait_cache_indices is not None
+            and self._trait_cache_n_pcs == n_pcs
+            and self._trait_cache_need_kinship == need_kinship
+            and np.array_equal(self._trait_cache_indices, geno_idx)
+        )
+
+        if cache_hit:
+            g_final = self._trait_cache_genotype
+            pcs = self._trait_cache_pcs
+            k_final = self._trait_cache_kinship
+        else:
+            # Try to reuse the genotype subset from compute_population_structure
+            if is_full_geno:
+                g_final = self.genotype_matrix
+            elif (
+                self._structure_genotype is not None
+                and self._structure_indices is not None
+                and np.array_equal(self._structure_indices, geno_idx)
+            ):
+                # Exact match - reuse cached structure genotype directly
+                g_final = self._structure_genotype
+            elif (
+                self._structure_genotype is not None
+                and self._structure_indices is not None
+                and len(geno_idx) < len(self._structure_indices)
+            ):
+                # Trait indices are likely a subset of structure indices (due to missing phenotypes)
+                # Subset from the in-memory cached genotype (fast) instead of memmap (slow)
+                # Create mapping: structure_indices -> local position
+                structure_set = set(self._structure_indices)
+                if all(idx in structure_set for idx in geno_idx):
+                    idx_map = {v: i for i, v in enumerate(self._structure_indices)}
+                    local_indices = np.array([idx_map[idx] for idx in geno_idx], dtype=int)
+                    g_final = self._structure_genotype.subset_individuals(local_indices)
+                else:
+                    # Fallback: some trait indices not in structure (shouldn't happen normally)
+                    g_final = self.genotype_matrix.subset_individuals(geno_idx)
+            else:
+                g_final = self.genotype_matrix.subset_individuals(geno_idx)
+
+            # Check if we can subset PCs/kinship from structure cache
+            # (when trait indices are a subset of structure indices)
+            can_subset_from_structure = (
+                self._structure_indices is not None
+                and len(geno_idx) <= len(self._structure_indices)
+            )
+            local_indices_for_structure = None
+            if can_subset_from_structure and not np.array_equal(self._structure_indices, geno_idx):
+                structure_set = set(self._structure_indices)
+                if all(idx in structure_set for idx in geno_idx):
+                    idx_map = {v: i for i, v in enumerate(self._structure_indices)}
+                    local_indices_for_structure = np.array([idx_map[idx] for idx in geno_idx], dtype=int)
+
+            if n_pcs > 0:
+                if (
+                    self._structure_indices is not None
+                    and np.array_equal(self._structure_indices, geno_idx)
+                    and self.pcs is not None
+                    and self.pcs.shape[0] == geno_idx.size
+                    and self.pcs.shape[1] == n_pcs
+                ):
+                    # Exact match - use cached PCs directly
+                    pcs = self.pcs
+                elif (
+                    local_indices_for_structure is not None
+                    and self.pcs is not None
+                    and self.pcs.shape[1] == n_pcs
+                ):
+                    # Subset PCs from structure cache (fast, avoids recomputing PCA)
+                    pcs = self.pcs[local_indices_for_structure, :]
+                else:
+                    pcs = PANICLE_PCA(M=g_final, pcs_keep=n_pcs, verbose=False)
+            else:
+                pcs = np.zeros((idx.size, 0))
+
+            k_final = None
+            if need_kinship:
+                if (
+                    self._structure_indices is not None
+                    and np.array_equal(self._structure_indices, geno_idx)
+                    and self.kinship is not None
+                    and self.kinship.shape[0] == geno_idx.size
+                ):
+                    # Exact match - use cached kinship directly
+                    k_final = self.kinship
+                elif (
+                    local_indices_for_structure is not None
+                    and self.kinship is not None
+                ):
+                    # Subset kinship from structure cache (fast, avoids recomputing)
+                    k_final = self.kinship[np.ix_(local_indices_for_structure, local_indices_for_structure)]
+                else:
+                    k_final = PANICLE_K_VanRaden(g_final, verbose=False)
+
+            self._trait_cache_indices = geno_idx
+            self._trait_cache_n_pcs = n_pcs
+            self._trait_cache_need_kinship = need_kinship
+            self._trait_cache_genotype = g_final
+            self._trait_cache_pcs = pcs
+            self._trait_cache_kinship = k_final
         
         # Apply mask
         y_final = np.column_stack([
@@ -812,28 +979,53 @@ class GWASPipeline:
         # Using simple numeric IDs 0..N-1 is safest for internal matrix math unless IDs are used for output
         y_final[:, 0] = np.arange(mask.sum())
 
-        idx = np.where(mask)[0]
-        g_final = self.genotype_matrix.subset_individuals(idx)
+        cov_parts = []
+        if ext_covs is not None:
+            cov_parts.append(ext_covs[mask, :])
+        if pcs is not None and pcs.size > 0:
+            cov_parts.append(pcs)
 
-        cov_final = full_cov[mask, :] if full_cov is not None else None
-        
-        k_final = None
-        if self.kinship is not None:
-             k_final = self.kinship[np.ix_(idx, idx)]
-             
+        cov_final = np.column_stack(cov_parts) if cov_parts else None
+
         return y_final, g_final, cov_final, k_final
 
-    def _save_trait_results(self, trait_name, results, threshold, alpha, n_tests, max_dosage, outputs, threshold_source, method_thresholds=None, method_threshold_sources=None, method_lambda_gc=None, n_samples=None, n_markers=None, runtime_seconds=None):
+    def _save_trait_results(self, trait_name, results, threshold, alpha, n_tests, max_dosage, outputs, threshold_source, method_thresholds=None, method_threshold_sources=None, method_lambda_gc=None, n_samples=None, n_markers=None, runtime_seconds=None, geno_for_maf: Optional[GenotypeMatrix] = None):
         """Internal helper to save tables and plots"""
         
         summary_data = []
         base_df = self.geno_map.to_dataframe().copy() if hasattr(self.geno_map, 'to_dataframe') else pd.DataFrame()
 
-        # Only calculate MAF if we're saving marker-level results
-        need_maf = 'all_marker_pvalues' in outputs or 'significant_marker_pvalues' in outputs
-        if need_maf:
-            maf = calculate_maf_from_genotypes(self.genotype_matrix, max_dosage=max_dosage)
-            base_df['MAF'] = maf
+        base_columns = base_df.columns.tolist()
+
+        def _insert_maf_column(df: pd.DataFrame, maf_values: np.ndarray) -> None:
+            if 'MAF' in df.columns:
+                df['MAF'] = maf_values
+                return
+            insert_at = len(df.columns)
+            if 'ALT' in df.columns:
+                insert_at = df.columns.get_loc('ALT') + 1
+            df.insert(insert_at, 'MAF', maf_values)
+
+        def _ordered_base_columns(df: pd.DataFrame) -> List[str]:
+            cols = list(base_columns)
+            if 'MAF' in df.columns and 'MAF' not in cols:
+                if 'ALT' in cols:
+                    cols.insert(cols.index('ALT') + 1, 'MAF')
+                else:
+                    cols.append('MAF')
+            return cols
+
+        def _maf_for_indices(indices: np.ndarray) -> np.ndarray:
+            if indices.size == 0:
+                return np.array([], dtype=float)
+            geno_source = geno_for_maf or self.genotype_matrix
+            if hasattr(geno_source, 'get_columns_imputed'):
+                geno_subset = geno_source.get_columns_imputed(indices, dtype=np.float64)
+                allele_freq = geno_subset.mean(axis=0) / max(max_dosage, 1e-12)
+            else:
+                geno_subset = np.asarray(geno_source)[:, indices]
+                allele_freq = np.nanmean(geno_subset, axis=0) / max(max_dosage, 1e-12)
+            return np.minimum(allele_freq, 1.0 - allele_freq)
 
         all_res_df = base_df.copy()
         sig_snps = []
@@ -954,13 +1146,15 @@ class GWASPipeline:
             if method == 'FarmCPUResampling':
                 continue
             method_columns.extend([f'{method}_P', f'{method}_Effect'])
-        if method_columns:
-            all_res_df = all_res_df[base_df.columns.tolist() + method_columns]
 
         if 'all_marker_pvalues' in outputs:
-            # Use gzip compression for large results files (typically 10x smaller)
-            # Uses pigz for parallel compression if available
-            to_csv_gzip(all_res_df, self.output_dir / f"GWAS_{trait_name}_all_results.csv.gz", index=False)
+            maf_source = geno_for_maf or self.genotype_matrix
+            maf_all = calculate_maf_from_genotypes(maf_source, max_dosage=max_dosage)
+            _insert_maf_column(all_res_df, maf_all)
+            ordered_base = _ordered_base_columns(all_res_df)
+            if method_columns:
+                all_res_df = all_res_df[ordered_base + method_columns]
+            all_res_df.to_csv(self.output_dir / f"GWAS_{trait_name}_all_results.csv", index=False)
             
         if resampling_hit_snps:
             resampling_mask = all_res_df['SNP'].astype(str).isin(resampling_hit_snps).to_numpy()
@@ -979,9 +1173,16 @@ class GWASPipeline:
             any_hits = np.array([bool(labels) for labels in method_labels], dtype=bool)
             if np.any(any_hits):
                 sig_df = all_res_df.loc[any_hits].copy()
+                if 'MAF' not in sig_df.columns:
+                    sig_indices = np.where(any_hits)[0]
+                    maf_subset = _maf_for_indices(sig_indices)
+                    _insert_maf_column(sig_df, maf_subset)
                 sig_df['Method'] = [
                     "|".join(method_labels[idx]) for idx in np.where(any_hits)[0]
                 ]
+                ordered_base = _ordered_base_columns(sig_df)
+                if method_columns:
+                    sig_df = sig_df[ordered_base + method_columns + ['Method']]
                 sig_df.to_csv(self.output_dir / f"GWAS_{trait_name}_significant.csv", index=False)
             
         return summary_data

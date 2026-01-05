@@ -130,17 +130,35 @@ def impute_major_allele_inplace(geno: np.ndarray, missing_value: int = -9) -> in
 
 class GenotypeMatrix:
     """Memory-efficient genotype matrix with lazy loading support
-    
+
     Handles large genotype matrices that may not fit in memory.
     Compatible with R rMVP memory-mapped format.
     Includes pre-computed major alleles for efficient missing data imputation.
+
+    Supports column-major (transposed) storage for efficient individual subsetting.
+    When transposed=True, internal data is stored as (n_markers, n_individuals)
+    but the API still presents it as (n_individuals, n_markers).
     """
-    
+
     def __init__(self, data: Union[np.ndarray, str, Path],
                  shape: Optional[Tuple[int, int]] = None,
                  dtype: np.dtype = np.int8,
                  precompute_alleles: bool = True,
-                 is_imputed: bool = False):
+                 is_imputed: bool = False,
+                 transposed: bool = False):
+        """Initialize GenotypeMatrix.
+
+        Args:
+            data: Numpy array, memmap, or path to memory-mapped file
+            shape: Shape for memory-mapped files (n_individuals, n_markers)
+                   or (n_markers, n_individuals) if transposed=True
+            dtype: Data type for memory-mapped files
+            precompute_alleles: Pre-compute major alleles for imputation
+            is_imputed: Whether data has been pre-imputed (no -9 values)
+            transposed: If True, internal storage is (n_markers, n_individuals)
+                       for fast individual subsetting on memmaps
+        """
+        self._transposed = transposed
 
         if isinstance(data, np.memmap):
             self._data = data
@@ -171,13 +189,16 @@ class GenotypeMatrix:
     @property
     def shape(self) -> Tuple[int, int]:
         """Matrix shape (n_individuals, n_markers)"""
+        if self._transposed:
+            # Internal storage is (n_markers, n_individuals)
+            return (self._data.shape[1], self._data.shape[0])
         return self._data.shape
-    
+
     @property
     def n_individuals(self) -> int:
         """Number of individuals"""
         return self.shape[0]
-    
+
     @property
     def n_markers(self) -> int:
         """Number of markers"""
@@ -191,20 +212,44 @@ class GenotypeMatrix:
         """
         return self._is_imputed
 
+    @property
+    def is_transposed(self) -> bool:
+        """Whether internal storage is transposed (n_markers, n_individuals).
+
+        When True, individual subsetting is fast (column slice on memmap).
+        """
+        return self._transposed
+
     def __getitem__(self, key):
-        """Support array indexing"""
+        """Support array indexing - returns data in (individuals, markers) order"""
+        if self._transposed:
+            # Transpose the key for internal access
+            if isinstance(key, tuple) and len(key) == 2:
+                return self._data[key[1], key[0]].T if hasattr(self._data[key[1], key[0]], 'T') else self._data[key[1], key[0]]
+            # For simple indexing, return transposed view
+            return self._data.T[key]
         return self._data[key]
-    
+
     def get_marker(self, marker_idx: int) -> np.ndarray:
         """Get genotypes for a specific marker"""
+        if self._transposed:
+            return self._data[marker_idx, :]
         return self._data[:, marker_idx]
-    
+
     def get_individual(self, ind_idx: int) -> np.ndarray:
         """Get genotypes for a specific individual"""
+        if self._transposed:
+            return self._data[:, ind_idx]
         return self._data[ind_idx, :]
-    
+
     def get_batch(self, marker_start: int, marker_end: int) -> np.ndarray:
-        """Get batch of markers for efficient processing"""
+        """Get batch of markers for efficient processing.
+
+        Returns array of shape (n_individuals, n_markers_in_batch).
+        """
+        if self._transposed:
+            # Internal: (markers, individuals), need to return (individuals, markers)
+            return self._data[marker_start:marker_end, :].T
         return self._data[:, marker_start:marker_end]
 
     def subset_individuals(
@@ -217,6 +262,9 @@ class GenotypeMatrix:
 
         Preserves the is_imputed flag so downstream code can use fast paths
         when genotypes are already imputed.
+
+        When data is transposed (column-major), this is a fast column slice.
+        The returned GenotypeMatrix is NOT transposed (standard row-major).
         """
         if isinstance(indices, list):
             indices = np.asarray(indices)
@@ -224,13 +272,23 @@ class GenotypeMatrix:
             indexer = indices
         else:
             indexer = np.asarray(indices, dtype=int)
-        subset = self._data[indexer, :]
+
+        if self._transposed:
+            # Fast path: column slice on transposed data
+            # Internal: (n_markers, n_individuals) -> slice columns
+            # Result needs to be (n_individuals_subset, n_markers) for standard format
+            subset = self._data[:, indexer].T.copy()
+        else:
+            # Slow path: row slice on row-major data
+            subset = self._data[indexer, :]
+
         if precompute_alleles is None:
             precompute_alleles = not self._is_imputed
         return GenotypeMatrix(
             subset,
             precompute_alleles=precompute_alleles,
             is_imputed=self._is_imputed,
+            transposed=False,  # Result is always standard format
         )
     
     def calculate_allele_frequencies(
@@ -331,9 +389,14 @@ class GenotypeMatrix:
         out_dtype = np.dtype(dtype)
         if self._is_imputed:
             # Fast path: data contains no missing values, so skip mask checks.
+            if self._transposed:
+                return self._data[marker_idx, :].astype(out_dtype, copy=True)
             return self._data[:, marker_idx].astype(out_dtype, copy=True)
 
-        marker = self._data[:, marker_idx].astype(out_dtype, copy=True)
+        if self._transposed:
+            marker = self._data[marker_idx, :].astype(out_dtype, copy=True)
+        else:
+            marker = self._data[:, marker_idx].astype(out_dtype, copy=True)
 
         missing_mask = (marker == -9) | np.isnan(marker)
         if not missing_mask.any():
@@ -362,13 +425,21 @@ class GenotypeMatrix:
             fill_value: Optional constant to impute missing genotypes.
                 If None, the pre-computed major allele is used (rMVP default).
             dtype: Output dtype for the returned array (default float64).
+
+        Returns:
+            Array of shape (n_individuals, n_markers_in_batch).
         """
         out_dtype = np.dtype(dtype)
         if self._is_imputed:
             # Fast path: pre-imputed data, no missing checks needed.
+            if self._transposed:
+                return self._data[marker_start:marker_end, :].T.astype(out_dtype, copy=True)
             return self._data[:, marker_start:marker_end].astype(out_dtype, copy=True)
 
-        batch = self._data[:, marker_start:marker_end].astype(out_dtype, copy=True)
+        if self._transposed:
+            batch = self._data[marker_start:marker_end, :].T.astype(out_dtype, copy=True)
+        else:
+            batch = self._data[:, marker_start:marker_end].astype(out_dtype, copy=True)
 
         if batch.size == 0:
             return batch
@@ -402,10 +473,15 @@ class GenotypeMatrix:
         out_dtype = np.dtype(dtype)
         if self._is_imputed:
             # Fast path: pre-imputed data, no missing checks needed.
+            if self._transposed:
+                return self._data[indices, :].T.astype(out_dtype, copy=True)
             return self._data[:, indices].astype(out_dtype, copy=True)
 
         # Slice and copy to ensure we don't mutate underlying storage
-        batch = self._data[:, indices].astype(out_dtype, copy=True)
+        if self._transposed:
+            batch = self._data[indices, :].T.astype(out_dtype, copy=True)
+        else:
+            batch = self._data[:, indices].astype(out_dtype, copy=True)
 
         if batch.size == 0:
             return batch

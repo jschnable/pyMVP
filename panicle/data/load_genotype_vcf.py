@@ -341,25 +341,25 @@ def load_genotype_vcf(
     cache_geno = cache_base + '.panicle.v2.geno.npy'
     cache_ind = cache_base + '.panicle.v2.ind.txt'
     cache_map = cache_base + '.panicle.v2.map.csv'
-    
+
     # Check if cache exists and is fresh
     try:
         if not force_recache:
             if os.path.exists(cache_geno) and os.path.exists(cache_ind) and os.path.exists(cache_map):
                 vcf_mtime = os.path.getmtime(vcf_path)
-                if (os.path.getmtime(cache_geno) > vcf_mtime and 
-                    os.path.getmtime(cache_ind) > vcf_mtime and 
+                if (os.path.getmtime(cache_geno) > vcf_mtime and
+                    os.path.getmtime(cache_ind) > vcf_mtime and
                     os.path.getmtime(cache_map) > vcf_mtime):
-                    
+
                     print(f"   [Cache] Loading binary cache for {vcf_path}...")
-                    
+
                     # Load Genotypes (memmap for speed/memory efficiency)
                     geno_matrix = np.load(cache_geno, mmap_mode='r')
-                    
+
                     # Load Individuals
                     with open(cache_ind, 'r') as f:
                         individual_ids = [line.strip() for line in f]
-                        
+
                     # Load Map
                     geno_map = pd.read_csv(cache_map)
 
@@ -853,17 +853,17 @@ def load_genotype_vcf(
         # Save only if successful
         print(f"   [Cache] Saving binary cache to {cache_base}.panicle.v2.*")
         np.save(cache_geno, geno)
-        
+
         with open(cache_ind, 'w') as f:
             for ind in individual_ids:
                 f.write(f"{ind}\n")
-                
+
         # Save Map
         if isinstance(geno_map, list):
              pd.DataFrame(geno_map).to_csv(cache_map, index=False)
         else:
              geno_map.to_csv(cache_map, index=False)
-             
+
     except Exception as e:
         print(f"   [Cache] Warning: Failed to save cache: {e}")
     # --- CACHING LOGIC SAVE END ---

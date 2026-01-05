@@ -8,7 +8,7 @@ When you run a GWAS analysis, PANICLE creates the following files in your specif
 
 ```
 output_dir/
-├── GWAS_{trait}_all_results.csv.gz                 # Full results for each trait (gzip compressed)
+├── GWAS_{trait}_all_results.csv                 # Full results for each trait
 ├── GWAS_{trait}_significant.csv                    # Significant SNPs only
 ├── GWAS_{trait}_{method}_manhattan.png             # Manhattan plot per method
 ├── GWAS_{trait}_{method}_qq.png                    # QQ plot per method
@@ -18,7 +18,7 @@ output_dir/
 Example for analyzing Height with MLM and GLM:
 ```
 my_results/
-├── GWAS_Height_all_results.csv.gz
+├── GWAS_Height_all_results.csv
 ├── GWAS_Height_significant.csv
 ├── GWAS_Height_GLM_manhattan.png
 ├── GWAS_Height_GLM_qq.png
@@ -27,15 +27,15 @@ my_results/
 └── GWAS_summary_by_traits_methods.csv
 ```
 
-**Note:** Full results files (`all_results.csv.gz`) are gzip compressed by default to save disk space (typically 10x smaller). Pandas reads these files automatically: `pd.read_csv('file.csv.gz')`.
+**Note:** Full results files are written as plain CSV by default. You can gzip them yourself if disk space is a concern.
 
 ---
 
 ## File Formats
 
-### 1. Full Results CSV: `GWAS_{trait}_all_results.csv.gz`
+### 1. Full Results CSV: `GWAS_{trait}_all_results.csv`
 
-Contains association statistics for **all markers** across **all methods** run for a trait. This file is gzip compressed by default.
+Contains association statistics for **all markers** across **all methods** run for a trait.
 
 #### Column Descriptions
 
@@ -74,8 +74,8 @@ rs789,Chr02,50432,G,A,0.12,0.045,-0.023,0.067,-0.019
 ```python
 import pandas as pd
 
-# Load results (pandas reads .gz files automatically)
-results = pd.read_csv('my_results/GWAS_Height_all_results.csv.gz')
+# Load results
+results = pd.read_csv('my_results/GWAS_Height_all_results.csv')
 
 # Get top 10 SNPs by MLM p-value
 top_snps = results.nsmallest(10, 'MLM_P')
