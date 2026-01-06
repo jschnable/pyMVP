@@ -38,6 +38,26 @@ from ..matrix.pca import PANICLE_PCA
 from ..matrix.kinship import PANICLE_K_VanRaden
 from ..visualization.manhattan import PANICLE_Report
 
+# Internal helper for resampling progress logging.
+class _FarmCPUResamplingProgressReporter:
+    def __init__(self, log_fn, trait_name: str):
+        self._log = log_fn
+        self._trait_name = trait_name
+        self._started = False
+        self._total_elapsed = 0.0
+
+    def __call__(self, run_idx: int, total_runs: int, run_seconds: float) -> None:
+        if not self._started:
+            self._log(f"[{self._trait_name}] started resampling ({total_runs} runs)")
+            self._started = True
+        self._total_elapsed += float(run_seconds)
+        self._log(
+            f"[{self._trait_name}] run {run_idx}/{total_runs} "
+            f"finished in {run_seconds:.2f}s (total {self._total_elapsed:.2f}s)"
+        )
+        if run_idx >= total_runs:
+            self._log(f"[{self._trait_name}] finished resampling in {self._total_elapsed:.0f}s")
+
 # Helper function for parallel execution
 def _run_single_method(method, y_sub, g_sub, cov_sub, k_sub, map_data, fc_params, blk_params, max_iterations, base_threshold, n_markers, n_eff=None, alpha=0.05):
     """Worker function to run a single GWAS method in a separate process."""
@@ -727,7 +747,10 @@ class GWASPipeline:
 
             # Only run parallel executor if there are parallel methods to run
             if parallel_methods:
-                self.log(f"   Running parallel analysis for: {parallel_methods}")
+                if len(parallel_methods) > 1:
+                    self.log(f"   Running parallel analysis for: {parallel_methods}")
+                else:
+                    self.log(f"   Running analysis for: {parallel_methods}")
 
                 if len(parallel_methods) == 1:
                     method = parallel_methods[0]
@@ -791,6 +814,9 @@ class GWASPipeline:
                      mask_prop = fc_params.get('resampling_mask_proportion', 0.1)
                      cluster = fc_params.get('resampling_cluster_markers', False)
                      ld_thresh = fc_params.get('resampling_ld_threshold', 0.7)
+                     progress_callback = fc_params.get('resampling_progress_callback')
+                     if progress_callback is None and fc_params.get('resampling_progress'):
+                         progress_callback = _FarmCPUResamplingProgressReporter(self.log, trait_name)
                      res = PANICLE_FarmCPUResampling(
                          phe=y_sub, geno=g_sub, map_data=self.geno_map, CV=cov_sub,
                          runs=runs,
@@ -799,6 +825,7 @@ class GWASPipeline:
                          cluster_markers=cluster,
                          ld_threshold=ld_thresh,
                          trait_name=trait_name,
+                         progress_callback=progress_callback,
                          verbose=False
                      )
                      method_results['FarmCPUResampling'] = res
@@ -821,6 +848,7 @@ class GWASPipeline:
                 geno_for_maf=g_sub
             )
             summary_rows.extend(trait_summary)
+            self.log(f"Trait {trait_name} completed in {trait_runtime:.2f} seconds")
 
         # Final Summary
         if summary_rows:

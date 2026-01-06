@@ -168,7 +168,6 @@ pipeline.run_analysis(
     significance=None,
     alpha=0.05,
     n_eff=None,
-    use_effective_tests=True,
     max_genotype_dosage=2.0,
     farmcpu_params=None,
     blink_params=None,
@@ -187,7 +186,6 @@ pipeline.run_analysis(
 - `significance` (float, optional): Fixed p-value threshold. If None, uses Bonferroni correction
 - `alpha` (float): Significance level for Bonferroni correction. Default: 0.05
 - `n_eff` (int, optional): Effective number of tests for Bonferroni. If None, uses total markers or M_eff
-- `use_effective_tests` (bool): Use effective tests (if computed) instead of total markers. Default: True
 - `max_genotype_dosage` (float): Maximum genotype dosage for MAF calculation. Default: 2.0
 - `farmcpu_params` (dict, optional): Parameters for FarmCPU
 - `blink_params` (dict, optional): Parameters for BLINK

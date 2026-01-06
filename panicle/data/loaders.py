@@ -503,6 +503,9 @@ def load_genotype_file(filepath: Union[str, Path],
         cache_map = cache_base + '.panicle.v2.map.csv'
         force_recache = bool(kwargs.get('force_recache', False))
 
+        min_maf = float(kwargs.get('min_maf', 0.0))
+        max_missing = float(kwargs.get('max_missing', 1.0))
+        drop_monomorphic = bool(kwargs.get('drop_monomorphic', False))
         geno_np = None
         individual_ids: List[str] | None = None
         geno_map_df = None
@@ -521,6 +524,14 @@ def load_genotype_file(filepath: Union[str, Path],
                         geno_map_df = pd.read_csv(cache_map)
                         geno_map_df.attrs["is_imputed"] = True
                         loaded_from_cache = True
+                        if min_maf > 0.0 or max_missing < 1.0 or drop_monomorphic:
+                            print(
+                                "   [Cache] Warning: cached genotype data loaded; "
+                                "min_maf/max_missing/drop_monomorphic filters are not re-applied "
+                                f"(min_maf={min_maf}, max_missing={max_missing}, "
+                                f"drop_monomorphic={drop_monomorphic}). "
+                                "Use --force-recache or delete the cache files to rebuild."
+                            )
         except Exception as e:
             print(f"   [Cache] Failed to load cache: {e}")
 

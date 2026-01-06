@@ -352,6 +352,14 @@ def load_genotype_vcf(
                     os.path.getmtime(cache_map) > vcf_mtime):
 
                     print(f"   [Cache] Loading binary cache for {vcf_path}...")
+                    if min_maf > 0.0 or max_missing < 1.0 or drop_monomorphic:
+                        print(
+                            "   [Cache] Warning: cached genotype data loaded; "
+                            "min_maf/max_missing/drop_monomorphic filters are not re-applied "
+                            f"(min_maf={min_maf}, max_missing={max_missing}, "
+                            f"drop_monomorphic={drop_monomorphic}). "
+                            "Use --force-recache or delete the cache files to rebuild."
+                        )
 
                     # Load Genotypes (memmap for speed/memory efficiency)
                     geno_matrix = np.load(cache_geno, mmap_mode='r')

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -280,6 +281,7 @@ def PANICLE_FarmCPUResampling(
     trait_name: str = "Trait",
     random_seed: Optional[int] = None,
     verbose: bool = False,
+    progress_callback: Optional[Callable[[int, int, float], None]] = None,
     **farmcpu_kwargs,
 ) -> FarmCPUResamplingResults:
     """Run FarmCPU repeatedly with phenotype masking to calculate RMIP."""
@@ -312,6 +314,7 @@ def PANICLE_FarmCPUResampling(
     snp_ids, chroms, positions = _ensure_map_arrays(map_data)
 
     for run_idx in range(runs):
+        run_start = time.time()
         mask_count = int(round(mask_proportion * valid_trait_indices.size))
         if mask_count == 0 and mask_proportion > 0.0 and valid_trait_indices.size > 1:
             mask_count = 1
@@ -347,6 +350,8 @@ def PANICLE_FarmCPUResampling(
         significant_markers = np.where(pvalues <= significance_threshold)[0]
         marker_counts[significant_markers] += 1
         run_marker_lists.append(significant_markers.astype(np.int32))
+        if progress_callback is not None:
+            progress_callback(run_idx + 1, runs, time.time() - run_start)
 
     if cluster_markers:
         run_marker_sets = [set(marker_list.tolist()) for marker_list in run_marker_lists]

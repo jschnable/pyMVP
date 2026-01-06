@@ -63,8 +63,6 @@ def parse_args():
                        help="Effective number of markers")
     parser.add_argument("--compute-effective-tests", action='store_true',
                        help="Compute effective tests")
-    parser.add_argument("--use-effective-tests", action='store_true', 
-                       help="Use effective tests for Bonferroni")
 
     # Options
     parser.add_argument("--max-genotype-dosage", type=float, default=2.0,

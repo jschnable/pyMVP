@@ -79,8 +79,7 @@ python scripts/run_GWAS.py \
 | **`--traits`** | Comma-separated list of columns to analyze. | All numeric |
 | **`--methods`** | GWAS methods: `GLM`, `MLM`, `FarmCPU`, `BLINK`, `FarmCPUResampling`. | GLM,MLM,FarmCPU,BLINK |
 | **`--n-pcs`** | Number of Principal Components for population structure. | 3 |
-| **`--compute-effective-tests`** | Calculate Effective SNP Number (Me) for Bonferroni correction. | False |
-| **`--use-effective-tests`** | Use Me (if available) for Bonferroni correction. | False |
+| **`--compute-effective-tests`** | Calculate Effective SNP Number (Me) and use it for Bonferroni correction. | False |
 | **`--alpha`** | Significance level (e.g., 0.05). Threshold = `alpha / Me` (or `M`). | 0.05 |
 | **`--significance`** | Fixed p-value threshold (overrides Bonferroni). | None |
 | **`--n-eff`** | Effective number of markers (overrides Me). | None |

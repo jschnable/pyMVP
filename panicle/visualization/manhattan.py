@@ -421,7 +421,8 @@ def create_manhattan_plot(pvalues: np.ndarray,
             keep_mask[top_indices] = True
 
         log_pvals = -np.log10(safe_pvals)
-        log_bins = np.floor(log_pvals).astype(int)
+        bin_width = 0.1
+        log_bins = np.floor(log_pvals / bin_width).astype(int)
         max_bin = int(log_bins.max()) if log_bins.size else 0
         rng = np.random.default_rng(42)
 
@@ -432,7 +433,7 @@ def create_manhattan_plot(pvalues: np.ndarray,
             candidates = bin_indices[~keep_mask[bin_indices]]
             if candidates.size == 0:
                 continue
-            n_keep = min(5000, candidates.size)
+            n_keep = min(1000, candidates.size)
             if n_keep < candidates.size:
                 selected = rng.choice(candidates, size=n_keep, replace=False)
             else:

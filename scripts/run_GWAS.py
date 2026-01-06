@@ -117,7 +117,7 @@ def main():
         'min_maf': args.min_maf,
         'include_indels': not args.snps_only,
         'split_multiallelic': not args.no_split_multiallelic,
-        'compute_effective_tests': args.compute_effective_tests or args.use_effective_tests
+        'compute_effective_tests': args.compute_effective_tests
     }
 
     pipeline.load_data(
@@ -160,7 +160,7 @@ def main():
     def _resolve_denom() -> float:
         if args.n_eff:
             return float(args.n_eff)
-        if args.use_effective_tests or args.compute_effective_tests:
+        if args.compute_effective_tests:
             if pipeline.effective_tests_info and pipeline.effective_tests_info.get("Me"):
                 return float(pipeline.effective_tests_info["Me"])
         return float(pipeline.genotype_matrix.n_markers)
@@ -200,6 +200,9 @@ def main():
     if args.farmcpu_p_threshold is not None:
         farmcpu_params["p_threshold"] = args.farmcpu_p_threshold
 
+    if "FarmCPUResampling" in valid_methods:
+        farmcpu_params.setdefault("resampling_progress", True)
+
     pipeline.run_analysis(
         traits=traits,
         methods=valid_methods,
@@ -207,7 +210,6 @@ def main():
         significance=args.significance,
         alpha=args.alpha,
         n_eff=args.n_eff,
-        use_effective_tests=args.use_effective_tests or args.compute_effective_tests,
         max_genotype_dosage=args.max_genotype_dosage,
         farmcpu_params=farmcpu_params,
         outputs=outputs

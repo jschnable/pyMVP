@@ -237,7 +237,6 @@ pipeline.load_data(
 pipeline.run_analysis(
     traits=['MyTrait'],
     methods=['MLM'],
-    use_effective_tests=True  # Use M_eff for threshold calculation
 )
 ```
 
