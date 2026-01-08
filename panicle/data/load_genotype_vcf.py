@@ -428,7 +428,7 @@ def load_genotype_vcf(
         # Guard: .bcf is binary and not supported by builtin parser
         if is_bcf: # This case should have been caught by the `if is_bcf` block above
             raise ImportError('Loading .bcf requires cyvcf2. Install with "pip install cyvcf2" or convert to .vcf/.vcf.gz.')
-        vcf = _BuiltinVCF(vcf_path)
+        # vcf reader not needed here; builtin path uses _open_text() directly below
 
     # Initialize
     individual_ids = None
