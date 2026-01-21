@@ -190,6 +190,8 @@ def load_phenotype_file(filepath: Union[str, Path],
             df = df.rename(columns={first_col: 'ID'})
     else:
         print(f"   Using specified ID column: '{id_column}'")
+        if id_column != 'ID':
+            df = df.rename(columns={id_column: 'ID'})
     
     # Auto-detect trait columns if not specified
     if trait_columns is None:
