@@ -76,8 +76,16 @@ def _numeric_chromosomes(chrom_series: "pd.Series") -> np.ndarray:
     """Convert chromosome labels to numeric values (preserve relative ordering)."""
     import pandas as pd  # local import to avoid hard dependency at import time
 
-    if np.issubdtype(chrom_series.dtype, np.number):
-        return chrom_series.to_numpy(dtype=float, copy=False)
+    # Check if dtype is numeric, handling pandas extension dtypes (e.g., StringDtype)
+    # that numpy doesn't understand
+    try:
+       is_numeric = np.issubdtype(chrom_series.dtype, np.number)
+    except TypeError:
+       # pandas StringDtype or other non-numpy dtype
+       is_numeric = False
+       
+    if is_numeric:
+       return chrom_series.to_numpy(dtype=float, copy=False)
 
     chrom_as_str = chrom_series.astype(str)
     chrom_order = sorted(chrom_as_str.unique(), key=lambda val: (len(val), val))
