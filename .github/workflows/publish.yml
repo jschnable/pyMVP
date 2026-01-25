@@ -49,7 +49,7 @@ jobs:
         run: pip install dist/*.whl
 
       - name: Test import
-        run: python -c "import panicle; print(f'PANICLE version: {panicle.__version__}')"
+        run: python -c "import panicle; print('PANICLE version:', panicle.__version__)"
 
   publish-testpypi:
     needs: test-install
