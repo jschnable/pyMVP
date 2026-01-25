@@ -10,13 +10,12 @@ authors = [
     {name = "James C. Schnable", email = "james.schnable@gmail.com"}
 ]
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.9"
 keywords = ["GWAS", "genomics", "bioinformatics", "genetics", "SNP", "association", "QTL", "phenotype"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
