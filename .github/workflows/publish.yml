@@ -74,8 +74,6 @@ jobs:
     needs: publish-testpypi
     runs-on: ubuntu-latest
     environment: pypi
-    # Set to true once you've configured PyPI trusted publishing
-    if: ${{ vars.ENABLE_PYPI_PUBLISH == 'true' }}
     permissions:
       id-token: write
     steps:
