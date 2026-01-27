@@ -1,5 +1,6 @@
 # PANICLE: Python Algorithms for Nucleotide-phenotype Inference and Chromosome-wide Locus Evaluation
 
+[![PyPI version](https://badge.fury.io/py/panicle.svg)](https://pypi.org/project/panicle/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -16,13 +17,25 @@ PANICLE is a **Python package for Genome Wide Association Studies (GWAS)**. It i
 Requires Python 3.9+.
 
 ```bash
-git clone https://github.com/jschnable/PANICLE.git
-cd PANICLE
-pip install -e .
+pip install panicle
 ```
 
-*Optional dependencies for VCF/PLINK support:*
+*With optional dependencies for PLINK format support:*
 ```bash
+pip install panicle[plink]
+```
+
+*Or install all optional dependencies:*
+```bash
+pip install panicle[all]
+```
+
+### Development Installation
+
+To install from source for development:
+```bash
+git clone https://github.com/jschnable/PANICLE.git
+cd PANICLE
 pip install -e .[all]
 ```
 
