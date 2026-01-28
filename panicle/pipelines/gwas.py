@@ -620,18 +620,45 @@ class GWASPipeline:
 
         self.log_step("Step 4: Running GWAS analysis")
 
-        # 1. Trait Selection
+        # 1. Trait Selection — with case-insensitive / whitespace-stripped fallback
         available_traits = [c for c in self.phenotype_df.columns if c != 'ID' and pd.api.types.is_numeric_dtype(self.phenotype_df[c])]
         if traits:
-             selected_traits = [t for t in traits if t in available_traits]
-             missing = set(traits) - set(available_traits)
-             if missing:
-                 self.log(f"   Warning: Traits not found or non-numeric: {missing}")
+             lower_map = {t.lower(): t for t in available_traits}
+             stripped_map = {t.strip().lower(): t for t in available_traits}
+
+             selected_traits = []
+             still_missing = []
+             for t in traits:
+                 if t in available_traits:
+                     selected_traits.append(t)
+                 elif t.lower() in lower_map:
+                     actual = lower_map[t.lower()]
+                     selected_traits.append(actual)
+                     self.log(f"   Note: trait '{t}' matched '{actual}' (case-insensitive)")
+                 elif t.strip().lower() in stripped_map:
+                     actual = stripped_map[t.strip().lower()]
+                     selected_traits.append(actual)
+                     self.log(f"   Note: trait '{t}' matched '{actual}' (after stripping whitespace)")
+                 else:
+                     still_missing.append(t)
+
+             if still_missing:
+                 self.log(f"   Warning: Traits not found or non-numeric: {still_missing}")
+                 self.log(f"   Available traits: {available_traits}")
         else:
              selected_traits = available_traits
 
         if not selected_traits:
-            raise ValueError("No valid traits found to analyze.")
+            if available_traits:
+                raise ValueError(f"No valid traits found to analyze. Available traits: {available_traits}")
+            else:
+                all_cols = [c for c in self.phenotype_df.columns if c != 'ID']
+                raise ValueError(
+                    "No valid traits found to analyze. "
+                    "The phenotype file has no numeric trait columns loaded. "
+                    "Check that the --traits names match the column names in "
+                    f"your phenotype file. Loaded columns (non-ID): {all_cols}"
+                )
 
         methods_upper_check = [m.upper() for m in methods]
         need_kinship = 'MLM' in methods_upper_check

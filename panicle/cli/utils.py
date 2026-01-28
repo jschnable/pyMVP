@@ -1,5 +1,5 @@
 import argparse
-from typing import List
+from typing import List, Optional
 
 OUTPUT_CHOICES = (
     'all_marker_pvalues',
@@ -7,6 +7,46 @@ OUTPUT_CHOICES = (
     'manhattan',
     'qq',
 )
+
+VALID_FORMATS = ('csv', 'tsv', 'numeric', 'vcf', 'plink', 'hapmap')
+FORMAT_ALIASES = {'bcf': 'vcf'}
+
+def normalize_format(fmt: Optional[str]) -> Optional[str]:
+    """Normalize a genotype format string with case-insensitive matching.
+
+    Tries an exact match first, then case-insensitive, then stripped +
+    case-insensitive.  ``bcf`` is accepted as an alias for ``vcf``.
+    Returns *None* when *fmt* is None (auto-detect).
+    """
+    if fmt is None:
+        return None
+
+    # 1. Exact match
+    if fmt in VALID_FORMATS:
+        return fmt
+    if fmt in FORMAT_ALIASES:
+        return FORMAT_ALIASES[fmt]
+
+    # 2. Case-insensitive match
+    key = fmt.lower()
+    if key in VALID_FORMATS:
+        return key
+    if key in FORMAT_ALIASES:
+        return FORMAT_ALIASES[key]
+
+    # 3. Stripped + case-insensitive
+    key = fmt.strip().lower()
+    if key in VALID_FORMATS:
+        return key
+    if key in FORMAT_ALIASES:
+        return FORMAT_ALIASES[key]
+
+    valid = ', '.join(sorted(set(VALID_FORMATS) | set(FORMAT_ALIASES)))
+    raise argparse.ArgumentTypeError(
+        f"Unrecognized genotype format: '{fmt}'. "
+        f"Valid formats: {valid}"
+    )
+
 
 def normalize_outputs(outputs: List[str]) -> List[str]:
     """Helper to normalize output choices"""
@@ -23,7 +63,7 @@ def normalize_outputs(outputs: List[str]) -> List[str]:
 def parse_args():
     """Parse command line arguments for GWAS pipeline"""
     parser = argparse.ArgumentParser(
-        description="Comprehensive GWAS Analysis using pyMVP",
+        description="Comprehensive GWAS Analysis using PANICLE",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -31,7 +71,10 @@ def parse_args():
     parser.add_argument("--phenotype", "-p", required=True,
                        help="Phenotype file (CSV/TSV with ID column and trait columns)")
     parser.add_argument("--phenotype-id-column", default='ID',
-                       help="Column name for sample IDs in phenotype file")
+                       help="Column name for sample IDs in phenotype file. "
+                            "Auto-detected if column is named: ID, IID, Sample, "
+                            "Taxa, Genotype, or Accession. If none match, the "
+                            "first column is used.")
     parser.add_argument("--genotype", "-g", required=True,
                        help="Genotype file")
     
@@ -46,11 +89,11 @@ def parse_args():
                        help="Comma-separated list of covariate column names")
     parser.add_argument("--covariate-id-column", default='ID',
                        help="Column name for sample IDs in covariate file")
-    parser.add_argument("--format", "-f", default=None, 
-                       choices=['csv', 'tsv', 'numeric', 'vcf', 'plink', 'hapmap'],
-                       help="Genotype file format")
-    parser.add_argument("--methods", default="GLM,MLM,FarmCPU,BLINK",
-                       help="Methods to run (comma-separated)")
+    parser.add_argument("--format", "-f", default=None,
+                       type=normalize_format,
+                       help="Genotype file format (csv, tsv, numeric, vcf, bcf, plink, hapmap)")
+    parser.add_argument("--methods", default="GLM,MLM,FarmCPU",
+                       help="Methods to run (comma-separated: GLM, MLM, FarmCPU, BLINK)")
     parser.add_argument("--n-pcs", type=int, default=3,
                        help="Number of PCs")
     

@@ -208,10 +208,42 @@ def load_phenotype_file(filepath: Union[str, Path],
         if trait_columns:
             df[trait_columns] = df[trait_columns].apply(pd.to_numeric, errors='coerce')
     else:
-        # Coerce declared trait columns to numeric
-        present = [c for c in trait_columns if c in df.columns]
-        if present:
-            df[present] = df[present].apply(pd.to_numeric, errors='coerce')
+        # Resolve user-specified trait names to actual column names,
+        # falling back to case-insensitive and whitespace-stripped matching.
+        available = [c for c in df.columns if c != 'ID']
+        lower_map = {c.lower(): c for c in available}
+        stripped_map = {c.strip().lower(): c for c in available}
+
+        resolved_cols = []
+        unresolved = []
+        for t in trait_columns:
+            # 1. Exact match
+            if t in available:
+                resolved_cols.append(t)
+                continue
+            # 2. Case-insensitive match
+            if t.lower() in lower_map:
+                actual = lower_map[t.lower()]
+                resolved_cols.append(actual)
+                print(f"   Note: trait '{t}' matched column '{actual}' (case-insensitive)")
+                continue
+            # 3. Stripped + case-insensitive match
+            key = t.strip().lower()
+            if key in stripped_map:
+                actual = stripped_map[key]
+                resolved_cols.append(actual)
+                print(f"   Note: trait '{t}' matched column '{actual}' (after stripping whitespace)")
+                continue
+            unresolved.append(t)
+
+        if unresolved:
+            print(f"   Warning: Traits not found in phenotype file: {unresolved}")
+            print(f"   Available columns: {available}")
+
+        # Coerce resolved trait columns to numeric
+        trait_columns = resolved_cols
+        if trait_columns:
+            df[trait_columns] = df[trait_columns].apply(pd.to_numeric, errors='coerce')
 
     # Keep only ID and specified trait columns
     columns_to_keep = ['ID'] + [col for col in trait_columns if col in df.columns]
