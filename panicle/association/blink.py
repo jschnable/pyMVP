@@ -648,14 +648,16 @@ def _get_covariate_statistics(
     if rank < X.shape[1] or n <= X.shape[1]:
         return np.ones(n_cov), np.zeros(n_cov), np.ones(n_cov)
 
-    XtX = X.T @ X
-    try:
-        XtX_inv = np.linalg.inv(XtX)
-    except np.linalg.LinAlgError:
-        XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
+    # Suppress spurious FPE warnings from Accelerate/BLAS matmul on arm64
+    with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+        XtX = X.T @ X
+        try:
+            XtX_inv = np.linalg.inv(XtX)
+        except np.linalg.LinAlgError:
+            XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
 
-    beta = XtX_inv @ (X.T @ y)
-    residuals = y - X @ beta
+        beta = XtX_inv @ (X.T @ y)
+        residuals = y - X @ beta
     df = n - X.shape[1]
     if df <= 0:
         return np.ones(n_cov), np.zeros(n_cov), np.ones(n_cov)
@@ -1206,21 +1208,21 @@ def _compute_bic_statistics(
     verbose: bool = False,
 ) -> Tuple[float, np.ndarray]:
     n, k = X.shape
-    XtX = X.T @ X
-    if verbose:
-        iter_label = f"{iteration}" if iteration is not None else "?"
-        pos_label = f", pos={pos}" if pos is not None else ""
-        cond_val = np.linalg.cond(XtX)
-        print(f"  Iteration {iter_label}{pos_label}: cond(XtX) = {cond_val:.2e}, X.shape = {X.shape}")
-    try:
-        XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
-    except np.linalg.LinAlgError:
-        return np.inf, np.array([])
-
-    beta = XtX_inv @ (X.T @ y)
     # NOTE: Some Accelerate builds (NumPy 2.0 arm64) raise spurious FPE flags on matmul.
     # Compute under a local errstate and validate the result instead of crashing.
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        XtX = X.T @ X
+        if verbose:
+            iter_label = f"{iteration}" if iteration is not None else "?"
+            pos_label = f", pos={pos}" if pos is not None else ""
+            cond_val = np.linalg.cond(XtX)
+            print(f"  Iteration {iter_label}{pos_label}: cond(XtX) = {cond_val:.2e}, X.shape = {X.shape}")
+        try:
+            XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
+        except np.linalg.LinAlgError:
+            return np.inf, np.array([])
+
+        beta = XtX_inv @ (X.T @ y)
         Xbeta = X @ beta
     if verbose:
         print(

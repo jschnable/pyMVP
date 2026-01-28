@@ -77,7 +77,7 @@ def PANICLE_K_VanRaden(M: Union[GenotypeMatrix, np.ndarray],
         Z_batch -= means_batch[np.newaxis, :]
 
         # Compute cross products: kin += Z_batch @ Z_batch.T
-        with np.errstate(over='ignore', invalid='ignore'):
+        with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
             kin += Z_batch @ Z_batch.T
 
     # Convert to float64 for final operations (normalization needs precision)

@@ -36,7 +36,7 @@ pipeline.align_samples()
 # 4. Compute population structure (PCs and optional kinship)
 pipeline.compute_population_structure(
     n_pcs=3,              # Number of principal components
-    calculate_kinship=True # Needed for FarmCPU/BLINK or MLM without a map
+    calculate_kinship=True # Needed for MLM (auto-computed if omitted, but slower)
 )
 
 # 5. Run GWAS analysis
@@ -142,7 +142,7 @@ pipeline.align_samples()
 # Compute population structure
 pipeline.compute_population_structure(
     n_pcs=5,                    # Use 5 PCs as covariates
-    calculate_kinship=True      # Needed for FarmCPU/BLINK or MLM without a map
+    calculate_kinship=True      # Needed for MLM (auto-computed if omitted)
 )
 
 # Run MLM (accounts for population structure)
@@ -167,7 +167,7 @@ pipeline.load_data(
 )
 
 pipeline.align_samples()
-pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
+pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)  # kinship for MLM
 
 # PCs and external covariates are automatically combined
 pipeline.run_analysis(
@@ -182,7 +182,7 @@ pipeline.run_analysis(
 pipeline = GWASPipeline(output_dir='./method_comparison')
 pipeline.load_data(phenotype_file='phenos.csv', genotype_file='genos.vcf.gz')
 pipeline.align_samples()
-pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)
+pipeline.compute_population_structure(n_pcs=3, calculate_kinship=True)  # kinship for MLM
 
 # Run multiple methods at once
 pipeline.run_analysis(
@@ -240,13 +240,77 @@ pipeline.run_analysis(
 )
 ```
 
+## Command-Line Interface
+
+PANICLE includes a CLI script for running GWAS analyses without writing Python code.
+
+### Basic Usage
+
+```bash
+python scripts/run_GWAS.py \
+  --phenotype phenos.csv \
+  --genotype genos.vcf.gz \
+  --traits PlantHeight,DaysToFlower \
+  --methods GLM,MLM \
+  --outputdir ./results
+```
+
+### Common CLI Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--phenotype`, `-p` | Phenotype CSV/TSV file (required) | — |
+| `--genotype`, `-g` | Genotype file (required) | — |
+| `--traits` | Comma-separated trait names (case-sensitive) | All numeric columns |
+| `--methods` | Comma-separated methods: GLM, MLM, FarmCPU, BLINK | GLM,MLM,FarmCPU,BLINK |
+| `--n-pcs` | Number of principal components | 3 |
+| `--outputdir`, `-o` | Output directory | ./GWAS_results |
+| `--format`, `-f` | Genotype format (auto-detected if omitted) | Auto |
+| `--compute-effective-tests` | Use effective test count for Bonferroni | Off |
+| `--min-maf` | Minimum minor allele frequency filter | 0.0 |
+| `--max-missing` | Maximum missing data proportion | 1.0 |
+| `--significance` | Fixed p-value threshold (overrides Bonferroni) | — |
+
+### Examples
+
+```bash
+# Quick GLM scan on a single trait
+python scripts/run_GWAS.py -p phenos.csv -g genos.vcf.gz \
+  --traits PlantHeight --methods GLM
+
+# Full analysis with effective tests correction
+python scripts/run_GWAS.py -p phenos.csv -g genos.vcf.gz \
+  --methods GLM,MLM,FarmCPU,BLINK \
+  --compute-effective-tests --n-pcs 5
+
+# Only generate Manhattan plots (no CSV output)
+python scripts/run_GWAS.py -p phenos.csv -g genos.vcf.gz \
+  --methods MLM --outputs manhattan qq
+```
+
+Run `python scripts/run_GWAS.py --help` for the full list of options.
+
+### Pre-caching Genotypes
+
+For repeated analyses on the same genotype file, you can pre-convert it to PANICLE's
+binary cache format for faster loading (~26x speedup on subsequent runs):
+
+```bash
+panicle-cache-genotype -i genotypes.vcf.gz -o genotypes_cached
+```
+
+**Note:** The `panicle-cache-genotype` command is only available after installing the
+package with `pip install -e .` (or `pip install panicle`). If you skip installation,
+genotype caching still happens automatically on first load — this tool just lets you
+do it ahead of time.
+
 ## Troubleshooting
 
 ### Problem: "Sample mismatch" or "No common individuals"
 **Solution:** Check that individual IDs match exactly between phenotype and genotype files (case-sensitive).
 
 ### Problem: "Kinship matrix missing"
-**Solution:** Run `pipeline.compute_population_structure(calculate_kinship=True)` for FarmCPU/BLINK or MLM without a map. For LOCO methods, ensure a map is available (VCF/PLINK/HapMap or `map_file`).
+**Solution:** Run `pipeline.compute_population_structure(calculate_kinship=True)` for MLM. If omitted, MLM will auto-compute kinship internally, but precomputing avoids redundant work when analyzing multiple traits. FarmCPU and BLINK do not use kinship. For LOCO methods, ensure a map is available (VCF/PLINK/HapMap or `map_file`).
 
 ### Problem: Analysis is very slow
 **Solution:**

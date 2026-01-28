@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive GWAS Analysis Script using pyMVP (Refactored Pipeline Version)
+Comprehensive GWAS Analysis Script using PANICLE (Refactored Pipeline Version)
 """
 import sys
 from pathlib import Path
