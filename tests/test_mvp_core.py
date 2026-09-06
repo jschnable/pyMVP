@@ -5,6 +5,8 @@ from pathlib import Path
 
 from panicle.core import mvp
 from panicle.association.mlm_loco import PANICLE_MLM_LOCO
+from panicle.association.mlm import PANICLE_MLM
+from panicle.matrix.kinship import PANICLE_K_VanRaden
 from panicle.matrix.kinship_loco import PANICLE_K_VanRaden_LOCO
 from panicle.utils.data_types import GenotypeMap, GenotypeMatrix, Phenotype
 
@@ -68,6 +70,60 @@ def test_panicle_glm_only_runs_and_summarizes(monkeypatch) -> None:
     assert res["results"]["Trait"]["GLM"] is dummy
     assert res["summary"]["significant_markers"]["Trait"]["GLM"] == 1
     assert res["summary"]["methods_run"] == ["GLM"]
+
+
+@pytest.mark.parametrize("min_mac", [0, 10])
+@pytest.mark.parametrize("missing_genotypes", [False, True])
+def test_panicle_groups_glm_by_retained_samples(monkeypatch, min_mac, missing_genotypes):
+    monkeypatch.setattr(mvp, "PANICLE_Report", lambda **kwargs: {"files_created": []})
+    rng = np.random.default_rng(2026)
+    n, m = 80, 40
+    raw = rng.integers(0, 3, size=(n, m), dtype=np.int8)
+    raw[:, 0] = 0
+    raw[:3, 0] = 2  # MAC filtering must happen after sample selection
+    if missing_genotypes:
+        raw[2:4, 3] = -9
+    geno = GenotypeMatrix(raw, is_imputed=not missing_genotypes, precompute_alleles=missing_genotypes)
+    traits = pd.DataFrame({"ID": np.arange(n), **{f"T{i}": rng.normal(size=n) for i in range(5)}})
+    # Non-adjacent traits share a mask. Others share a second mask or stand alone.
+    traits.loc[[0, 1], ["T0", "T2"]] = np.nan
+    traits.loc[[2, 3], ["T1", "T3"]] = np.nan
+    traits.loc[4, "T4"] = np.nan
+    cv = rng.normal(size=(n, 2))
+    cv[5, 0] = np.nan
+    _, _, gm = _basic_inputs(n=n, m=m)
+    kwargs = dict(geno=geno, map_data=gm, CV=cv, method=["GLM"], min_mac=min_mac,
+                  file_output=False, verbose=False, maxLine=13)
+    expected = {name: mvp.PANICLE(traits[["ID", name]], **kwargs)["results"][name]["GLM"]
+                for name in traits.columns[1:]}
+    real_multi, real_single, real_mac = mvp.PANICLE_GLM_MULTI, mvp.PANICLE_GLM, mvp.compute_mac_keep_indices
+    groups, singles, mac_calls = [], [], []
+
+    def multi(**kw):
+        groups.append(kw["trait_names"])
+        assert kw["phe"].shape[1] == len(kw["trait_names"])
+        return real_multi(**kw)
+
+    def single(**kw):
+        singles.append(kw["phe"].shape)
+        return real_single(**kw)
+
+    def mac(*args, **kw):
+        mac_calls.append(1)
+        return real_mac(*args, **kw)
+
+    monkeypatch.setattr(mvp, "PANICLE_GLM_MULTI", multi)
+    monkeypatch.setattr(mvp, "PANICLE_GLM", single)
+    monkeypatch.setattr(mvp, "compute_mac_keep_indices", mac)
+    result = mvp.PANICLE(traits, **kwargs)
+    assert groups == [["T0", "T2"], ["T1", "T3"]]
+    assert len(singles) == 1
+    assert len(mac_calls) == 3
+    for name, reference in expected.items():
+        np.testing.assert_allclose(result["results"][name]["GLM"].to_numpy(), reference.to_numpy(),
+                                   rtol=1e-5, atol=1e-6, equal_nan=True)
+        assert result["summary"]["trait_sample_sizes"][name] == (78 if name == "T4" else 77)
+    assert result["summary"]["runtime"]["GLM_T0"] == result["summary"]["runtime"]["GLM_T2"]
 
 
 def test_panicle_farmcpu_resampling_threshold_warning(monkeypatch) -> None:
@@ -369,6 +425,43 @@ def test_panicle_mlm_matches_direct_loco_when_trait_contains_missing_values() ->
         equal_nan=True,
     )
     assert high_level["summary"]["trait_sample_sizes"]["Trait"] == int(mask.sum())
+
+
+@pytest.mark.parametrize('missing', ['phenotype', 'covariate', 'both'])
+def test_global_mlm_missing_samples_matches_direct_subset(monkeypatch, missing):
+    """Subset both axes of full-panel kinship for each retained sample set."""
+    monkeypatch.setattr(mvp, 'PANICLE_Report', lambda **kwargs: {'files_created': []})
+    rng = np.random.default_rng(823)
+    n, m = 40, 120
+    raw = rng.integers(0, 3, size=(n, m), dtype=np.int8)
+    genotype = GenotypeMatrix(raw, is_imputed=True)
+    ids = np.array([f's{i}' for i in range(n)])
+    phenotype = pd.DataFrame({'ID': ids, 'a': rng.normal(size=n), 'b': rng.normal(size=n)})
+    covariates = rng.normal(size=(n, 2))
+    if missing in {'phenotype', 'both'}:
+        phenotype.loc[[1, 7], 'a'] = np.nan
+        phenotype.loc[[2, 9], 'b'] = np.inf
+    if missing in {'covariate', 'both'}:
+        covariates[4, 0] = np.nan
+        covariates[8, 1] = np.inf
+    gmap = GenotypeMap(pd.DataFrame({'SNP': [f'm{i}' for i in range(m)],
+                                    'CHROM': np.ones(m, dtype=int), 'POS': np.arange(m) + 1}))
+    full_kinship = PANICLE_K_VanRaden(genotype, verbose=False).to_numpy()
+    result = mvp.PANICLE(phenotype, genotype, gmap, CV=covariates, method=['MLM'],
+                         mlm_mode='global', min_mac=0, file_output=False, verbose=False)
+    np.testing.assert_array_equal(result['data']['kinship'].to_numpy(), full_kinship)
+    for name in ['a', 'b']:
+        values = phenotype[name].to_numpy()
+        keep = np.flatnonzero(np.isfinite(values) & np.isfinite(covariates).all(axis=1))
+        expected = PANICLE_MLM(
+            phe=np.column_stack([ids[keep], values[keep]]),
+            geno=genotype.subset_individuals(keep, materialize=True),
+            K=full_kinship[np.ix_(keep, keep)], CV=covariates[keep], verbose=False,
+        )
+        actual = result['results'][name]['MLM']
+        assert np.isfinite(actual.pvalues).all()
+        np.testing.assert_allclose(actual.to_numpy(), expected.to_numpy(), rtol=1e-6, atol=1e-8)
+        assert result['summary']['trait_sample_sizes'][name] == len(keep)
 
 
 def test_panicle_mlm_global_mode_runs_without_loco() -> None:

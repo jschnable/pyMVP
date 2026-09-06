@@ -177,7 +177,8 @@ def PANICLE_GLM_ultrafast(phe: np.ndarray,
         geno: GenotypeMatrix or numpy array (n x m)
         CV: n x k covariates (optional)
         maxLine: batch size (markers per block)
-        cpu: unused (kept for signature compatibility)
+        cpu: Values other than 1 enable one batch-prefetch worker on large scans;
+             does not set the BLAS thread count. PANICLE_GLM_PREFETCH overrides this.
         verbose: print brief progress
         missing_fill_value: value to impute for missing genotypes
         return_cov_stats: if True, return stats for all covariates (memory intensive!)
@@ -466,7 +467,8 @@ def PANICLE_GLM_multi_ultrafast(
         trait_names: Optional trait names (length n_traits)
         CV: n x k covariates (optional)
         maxLine: batch size (markers per block)
-        cpu: unused (kept for API compatibility)
+        cpu: Values other than 1 enable one batch-prefetch worker on large scans;
+             does not set the BLAS thread count. PANICLE_GLM_PREFETCH overrides this.
         verbose: print brief progress
         missing_fill_value: value to impute for missing genotypes
         return_t_stats: if True, return absolute t-statistics instead of p-values

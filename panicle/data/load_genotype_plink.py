@@ -13,10 +13,11 @@ Conventions:
 
 QC options mirror VCF loader: monomorphic, missingness, MAF filters.
 """
+from panicle.data.genotype_cache import GenotypeCache
+
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,6 @@ try:
     import numpy as np
 except Exception:
     raise ImportError("NumPy is required: pip install numpy")
-from panicle.data.io_utils import (
-    genotype_cache_filters_match,
-    save_genotype_cache_filters,
-)
 from panicle.utils.data_types import (
     CHROM_COLUMN,
     LEGACY_MARKER_ID_COLUMN,
@@ -35,8 +32,6 @@ from panicle.utils.data_types import (
     POS_COLUMN,
     canonicalize_genotype_map_dataframe,
     impute_major_allele_inplace,
-    load_genotype_map_cache,
-    save_genotype_map_cache,
 )
 
 MISSING = -9
@@ -142,44 +137,16 @@ def load_genotype_plink(
 
     # Cache version 2: pre-imputed, matches VCF cache behavior
     cache_base = str(bed_path)
-    cache_geno = cache_base + '.panicle.v2.geno.npy'
-    cache_ind = cache_base + '.panicle.v2.ind.txt'
-    cache_map = cache_base + '.panicle.v2.map.npz'
-    legacy_cache_map = cache_base + '.panicle.v2.map.csv'
     cache_filters = {
         'cache_version': 2,
         'drop_monomorphic': bool(drop_monomorphic),
         'max_missing': float(max_missing),
         'min_maf': float(min_maf),
     }
-
-    try:
-        if not force_recache:
-            map_cache_paths = [path for path in (cache_map, legacy_cache_map) if os.path.exists(path)]
-            if os.path.exists(cache_geno) and os.path.exists(cache_ind) and map_cache_paths:
-                newest_src = max(os.path.getmtime(bed_path), os.path.getmtime(bim_path), os.path.getmtime(fam_path))
-                newest_map_cache = max(os.path.getmtime(path) for path in map_cache_paths)
-                if (os.path.getmtime(cache_geno) > newest_src and
-                    os.path.getmtime(cache_ind) > newest_src and
-                    newest_map_cache > newest_src):
-                    if genotype_cache_filters_match(cache_base, cache_filters):
-                        logger.info("[Cache] Loading binary cache for %s...", bed_path)
-                        geno_matrix = np.load(cache_geno, mmap_mode='r')
-                        with open(cache_ind, 'r') as f:
-                            individual_ids = [line.strip() for line in f]
-                        geno_map = load_genotype_map_cache(
-                            cache_map,
-                            legacy_csv_path=legacy_cache_map,
-                            migrate_legacy=True,
-                            legacy_is_imputed=True,
-                        )
-                        return geno_matrix, individual_ids, geno_map
-                    logger.info(
-                        "[Cache] Filter fingerprint mismatch or missing for %s; rebuilding cache.",
-                        bed_path,
-                    )
-    except Exception as e:
-        logger.warning("[Cache] Failed to load cache: %s", e)
+    cache = GenotypeCache(cache_base, (bed_path, bim_path, fam_path), cache_filters)
+    cached = cache.load(force=force_recache, logger=logger)
+    if cached is not None:
+        return cached
 
     # Read sample IDs and map first (for integrity checks)
     individual_ids = _read_fam_ids(fam_path)
@@ -250,22 +217,6 @@ def load_genotype_plink(
     if hasattr(geno_map, "attrs"):
         geno_map.attrs["is_imputed"] = True
 
-    try:
-        logger.info("[Cache] Saving binary cache to %s.panicle.v2.*", cache_base)
-        np.save(cache_geno, Xi)
-        with open(cache_ind, 'w') as f:
-            for ind in individual_ids:
-                f.write(f"{ind}\n")
-        if isinstance(geno_map, list):
-            import pandas as pd  # type: ignore
-            map_df = pd.DataFrame(geno_map)
-        else:
-            map_df = geno_map
-        if hasattr(map_df, "attrs"):
-            map_df.attrs["is_imputed"] = True
-        save_genotype_map_cache(cache_map, map_df)
-        save_genotype_cache_filters(cache_base, cache_filters)
-    except Exception as e:
-        logger.warning("[Cache] Failed to save cache: %s", e)
+    cache.save(Xi, individual_ids, geno_map, logger=logger)
 
     return Xi, individual_ids, geno_map

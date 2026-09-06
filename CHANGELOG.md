@@ -5,6 +5,30 @@ All notable changes to PANICLE will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Global MLM in `PANICLE(...)` now subsets the kinship matrix correctly when
+  missing/non-finite phenotype or covariate values exclude samples. Regression
+  tests compare per-trait results with direct MLM using the retained samples.
+
+### Changed
+- Share trait selection, grouping, MAC preparation, and solver dispatch between
+  the one-call API and pipeline, using named preparation/cache/result objects.
+- Consolidate VCF/PLINK/HapMap cache handling and extract map serialization and
+  result reporting into focused modules; retain interfaces and cache formats.
+- Cast small int8 genotype batches directly to C-order float32, avoiding an
+  intermediate int8 copy while retaining the parallel converter for large blocks.
+- BLINK reuses the input matrix when its MAF filter retains all markers and uses
+  pre-imputed genotype metadata for MAF calculation.
+- The top-level `PANICLE(...)` API groups GLM traits with identical retained
+  samples, sharing sample/MAC preparation and the genotype scan. Per-trait GLM
+  runtimes apportion the shared scan time equally; the pipeline already grouped
+  compatible traits. Documented the existing GLM prefetch controls.
+- Growing the VCF loader's temporary matrix extends and remaps the file without
+  copying and rewriting its existing prefix. Mappings are explicitly closed
+  before resizing/removal, and failed remaps remain cleanable.
+
 ## [0.5.0] - 2026-08-19
 
 ### Changed

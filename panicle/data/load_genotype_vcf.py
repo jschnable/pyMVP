@@ -18,6 +18,8 @@ This module avoids external VCF libraries for portability. For very large VCFs,
 consider replacing the parser with cyvcf2/pysam keeping the same coding logic.
 """
 from __future__ import print_function
+from panicle.data.genotype_cache import GenotypeCache
+
 import logging
 import sys
 import gzip
@@ -40,10 +42,6 @@ except Exception:  # pragma: no cover - optional accelerator
     _NUMBA_AVAILABLE = False
     njit = None
     prange = range
-from panicle.data.io_utils import (
-    genotype_cache_filters_match,
-    save_genotype_cache_filters,
-)
 from panicle.utils.data_types import (
     CHROM_COLUMN,
     LEGACY_MARKER_ID_COLUMN,
@@ -51,8 +49,6 @@ from panicle.utils.data_types import (
     POS_COLUMN,
     canonicalize_genotype_map_dataframe,
     impute_major_allele_inplace,
-    load_genotype_map_cache,
-    save_genotype_map_cache,
 )
 
 
@@ -226,19 +222,14 @@ class _DynamicInt8MatrixWriter:
         new_capacity = self.capacity
         while new_capacity < min_capacity:
             new_capacity = max(new_capacity * 2, min_capacity)
-        old_columns = self.count
-        if old_columns > 0:
-            preserved = np.empty((old_columns, self.n_rows), dtype=np.int8)
-            np.copyto(preserved, self.memmap[:old_columns, :])
-        else:
-            preserved = None
+        # Extending the file preserves its prefix. Close the old mapping before
+        # resizing (also required on Windows), without copying/re-writing it.
         self.memmap.flush()
-        del self.memmap
+        self.memmap._mmap.close()
+        self.memmap = None
         with open(self.path, 'r+b') as fh:
             fh.truncate(self.n_rows * new_capacity)
         self.memmap = np.memmap(self.path, dtype=np.int8, mode='r+', shape=(new_capacity, self.n_rows))
-        if preserved is not None:
-            self.memmap[:old_columns, :] = preserved
         self.capacity = new_capacity
 
     def append(self, column):
@@ -273,18 +264,19 @@ class _DynamicInt8MatrixWriter:
             result = np.zeros((self.n_rows, 0), dtype=np.int8)
         else:
             result = np.array(mm[:total_cols, :].T, dtype=np.int8, copy=True, order='C')
+        mm._mmap.close()
+        self.memmap = None
         try:
             os.remove(self.path)
         except OSError:
             pass
-        self.memmap = None
         del mm
         return result
 
     def discard(self):
         if self.memmap is not None:
             self.memmap.flush()
-            del self.memmap
+            self.memmap._mmap.close()
             self.memmap = None
         try:
             os.remove(self.path)
@@ -887,10 +879,6 @@ def load_genotype_vcf(
     # Filter fingerprint sidecar (*.panicle.v2.filters.json) invalidates the cache
     # when QC parameters that change the marker set differ from the build config.
     cache_base = str(vcf_path)
-    cache_geno = cache_base + '.panicle.v2.geno.npy'
-    cache_ind = cache_base + '.panicle.v2.ind.txt'
-    cache_map = cache_base + '.panicle.v2.map.npz'
-    legacy_cache_map = cache_base + '.panicle.v2.map.csv'
     cache_filters = {
         'cache_version': 2,
         'drop_monomorphic': bool(drop_monomorphic),
@@ -899,44 +887,10 @@ def load_genotype_vcf(
         'min_maf': float(min_maf),
         'split_multiallelic': bool(split_multiallelic),
     }
-
-    # Check if cache exists, is fresh, and matches requested filters
-    try:
-        if not force_recache:
-            map_cache_paths = [path for path in (cache_map, legacy_cache_map) if os.path.exists(path)]
-            if os.path.exists(cache_geno) and os.path.exists(cache_ind) and map_cache_paths:
-                vcf_mtime = os.path.getmtime(vcf_path)
-                newest_map_cache = max(os.path.getmtime(path) for path in map_cache_paths)
-                if (os.path.getmtime(cache_geno) > vcf_mtime and
-                    os.path.getmtime(cache_ind) > vcf_mtime and
-                    newest_map_cache > vcf_mtime):
-                    if genotype_cache_filters_match(cache_base, cache_filters):
-                        logger.info("[Cache] Loading binary cache for %s...", vcf_path)
-
-                        # Load Genotypes (memmap for speed/memory efficiency)
-                        geno_matrix = np.load(cache_geno, mmap_mode='r')
-
-                        # Load Individuals
-                        with open(cache_ind, 'r') as f:
-                            individual_ids = [line.strip() for line in f]
-
-                        # Load Map
-                        geno_map = load_genotype_map_cache(
-                            cache_map,
-                            legacy_csv_path=legacy_cache_map,
-                            migrate_legacy=True,
-                            legacy_is_imputed=True,
-                        )
-
-                        # If memmapped, we return it as is. GenotypeMatrix handles it.
-                        return geno_matrix, individual_ids, geno_map
-                    logger.info(
-                        "[Cache] Filter fingerprint mismatch or missing for %s; rebuilding cache.",
-                        vcf_path,
-                    )
-    except Exception as e:
-        logger.warning("[Cache] Failed to load cache: %s", e)
-    # --- CACHING LOGIC END ---
+    cache = GenotypeCache(cache_base, (vcf_path,), cache_filters)
+    cached = cache.load(force=force_recache, logger=logger)
+    if cached is not None:
+        return cached
 
     # Standard loading proceeds...
     vcf_lower = str(vcf_path).lower()
@@ -1523,22 +1477,7 @@ def load_genotype_vcf(
             geno_map.attrs["is_imputed"] = True
 
         # Save only if successful
-        logger.info("[Cache] Saving binary cache to %s.panicle.v2.*", cache_base)
-        np.save(cache_geno, geno)
-
-        with open(cache_ind, 'w') as f:
-            for ind in individual_ids:
-                f.write(f"{ind}\n")
-
-        # Save Map
-        if isinstance(geno_map, list):
-             map_df = pd.DataFrame(geno_map)
-        else:
-             map_df = geno_map
-        if hasattr(map_df, "attrs"):
-            map_df.attrs["is_imputed"] = True
-        save_genotype_map_cache(cache_map, map_df)
-        save_genotype_cache_filters(cache_base, cache_filters)
+        cache.save(geno, individual_ids, geno_map, logger=logger)
 
     except Exception as e:
         logger.warning("[Cache] Failed to save cache: %s", e)

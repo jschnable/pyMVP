@@ -35,7 +35,8 @@ def PANICLE_GLM(phe: np.ndarray,
         geno: Genotype matrix (n_individuals x n_markers)
         CV: Covariates (n_individuals x n_covariates)
         maxLine: Batch size for processing
-        cpu: Unused (kept for API compatibility)
+        cpu: Values other than 1 enable one batch-prefetch worker on large scans;
+             does not set the BLAS thread count. PANICLE_GLM_PREFETCH overrides this.
         verbose: Print progress
         impute_missing: Unused (always handled internally by FWL+QR loader)
         major_alleles: Unused (always handled internally)

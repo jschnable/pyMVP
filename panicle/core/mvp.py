@@ -2,17 +2,20 @@
 Main MVP function - Primary GWAS analysis interface
 """
 
+from .workflow import (
+    PreparedTrait, MarkerSelection, retained_samples, group_sample_indices,
+    select_markers, run_method, run_trait_group,
+)
+
+from ..reporting.plots import render_analysis
+
 import numpy as np
 import pandas as pd
-import json
 from typing import Optional, List, Dict, Union, Any, Tuple
 from pathlib import Path
 import warnings
 
 from ..utils.data_types import (
-    MARKER_ID_COLUMN,
-    LEGACY_MARKER_ID_COLUMN,
-    infer_marker_id_column,
     Phenotype,
     GenotypeMatrix,
     GenotypeMap,
@@ -20,7 +23,7 @@ from ..utils.data_types import (
 )
 from ..data.loaders import load_genotype_file, load_map_file, load_phenotype_file
 from ..utils.stats import compute_mac_keep_indices, pad_association_results
-from ..association.glm import PANICLE_GLM
+from ..association.glm import PANICLE_GLM, PANICLE_GLM_MULTI
 from ..association.mlm import PANICLE_MLM
 from ..association.mlm_loco import PANICLE_MLM_LOCO
 from ..association.bayes_loco import PANICLE_BayesLOCO
@@ -86,6 +89,9 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
           datasets to their intersection.
         - For each trait, individuals with missing/non-finite phenotype values
           (or covariate values, when provided) are excluded before model fitting.
+        - GLM traits with identical retained samples share genotype preparation
+          and a joint scan. Their reported GLM runtimes divide that shared scan
+          time equally among the traits. Single-trait calls use the single scan.
     
     Returns:
         Dictionary containing:
@@ -336,10 +342,20 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
 
         # Track which methods were run (only add once, not per-trait)
         methods_actually_run = set()
-        covariate_finite_mask = (
-            np.isfinite(covariates).all(axis=1) if covariates is not None else None
-        )
         loco_kinship_cache: Dict[Tuple[int, int], Any] = {}
+
+        # Group only identical retained samples. Covariates and MAC settings are
+        # shared by this call, so each group also has identical marker filtering.
+        trait_ids = phenotype.ids.astype(str).to_numpy()
+        raw_traits = [
+            pd.to_numeric(phenotype.get_trait(i), errors='coerce').to_numpy(dtype=np.float64)
+            for i in range(phenotype.n_traits)
+        ]
+        trait_masks = [retained_samples(values, covariates) for values in raw_traits]
+        trait_sample_indices = [np.flatnonzero(mask) for mask in trait_masks]
+        glm_groups = group_sample_indices(trait_sample_indices) if "GLM" in method else {}
+        grouped_glm_results = {}
+        group_preparation: Dict[bytes, MarkerSelection] = {}
 
         # Loop over each trait
         for trait_idx, trait_name in enumerate(phenotype.trait_names):
@@ -347,11 +363,10 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 print(f"\n--- Analyzing trait: {trait_name} ({trait_idx + 1}/{phenotype.n_traits}) ---")
 
             # Trait-specific filtering: exclude missing/non-finite phenotype and covariates.
-            raw_trait = pd.to_numeric(phenotype.get_trait(trait_idx), errors='coerce').to_numpy(dtype=np.float64)
-            trait_ids = phenotype.ids.astype(str).to_numpy()
-            valid_mask = np.isfinite(raw_trait)
-            if covariate_finite_mask is not None:
-                valid_mask = valid_mask & covariate_finite_mask
+            raw_trait = raw_traits[trait_idx]
+            valid_mask = trait_masks[trait_idx]
+            group_key = trait_sample_indices[trait_idx].astype(np.int64, copy=False).tobytes()
+            group_indices = glm_groups.get(group_key, [trait_idx])
 
             n_valid = int(valid_mask.sum())
             if n_valid == 0:
@@ -373,34 +388,44 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
 
             valid_indices = np.where(valid_mask)[0]
             phenotype_array = np.column_stack([trait_ids[valid_mask], raw_trait[valid_mask]])
-            trait_genotype = (
-                genotype
-                if n_valid == genotype.n_individuals
-                else genotype.subset_individuals(valid_indices, materialize=True)
-            )
             trait_covariates = covariates[valid_mask, :] if covariates is not None else None
             analysis_results['summary']['trait_sample_sizes'][trait_name] = n_valid
 
             # Per-trait MAC filter (post sample-subset) guards against spurious
             # hits driven by singleton/very-rare variants when the cohort is
             # reduced by missing phenotypes/covariates.
-            trait_map = genetic_map
-            full_n_markers = trait_genotype.n_markers
-            trait_keep_indices = compute_mac_keep_indices(
-                trait_genotype, int(min_mac or 0)
-            )
-            if trait_keep_indices is not None and trait_keep_indices.size != full_n_markers:
-                dropped = full_n_markers - trait_keep_indices.size
-                trait_genotype = trait_genotype.subset_markers(trait_keep_indices)
-                if trait_map is not None and hasattr(trait_map, 'subset_markers'):
-                    trait_map = trait_map.subset_markers(trait_keep_indices)
-                if verbose:
-                    print(
-                        f"  Trait '{trait_name}': MAC filter (min_mac={int(min_mac)}) "
-                        f"dropped {dropped}/{full_n_markers} markers"
-                    )
+            full_n_markers = genotype.n_markers
+            if group_key in group_preparation:
+                selected = group_preparation[group_key]
+                trait_genotype, trait_map, trait_keep_indices = selected.genotype, selected.geno_map, selected.keep_indices
             else:
-                trait_keep_indices = None
+                trait_genotype = (
+                    genotype
+                    if n_valid == genotype.n_individuals
+                    else genotype.subset_individuals(valid_indices, materialize=True)
+                )
+                selected = select_markers(
+                    trait_genotype, genetic_map, min_mac, materialize=True,
+                    filter_fn=compute_mac_keep_indices,
+                )
+                trait_genotype, trait_map, trait_keep_indices = selected.genotype, selected.geno_map, selected.keep_indices
+                if len(group_indices) > 1:
+                    group_preparation[group_key] = selected
+                    # Interleaved missingness groups can each own a large row
+                    # subset. Bound retained preparation; eviction only causes
+                    # preparation to be recomputed, not another joint scan.
+                    while len(group_preparation) > 4:
+                        del group_preparation[next(iter(group_preparation))]
+            if trait_keep_indices is not None and verbose:
+                print(
+                    f"  Trait '{trait_name}': MAC filter (min_mac={int(min_mac)}) "
+                    f"dropped {full_n_markers - trait_keep_indices.size}/{full_n_markers} markers"
+                )
+            if trait_idx == group_indices[-1]:
+                group_preparation.pop(group_key, None)
+
+            prepared = PreparedTrait(trait_name, phenotype_array, trait_genotype, trait_covariates,
+                                     None, valid_indices, trait_map, trait_keep_indices)
 
             # Initialize results dict for this trait
             analysis_results['results'][trait_name] = {}
@@ -411,16 +436,37 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                 if verbose:
                     print(f"\nRunning GLM analysis on {trait_name}...")
 
-                glm_start = time.time()
-                glm_results = PANICLE_GLM(
-                    phe=phenotype_array,
-                    geno=trait_genotype,
-                    CV=trait_covariates,
-                    maxLine=maxLine,
-                    cpu=ncpus,
-                    verbose=verbose
-                )
-                glm_time = time.time() - glm_start
+                if len(group_indices) > 1:
+                    if trait_name not in grouped_glm_results:
+                        group_names = [phenotype.trait_names[i] for i in group_indices]
+                        if verbose:
+                            print(f"Running joint GLM for {len(group_names)} traits sharing {n_valid} samples")
+                        group_traits = [
+                            PreparedTrait(phenotype.trait_names[i],
+                                np.column_stack([np.arange(n_valid), raw_traits[i][valid_mask]]),
+                                trait_genotype, trait_covariates, None, valid_indices, trait_map, trait_keep_indices)
+                            for i in group_indices
+                        ]
+                        group_results = run_trait_group(
+                            group_traits, trait_genotype, runner=PANICLE_GLM_MULTI,
+                            options=dict(maxLine=maxLine, cpu=ncpus, verbose=verbose),
+                        )
+                        grouped_glm_results.update(group_results)
+                        del group_results, group_traits
+                    completed = grouped_glm_results.pop(trait_name)
+                    glm_results, glm_time = completed.result, completed.seconds
+                else:
+                    glm_start = time.time()
+                    glm_results = run_method(
+                        "GLM", prepared,
+                        runner=PANICLE_GLM,
+                        options=dict(
+                            maxLine=maxLine,
+                            cpu=ncpus,
+                            verbose=verbose,
+                        ),
+                    ).result
+                    glm_time = time.time() - glm_start
                 glm_results = pad_association_results(
                     glm_results, trait_keep_indices, full_n_markers, full_map=genetic_map
                 )
@@ -458,17 +504,17 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                             verbose=False,
                         )
                         loco_kinship_cache[loco_key] = trait_loco_kinship
-                    mlm_results = PANICLE_MLM_LOCO(
-                        phe=phenotype_array,
-                        geno=trait_genotype,
-                        map_data=trait_map,
-                        loco_kinship=trait_loco_kinship,
-                        CV=trait_covariates,
-                        vc_method=vc_method,
-                        maxLine=maxLine,
-                        cpu=ncpus,
-                        verbose=verbose
-                    )
+                    mlm_results = run_method(
+                        "MLM_LOCO", prepared,
+                        runner=PANICLE_MLM_LOCO,
+                        options=dict(
+                            loco_kinship=trait_loco_kinship,
+                            vc_method=vc_method,
+                            maxLine=maxLine,
+                            cpu=ncpus,
+                            verbose=verbose,
+                        ),
+                    ).result
                 else:
                     if kinship_matrix is None:
                         raise ValueError("Global MLM requires a kinship matrix")
@@ -478,17 +524,19 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                     ):
                         K_trait = kinship_matrix
                     else:
-                        K_trait = np.asarray(kinship_matrix)[np.ix_(valid_indices, valid_indices)]
-                    mlm_results = PANICLE_MLM(
-                        phe=phenotype_array,
-                        geno=trait_genotype,
-                        K=K_trait,
-                        CV=trait_covariates,
-                        vc_method=vc_method,
-                        maxLine=maxLine,
-                        cpu=ncpus,
-                        verbose=verbose,
-                    )
+                        # KinshipMatrix supports indexing, but not np.asarray conversion.
+                        K_trait = kinship_matrix[np.ix_(valid_indices, valid_indices)]
+                    mlm_results = run_method(
+                        "MLM", prepared,
+                        runner=PANICLE_MLM,
+                        options=dict(
+                            K=K_trait,
+                            vc_method=vc_method,
+                            maxLine=maxLine,
+                            cpu=ncpus,
+                            verbose=verbose,
+                        ),
+                    ).result
                 mlm_time = time.time() - mlm_start
                 mlm_results = pad_association_results(
                     mlm_results, trait_keep_indices, full_n_markers, full_map=genetic_map
@@ -521,15 +569,15 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                     bayes_cfg.setdefault("batch_markers_fit", int(maxLine))
                     bayes_cfg.setdefault("batch_markers_test", int(maxLine))
                 bayes_start = time.time()
-                bayes_results = PANICLE_BayesLOCO(
-                    phe=phenotype_array,
-                    geno=trait_genotype,
-                    map_data=trait_map,
-                    CV=trait_covariates,
-                    cpu=ncpus,
-                    verbose=verbose,
-                    bl_config=bayes_cfg,
-                )
+                bayes_results = run_method(
+                    "BAYESLOCO", prepared,
+                    runner=PANICLE_BayesLOCO,
+                    options=dict(
+                        cpu=ncpus,
+                        verbose=verbose,
+                        bl_config=bayes_cfg,
+                    ),
+                ).result
                 bayes_time = time.time() - bayes_start
                 bayes_results = pad_association_results(
                     bayes_results, trait_keep_indices, full_n_markers, full_map=genetic_map
@@ -553,16 +601,16 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                     print(f"\nRunning FarmCPU analysis on {trait_name}...")
 
                 farmcpu_start = time.time()
-                farmcpu_results = PANICLE_FarmCPU(
-                    phe=phenotype_array,
-                    geno=trait_genotype,
-                    map_data=trait_map,
-                    CV=trait_covariates,
-                    maxLine=maxLine,
-                    cpu=ncpus,
-                    verbose=verbose,
-                    **farmcpu_extra_kwargs
-                )
+                farmcpu_results = run_method(
+                    "FARMCPU", prepared,
+                    runner=PANICLE_FarmCPU,
+                    options=dict(
+                        maxLine=maxLine,
+                        cpu=ncpus,
+                        verbose=verbose,
+                        **farmcpu_extra_kwargs,
+                    ),
+                ).result
                 farmcpu_time = time.time() - farmcpu_start
                 farmcpu_results = pad_association_results(
                     farmcpu_results, trait_keep_indices, full_n_markers, full_map=genetic_map
@@ -587,16 +635,16 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                     print(f"\nRunning BLINK analysis on {trait_name}...")
 
                 blink_start = time.time()
-                blink_results = PANICLE_BLINK(
-                    phe=phenotype_array,
-                    geno=trait_genotype,
-                    map_data=trait_map,
-                    CV=trait_covariates,
-                    maxLine=maxLine,
-                    cpu=ncpus,
-                    verbose=verbose,
-                    **blink_kwargs,
-                )
+                blink_results = run_method(
+                    "BLINK", prepared,
+                    runner=PANICLE_BLINK,
+                    options=dict(
+                        maxLine=maxLine,
+                        cpu=ncpus,
+                        verbose=verbose,
+                        **blink_kwargs,
+                    ),
+                ).result
                 blink_time = time.time() - blink_start
                 blink_results = pad_association_results(
                     blink_results, trait_keep_indices, full_n_markers, full_map=genetic_map
@@ -634,18 +682,18 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
                         "p-values above the QTN threshold cannot act as pseudo QTNs in "
                         "later FarmCPU iterations."
                     )
-                resampling_results = PANICLE_FarmCPUResampling(
-                    phe=phenotype_array,
-                    geno=trait_genotype,
-                    map_data=trait_map,
-                    CV=trait_covariates,
-                    maxLine=maxLine,
-                    cpu=ncpus,
-                    trait_name=trait_name,
-                    verbose=verbose,
-                    **resampling_params,
-                    **farmcpu_extra_kwargs,
-                )
+                resampling_results = run_method(
+                    "FARMCPURESAMPLING", prepared,
+                    runner=PANICLE_FarmCPUResampling,
+                    options=dict(
+                        maxLine=maxLine,
+                        cpu=ncpus,
+                        trait_name=trait_name,
+                        verbose=verbose,
+                        **resampling_params,
+                        **farmcpu_extra_kwargs,
+                    ),
+                ).result
                 resampling_time = time.time() - resampling_start
 
                 analysis_results['results'][trait_name]['FarmCPUResampling'] = resampling_results
@@ -670,24 +718,10 @@ def PANICLE(phe: Union[str, Path, np.ndarray, pd.DataFrame, Phenotype],
 
         viz_start = time.time()
 
-        # Flatten results for visualization: {trait_method: result_obj}
-        flat_results = {}
-        for trait_name, trait_results in analysis_results['results'].items():
-            for method_name, result_obj in trait_results.items():
-                # Use trait name in key only if multiple traits
-                if phenotype.n_traits == 1:
-                    key = method_name
-                else:
-                    key = f"{trait_name}_{method_name}"
-                flat_results[key] = result_obj
-
-        visualization_report = PANICLE_Report(
-            results=flat_results,
-            map_data=genetic_map,
-            threshold=threshold,
-            output_prefix=output_prefix,
-            save_plots=file_output,
-            verbose=verbose
+        visualization_report = render_analysis(
+            analysis_results['results'], single_trait=phenotype.n_traits == 1,
+            renderer=PANICLE_Report, map_data=genetic_map, threshold=threshold,
+            output_prefix=output_prefix, save_plots=file_output, verbose=verbose,
         )
         viz_time = time.time() - viz_start
         
@@ -821,87 +855,5 @@ def _align_samples_to_genotype(
     return Phenotype(aligned_phenotype_df), aligned_genotype, aligned_covariates, summary
 
 
-def save_results_to_files(results: Dict[str, Any],
-                         output_prefix: str,
-                         verbose: bool = True) -> List[str]:
-    """Save analysis results to files"""
-
-    saved_files = []
-
-    def _json_default(obj):
-        if isinstance(obj, (np.integer, np.floating)):
-            return obj.item()
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
-
-    try:
-        # Save summary statistics
-        summary_file = f"{output_prefix}_summary.txt"
-        with open(summary_file, 'w') as f:
-            f.write("PANICLE GWAS Analysis Summary\n")
-            f.write("=" * 40 + "\n")
-            f.write(f"Methods run: {', '.join(results['summary']['methods_run'])}\n")
-            f.write(f"Total individuals: {results['summary']['total_individuals']}\n")
-            f.write(f"Total markers: {results['summary']['total_markers']}\n")
-            n_traits = results['summary'].get('n_traits', 1)
-            trait_names = results['summary'].get('trait_names', ['Trait'])
-            f.write(f"Traits analyzed: {n_traits} ({', '.join(trait_names)})\n")
-            f.write("\nSignificant markers by trait and method:\n")
-            for trait_name, methods in results['summary']['significant_markers'].items():
-                f.write(f"  {trait_name}:\n")
-                for method, count in methods.items():
-                    f.write(f"    {method}: {count}\n")
-            f.write("\nRuntimes (seconds):\n")
-            for phase, time_val in results['summary']['runtime'].items():
-                f.write(f"  {phase}: {time_val:.2f}s\n")
-
-        saved_files.append(summary_file)
-
-        # Get map data once for reuse
-        map_df = None
-        if 'map' in results['data']:
-            map_obj = results['data']['map']
-            if hasattr(map_obj, 'to_dataframe'):
-                map_df = map_obj.to_dataframe()
-            elif hasattr(map_obj, 'data'):
-                map_df = map_obj.data
-
-        # Save association results as CSV files (nested by trait)
-        for trait_name, trait_results in results['results'].items():
-            for method_name, result_obj in trait_results.items():
-                result_file = f"{output_prefix}_{trait_name}_{method_name}_results.csv"
-                result_df = result_obj.to_dataframe()
-
-                # Add map information if available
-                if map_df is not None:
-                    marker_col = infer_marker_id_column(map_df.columns)
-                    if marker_col is not None:
-                        if MARKER_ID_COLUMN not in result_df.columns:
-                            result_df[MARKER_ID_COLUMN] = map_df[marker_col].values[:len(result_df)]
-                        if LEGACY_MARKER_ID_COLUMN not in result_df.columns:
-                            result_df[LEGACY_MARKER_ID_COLUMN] = result_df[MARKER_ID_COLUMN].astype(str)
-                    if 'Chr' not in result_df.columns and 'CHROM' in map_df.columns:
-                        result_df['Chr'] = map_df['CHROM'].values[:len(result_df)]
-                    if 'Pos' not in result_df.columns and 'POS' in map_df.columns:
-                        result_df['Pos'] = map_df['POS'].values[:len(result_df)]
-
-                result_df.to_csv(result_file, index=False)
-                saved_files.append(result_file)
-
-                metadata = getattr(result_obj, "metadata", None)
-                if isinstance(metadata, dict) and metadata:
-                    meta_file = f"{output_prefix}_{trait_name}_{method_name}_metadata.json"
-                    with open(meta_file, "w", encoding="utf-8") as f:
-                        json.dump(metadata, f, indent=2, sort_keys=True, default=_json_default)
-                    saved_files.append(meta_file)
-
-        if verbose:
-            print(f"Saved {len(saved_files)} result files")
-
-    except Exception as e:
-        warnings.warn(f"Failed to save some results files: {e}")
-
-    return saved_files
+# Public compatibility re-export.
+from ..reporting.legacy import save_results_to_files

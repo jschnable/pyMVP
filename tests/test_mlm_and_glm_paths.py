@@ -369,6 +369,26 @@ def test_glm_multi_matches_single_trait_runs() -> None:
         )
 
 
+def test_glm_prefetch_preserves_single_and_joint_results(monkeypatch):
+    rng = np.random.default_rng(913)
+    raw = rng.integers(0, 3, size=(80, 137), dtype=np.int8)
+    raw.flags.writeable = False
+    geno = GenotypeMatrix(raw, is_imputed=True, precompute_alleles=False)
+    y = rng.normal(size=(80, 3))
+    cv = rng.normal(size=(80, 2))
+    phe = np.column_stack([np.arange(80), y[:, 0]])
+    # More than two batches, including a partial final batch.
+    monkeypatch.setenv("PANICLE_GLM_PREFETCH", "off")
+    single = PANICLE_GLM(phe, geno, CV=cv, maxLine=19, cpu=1, verbose=False)
+    joint = PANICLE_GLM_MULTI(y, geno, CV=cv, maxLine=19, cpu=1, verbose=False)
+    monkeypatch.delenv("PANICLE_GLM_PREFETCH")
+    prefetched = PANICLE_GLM(phe, geno, CV=cv, maxLine=19, cpu=4, verbose=False)
+    joint_prefetched = PANICLE_GLM_MULTI(y, geno, CV=cv, maxLine=19, cpu=4, verbose=False)
+    np.testing.assert_array_equal(single.to_numpy(), prefetched.to_numpy())
+    for name in joint:
+        np.testing.assert_array_equal(joint[name].to_numpy(), joint_prefetched[name].to_numpy())
+
+
 def test_mlm_errors_on_invalid_inputs() -> None:
     geno, phe, kinship = _make_basic_inputs()
     with pytest.raises(ValueError, match="Phenotype matrix must have 2 columns"):

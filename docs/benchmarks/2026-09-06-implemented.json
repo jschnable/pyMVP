@@ -1,0 +1,177 @@
+{
+  "baseline_commit": "da717f9",
+  "samples": 738,
+  "markers": 1000000,
+  "repetitions": 3,
+  "notes": [
+    "Warm runs; imports, warmup and fixture generation excluded.",
+    "Top-level eight-trait API excludes plotting in both revisions; includes input validation and MAC filtering.",
+    "Writer measured with 100,000 markers and 4,096-marker appends.",
+    "Conversions, GLM, BLINK (unfiltered and filtered), and writer matched baseline exactly.",
+    "Grouped GLM compared to serial baseline at rtol=1e-5, atol=1e-6."
+  ],
+  "before": [
+    {
+      "stage": "cast_5000",
+      "seconds": [
+        0.001079041976481676,
+        0.0010165410349145532,
+        0.0009998749010264874
+      ],
+      "median": 0.0010165410349145532,
+      "exact": true
+    },
+    {
+      "stage": "cast_20000",
+      "seconds": [
+        0.0013694580411538482,
+        0.0015617499593645334,
+        0.0012011659564450383
+      ],
+      "median": 0.0013694580411538482,
+      "exact": true
+    },
+    {
+      "stage": "glm",
+      "seconds": [
+        0.3860563749913126,
+        0.3937327079474926,
+        0.3861809578957036
+      ],
+      "median": 0.3861809578957036,
+      "exact": true
+    },
+    {
+      "stage": "glm_prefetch",
+      "seconds": [
+        0.2554473750060424,
+        0.25606145907659084,
+        0.2561772499466315
+      ],
+      "median": 0.25606145907659084,
+      "exact": true
+    },
+    {
+      "stage": "blink",
+      "seconds": [
+        4.428885041037574,
+        4.440381707972847,
+        4.564397832960822
+      ],
+      "median": 4.440381707972847,
+      "exact": true
+    },
+    {
+      "stage": "blink_filtered",
+      "seconds": [
+        1.2036513750208542,
+        1.162002666038461,
+        1.1459743329323828
+      ],
+      "median": 1.162002666038461,
+      "exact": true
+    },
+    {
+      "stage": "api_8_traits",
+      "seconds": [
+        5.540605957969092,
+        5.574257000000216,
+        5.500613457988948
+      ],
+      "median": 5.540605957969092,
+      "exact": false
+    },
+    {
+      "stage": "writer_100k",
+      "seconds": [
+        0.1490455410676077,
+        0.1515759580070153,
+        0.1445515420055017
+      ],
+      "median": 0.1490455410676077,
+      "exact": true
+    }
+  ],
+  "after": [
+    {
+      "stage": "cast_5000",
+      "seconds": [
+        0.0009407090255990624,
+        0.0009212089935317636,
+        0.0008402920793741941
+      ],
+      "median": 0.0009212089935317636,
+      "exact": true
+    },
+    {
+      "stage": "cast_20000",
+      "seconds": [
+        0.0014502089470624924,
+        0.0012439589481800795,
+        0.0011458750814199448
+      ],
+      "median": 0.0012439589481800795,
+      "exact": true
+    },
+    {
+      "stage": "glm",
+      "seconds": [
+        0.35500470909755677,
+        0.35491712507791817,
+        0.3552809579996392
+      ],
+      "median": 0.35500470909755677,
+      "exact": true
+    },
+    {
+      "stage": "glm_prefetch",
+      "seconds": [
+        0.22012804192490876,
+        0.2247215419774875,
+        0.22427450004033744
+      ],
+      "median": 0.22427450004033744,
+      "exact": true
+    },
+    {
+      "stage": "blink",
+      "seconds": [
+        2.2194033750565723,
+        2.261120875016786,
+        2.160588708007708
+      ],
+      "median": 2.2194033750565723,
+      "exact": true
+    },
+    {
+      "stage": "blink_filtered",
+      "seconds": [
+        0.7497645829571411,
+        0.7593962090322748,
+        0.7110988330096006
+      ],
+      "median": 0.7497645829571411,
+      "exact": true
+    },
+    {
+      "stage": "api_8_traits",
+      "seconds": [
+        0.8849280839785933,
+        0.8360557910054922,
+        0.8549238330451772
+      ],
+      "median": 0.8549238330451772,
+      "exact": false
+    },
+    {
+      "stage": "writer_100k",
+      "seconds": [
+        0.13096508395392448,
+        0.13226362492423505,
+        0.1331774169811979
+      ],
+      "median": 0.13226362492423505,
+      "exact": true
+    }
+  ]
+}

@@ -103,6 +103,7 @@ def PANICLE_BLINK(
     if np.isnan(trait_values).any():
         raise ValueError("BLINK currently requires complete trait observations")
 
+    geno = ensure_eager_genotype(geno)
     genotype_array, major_alleles = _ensure_numpy_genotype(geno)
     geno_is_imputed = isinstance(geno, GenotypeMatrix) and geno.is_imputed
     n_individuals, n_markers_total = genotype_array.shape
@@ -114,7 +115,7 @@ def PANICLE_BLINK(
     map_df = map_data.to_dataframe().reset_index(drop=True)
 
     maf_mask, maf_values = _compute_maf_mask(
-        genotype_array,
+        geno if geno_is_imputed else genotype_array,
         maf_threshold,
         max_genotype_dosage,
     )
@@ -122,8 +123,11 @@ def PANICLE_BLINK(
     if len(filtered_indices) == 0:
         raise ValueError("All markers were removed by the MAF threshold")
 
-    geno_filtered = genotype_array[:, filtered_indices]
-    major_filtered = (
+    keep_all = len(filtered_indices) == n_markers_total
+    # Fancy indexing copies even an identity selection, and changes the memory
+    # layout for every downstream GLM scan. Reuse the source when nothing drops.
+    geno_filtered = genotype_array if keep_all else genotype_array[:, filtered_indices]
+    major_filtered = major_alleles if keep_all else (
         major_alleles[filtered_indices] if major_alleles is not None else None
     )
     glm_geno: Union[GenotypeMatrix, np.ndarray] = geno_filtered
@@ -133,7 +137,7 @@ def PANICLE_BLINK(
             precompute_alleles=False,
             is_imputed=True,
         )
-    map_filtered = map_df.loc[filtered_indices].reset_index(drop=True)
+    map_filtered = map_df if keep_all else map_df.loc[filtered_indices].reset_index(drop=True)
     chrom_values, pos_values = _precompute_map_coordinates(map_filtered)
     map_filtered_map = GenotypeMap(map_filtered)
 
@@ -504,7 +508,7 @@ def _prepare_covariates(CV: Optional[np.ndarray], n_individuals: int) -> Optiona
 
 
 def _compute_maf_mask(
-    genotype: np.ndarray,
+    genotype: Union[GenotypeMatrix, np.ndarray],
     maf_threshold: float,
     max_genotype_dosage: float,
 ) -> Tuple[np.ndarray, np.ndarray]:

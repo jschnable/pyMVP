@@ -206,6 +206,18 @@ CSV or TSV files with an **ID column** and numeric columns for traits/covariates
 
 1.  **Effective Tests**: Use `--compute-effective-tests` to calculate a less stringent, more accurate Bonferroni threshold based on marker linkage (`Me`).
 2.  **Genotype Subsetting**: If you align or filter samples manually, use `GenotypeMatrix.subset_individuals(...)` to preserve pre-imputed fast paths.
+3.  **Multiple traits**: Pass traits together to `PANICLE(...)` or the CLI (for example,
+    `--traits PlantHeight,DaysToFlower`). GLM automatically shares preparation and
+    scans across traits with identical retained samples, including phenotype and
+    covariate missingness; MAC filtering still uses each retained sample set.
+    The lower-level `PANICLE_GLM_MULTI` accepts an `(individuals, traits)` array
+    of values only, without an ID column. Top-level `PANICLE` divides shared GLM
+    scan time equally among the grouped traits in its runtime summary.
+4.  **GLM prefetch**: With `ncpus`/`--ncpus` greater than 1, sufficiently large GLM
+    scans overlap loading the next batch with computation using one worker.
+    This does not configure BLAS threads. `PANICLE_GLM_PREFETCH=off` disables it;
+    `PANICLE_GLM_PREFETCH=on` enables it for scans exceeding two batches even with
+    `ncpus=1`. Benchmark this setting on your data and storage.
 
 ## Documentation & Examples
 

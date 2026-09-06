@@ -9,7 +9,7 @@ from panicle.association.blink import (
 )
 from panicle.association.farmcpu import PANICLE_FarmCPU
 from panicle.association.glm import PANICLE_GLM
-from panicle.utils.data_types import GenotypeMap
+from panicle.utils.data_types import GenotypeMap, GenotypeMatrix
 
 
 def _basic_map(n_markers: int) -> GenotypeMap:
@@ -64,6 +64,54 @@ def test_panicle_blink_errors_when_maf_filters_all_markers() -> None:
             maf_threshold=0.6,
             verbose=False,
         )
+
+
+@pytest.mark.parametrize("threshold", [0.0, 0.05])
+def test_blink_reuses_readonly_unfiltered_genotypes(monkeypatch, threshold):
+    import panicle.association.blink as blink
+
+    rng = np.random.default_rng(21)
+    raw = rng.integers(0, 3, size=(80, 20), dtype=np.int8)
+    raw.flags.writeable = False
+    geno = GenotypeMatrix(raw, is_imputed=True, precompute_alleles=False)
+    phe = np.column_stack([np.arange(80), raw[:, 0] + rng.normal(size=80)])
+    real_glm = blink.PANICLE_GLM
+    real_maf = blink._compute_maf_mask
+    calls = []
+
+    def glm(*args, **kwargs):
+        calls.append(kwargs["geno"])
+        assert np.shares_memory(kwargs["geno"].to_numpy(copy=False), raw)
+        return real_glm(*args, **kwargs)
+
+    def maf(source, *args, **kwargs):
+        assert source is geno  # retain the pre-imputed MAF fast path
+        return real_maf(source, *args, **kwargs)
+
+    monkeypatch.setattr(blink, "PANICLE_GLM", glm)
+    monkeypatch.setattr(blink, "_compute_maf_mask", maf)
+    result = blink.PANICLE_BLINK(phe, geno, _basic_map(20), maf_threshold=threshold, verbose=False)
+    assert calls
+    assert np.isfinite(result.pvalues).all()
+
+
+def test_blink_filtered_and_lazy_inputs_match_explicit_subsets():
+    rng = np.random.default_rng(22)
+    raw = rng.integers(0, 3, size=(80, 15), dtype=np.int8)
+    raw[:, 0] = 0  # must be dropped
+    raw[:2, 1] = 2
+    raw[2:, 1] = 0  # only present in excluded individuals
+    geno = GenotypeMatrix(raw, is_imputed=True, precompute_alleles=False)
+    lazy = geno.subset_individuals(np.arange(2, 80))
+    phe = np.column_stack([np.arange(78), raw[2:, 2] + rng.normal(size=78)])
+    gm = _basic_map(15)
+    result = PANICLE_BLINK(phe, lazy, gm, maf_threshold=.05, verbose=False)
+    reference = PANICLE_BLINK(
+        phe, GenotypeMatrix(raw[2:, 2:].copy(), is_imputed=True, precompute_alleles=False),
+        gm.subset_markers(np.arange(2, 15)), verbose=False,
+    )
+    np.testing.assert_allclose(result.to_numpy()[2:], reference.to_numpy(), rtol=1e-6, atol=1e-6)
+    assert np.isnan(result.pvalues[:2]).all()
 
 
 def test_remove_qtns_by_ld_filters_correlated_markers() -> None:
@@ -180,4 +228,3 @@ def test_remove_qtns_by_ld_truncates_to_ld_max() -> None:
         verbose=False,
     )
     assert kept == [0]
-

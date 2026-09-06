@@ -207,3 +207,50 @@ def test_get_columns_float32_matches_astype() -> None:
     np.testing.assert_array_equal(got, arr[:, idx].astype(np.float32))
     batch = gm.get_batch(5, 25, dtype=np.float32)
     np.testing.assert_array_equal(batch, arr[:, 5:25].astype(np.float32))
+
+
+@pytest.mark.parametrize("layout", ["C", "F", "slice", "reverse", "memmap"])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_int8_cast_strided_readonly_exact(tmp_path, layout, with_out):
+    # All int8 values, including the missing sentinel, must cast exactly.
+    original = np.arange(-128, 128, dtype=np.int16).astype(np.int8).reshape(16, 16)
+    if layout == "F":
+        src = np.asfortranarray(original)
+    elif layout == "slice":
+        src = original[:, ::2]
+    elif layout == "reverse":
+        src = original[::-1, ::-1]
+    elif layout == "memmap":
+        path = tmp_path / "genotypes.npy"
+        np.save(path, original)
+        src = np.load(path, mmap_mode="r")[:, ::2]
+    else:
+        src = original
+    src.flags.writeable = False
+    before = src.copy()
+    out = np.full(src.shape, np.nan, dtype=np.float32) if with_out else None
+    converted = int8_to_float32(src, out=out)
+    np.testing.assert_array_equal(converted, before.astype(np.float32))
+    np.testing.assert_array_equal(src, before)
+    assert converted.flags.c_contiguous
+    assert not np.shares_memory(converted, src)
+    if with_out:
+        assert converted is out
+
+
+def test_int8_cast_large_strided_and_numpy_fallback(monkeypatch):
+    from panicle.utils import compact
+
+    src = np.broadcast_to(np.array([-128, -9, 0, 1, 2, 127], dtype=np.int8), (1_400_000, 6))
+    parallel = int8_to_float32(src)
+    monkeypatch.setattr(compact, "_NUMBA_AVAILABLE", False)
+    fallback = int8_to_float32(src)
+    np.testing.assert_array_equal(parallel, fallback)
+    np.testing.assert_array_equal(parallel, src.astype(np.float32))
+
+
+@pytest.mark.parametrize("out", [np.empty((2, 3)), np.empty((3, 2), dtype=np.float32),
+                                  np.empty((2, 3), dtype=np.float32, order="F")])
+def test_int8_cast_rejects_invalid_output(out):
+    with pytest.raises(ValueError):
+        int8_to_float32(np.ones((2, 3), dtype=np.int8), out=out)

@@ -185,6 +185,26 @@ def test_prepare_trait_cache_keys_on_min_mac_and_max_dosage(tmp_path: Path) -> N
     assert fifth[6].tolist() == [0, 2]
 
 
+def test_named_preparation_cache_clears_as_one_unit(tmp_path: Path) -> None:
+    pipeline = _prepare_cache_pipeline(tmp_path)
+    first = pipeline._prepare_trait('t1', min_mac=5)
+    cached = pipeline._trait_cache
+    second = pipeline._prepare_trait('t2', min_mac=5)
+    assert pipeline._trait_cache is cached
+    assert first.keep_indices is second.keep_indices
+    assert first.name == 't1' and second.name == 't2'
+    assert first.phenotype is not second.phenotype
+    pipeline._clear_trait_cache()
+    assert pipeline._trait_cache is None
+    third = pipeline._prepare_trait('t1', min_mac=5)
+    assert pipeline._trait_cache is not cached
+    np.testing.assert_array_equal(first.keep_indices, third.keep_indices)
+    pipeline.phenotype_df.loc[0, 't1'] = np.nan
+    fourth = pipeline._prepare_trait('t1', min_mac=5)
+    assert len(fourth.sample_indices) == len(first.sample_indices) - 1
+    assert pipeline._trait_cache.key != cached.key
+
+
 def test_pad_association_results_noop_when_no_filter() -> None:
     res = AssociationResults(
         effects=np.array([0.1, 0.2, 0.3]),
