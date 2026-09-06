@@ -12,6 +12,7 @@ import os
 import sys
 from typing import List, Optional, Sequence, Tuple
 
+from panicle.core.methods import normalize_cli_methods
 from panicle.cli.utils import parse_args
 from panicle.pipelines.gwas import GWASPipeline
 
@@ -45,32 +46,8 @@ def normalize_outputs(outputs):
 
 
 def normalize_methods(methods):
-    """Normalize method names to pipeline-supported identifiers."""
-    if not methods:
-        return []
-
-    aliases = {
-        "GLM": "GLM",
-        "MLM": "MLM",
-        "BAYESLOCO": "BAYESLOCO",
-        "FARMCPU": "FARMCPU",
-        "FARMCPU_RESAMPLING": "FarmCPUResampling",
-        "FARMCPURESAMPLING": "FarmCPUResampling",
-        "RESAMPLING": "FarmCPUResampling",
-        "BLINK": "BLINK",
-    }
-
-    normalized = []
-    seen = set()
-    for m in methods:
-        key = str(m).replace("-", "_").replace(" ", "_").strip().upper()
-        if not key:
-            continue
-        method = aliases.get(key, key)
-        if method not in seen:
-            normalized.append(method)
-            seen.add(method)
-    return normalized
+    """Compatibility entry point for CLI method normalization."""
+    return normalize_cli_methods(methods)
 
 
 def _parse_float_tuple(text: Optional[str]) -> Optional[Tuple[float, ...]]:

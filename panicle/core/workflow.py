@@ -3,7 +3,7 @@
 Interface adapters retain their defaults, logging and error policies. These
 operations neither write files nor plot and do not change numerical kernels.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from typing import Any, Callable, Optional
 
@@ -11,6 +11,7 @@ import numpy as np
 
 from ..utils.data_types import GenotypeMatrix, GenotypeMap, ensure_eager_genotype
 from ..utils.stats import compute_mac_keep_indices
+from .methods import method_definition
 
 
 @dataclass
@@ -74,6 +75,19 @@ class MethodRunResult:
         return (self.name, self.result, self.lambda_gc, self.lambda_gc_is_approx, self.error)
 
 
+@dataclass
+class MethodOptions:
+    farmcpu: dict = field(default_factory=dict)
+    blink: dict = field(default_factory=dict)
+    bayesloco: Any = None
+    max_iterations: int = 10
+    n_eff: Optional[int] = None
+    loco_kinship: Any = None
+    mlm: dict = field(default_factory=dict)
+    ncpus: int = 1
+    mlm_mode: str = 'loco'
+
+
 def retained_samples(values, covariates=None):
     mask = np.isfinite(values)
     if covariates is not None:
@@ -106,10 +120,6 @@ def association_genotype(genotype, keep_indices=None):
     return ensure_eager_genotype(genotype)
 
 
-_MAP_METHODS = {'MLM_LOCO', 'FARMCPU', 'BLINK', 'BAYESLOCO', 'FARMCPURESAMPLING'}
-_DISPLAY_NAMES = {'FARMCPU': 'FarmCPU', 'FARMCPURESAMPLING': 'FarmCPUResampling', 'MLM_LOCO': 'MLM'}
-
-
 def run_method(method: str, trait: PreparedTrait, *, runner: Callable, options=None) -> MethodRunResult:
     """Execute one solver using the same input contract in either interface.
 
@@ -118,15 +128,17 @@ def run_method(method: str, trait: PreparedTrait, *, runner: Callable, options=N
     and method-specific settings, never a second copy of phenotype/genotype data.
     """
     key = method.upper()
+    definition = method_definition(key)
     kwargs = dict(phe=trait.phenotype, geno=trait.genotype, CV=trait.covariates)
-    if key in _MAP_METHODS:
+    if definition is not None and definition.uses_map:
         kwargs['map_data'] = trait.geno_map
-    if key == 'MLM':
+    if definition is not None and definition.uses_kinship:
         kwargs['K'] = trait.kinship
     kwargs.update(options or {})
     started = time.time()
     result = runner(**kwargs)
-    return MethodRunResult(_DISPLAY_NAMES.get(key, key), result, time.time() - started)
+    name = definition.display_name if definition is not None else key
+    return MethodRunResult(name, result, time.time() - started)
 
 
 def run_trait_group(traits, genotype, *, runner, options=None):

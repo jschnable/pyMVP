@@ -8,11 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Significant-only output now handles NumPy-backed map columns correctly during
+  selective row extraction, while retaining lazy decoding for cached columns.
 - Global MLM in `PANICLE(...)` now subsets the kinship matrix correctly when
   missing/non-finite phenotype or covariate values exclude samples. Regression
   tests compare per-trait results with direct MLM using the retained samples.
 
 ### Changed
+- Extract pipeline threshold policy with explicit precedence, centralize method
+  identities/CLI aliases/input contracts, and use named execution/reporting
+  inputs while preserving legacy adapters and interface-specific ordering.
 - Share trait selection, grouping, MAC preparation, and solver dispatch between
   the one-call API and pipeline, using named preparation/cache/result objects.
 - Consolidate VCF/PLINK/HapMap cache handling and extract map serialization and

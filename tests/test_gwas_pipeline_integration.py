@@ -85,6 +85,33 @@ def synthetic_data(tmp_path: Path):
     }
 
 
+def test_significant_only_matches_full_output(synthetic_data, tmp_path):
+    """Real GLM plus selective output on NumPy-backed map columns."""
+    pipeline = GWASPipeline(output_dir=str(tmp_path / 'full'))
+    pipeline.load_data(
+        phenotype_file=str(synthetic_data['phenotype_file']),
+        genotype_file=str(synthetic_data['genotype_file']),
+        map_file=str(synthetic_data['map_file']),
+    )
+    pipeline.align_samples()
+    # Ensure this covers the originally failing map representation.
+    pipeline.geno_map = GenotypeMap(pipeline.geno_map.to_dataframe())
+    options = dict(methods=['GLM'], min_mac=0, significance=1.0,
+                   use_effective_tests=False, include_standard_errors=True)
+    pipeline.run_analysis(outputs=['all_marker_pvalues', 'significant_marker_pvalues'], **options)
+    full_dir = pipeline.output_dir
+    pipeline.output_dir = tmp_path / 'significant_only'
+    pipeline.output_dir.mkdir()
+    pipeline.run_analysis(outputs=['significant_marker_pvalues'], **options)
+    for trait in synthetic_data['trait_names']:
+        filename = f'GWAS_{trait}_significant.csv'
+        expected = pd.read_csv(full_dir / filename)
+        actual = pd.read_csv(pipeline.output_dir / filename)
+        assert not actual.empty
+        pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+        assert not (pipeline.output_dir / f'GWAS_{trait}_all_results.csv').exists()
+
+
 def test_resolve_method_cpu_modes(monkeypatch) -> None:
     # ncpus=0 ("all cores") resolves via the affinity-aware helper, which
     # respects cgroup/cpuset/scheduler allocations rather than the raw host

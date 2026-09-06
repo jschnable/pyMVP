@@ -452,7 +452,9 @@ class GenotypeMap:
         for column in self._column_order:
             data = self._column_data[column]
             if hasattr(data, "take"):
-                frame_data[column] = data.take(idx).to_numpy()
+                # Select before decoding: take() returns an ndarray for NumPy
+                # columns, but a Series/lazy wrapper for other column types.
+                frame_data[column] = _materialize_lazy_column(data.take(idx))
             else:
                 frame_data[column] = np.asarray(data)[idx]
         return pd.DataFrame(frame_data, copy=False)

@@ -7,12 +7,15 @@ association testing, and result reporting into a reusable pipeline class.
 """
 
 from ..core.workflow import (
-    PreparedTrait, TraitCacheKey, TraitPreparation, MethodRunResult,
+    PreparedTrait, TraitCacheKey, TraitPreparation, MethodRunResult, MethodOptions,
     retained_samples, group_sample_indices, select_markers, association_genotype,
     run_method, run_trait_group,
 )
 
-from ..reporting.pipeline import TraitOutputContext, write_trait_results
+from ..core.methods import ordered_pipeline_methods
+from ..core.thresholds import base_threshold as resolve_base_threshold, trait_thresholds
+from ..reporting.models import MethodReport, TraitReport, ReportOptions
+from ..reporting.pipeline import TraitOutputContext, write_trait_results, write_trait_report
 
 import os
 import time
@@ -127,6 +130,128 @@ def normalize_mlm_mode(mlm_mode: Optional[str]) -> str:
 
 
 # Helper function for method dispatch
+def _execute_prepared_method(method, prepared: PreparedTrait, options: MethodOptions):
+    """Execute a prepared trait; retain pipeline failure and option policies."""
+    try:
+        if method == 'GLM':
+            completed = run_method(
+                "GLM", prepared,
+                runner=PANICLE_GLM,
+                options=dict(
+                    cpu=options.ncpus,
+                    verbose=False,
+                ),
+            )
+
+        elif method == 'MLM':
+            mlm_kwargs = options.mlm or {}
+            mode = normalize_mlm_mode(options.mlm_mode)
+            use_loco = mode == "loco" and prepared.geno_map is not None
+            if use_loco:
+                completed = run_method(
+                    "MLM_LOCO", prepared,
+                    runner=PANICLE_MLM_LOCO,
+                    options=dict(
+                        loco_kinship=options.loco_kinship,
+                        verbose=False,
+                        **mlm_kwargs,
+                    ),
+                )
+            else:
+                if prepared.kinship is None:
+                    return MethodRunResult("MLM", error="Kinship matrix missing")
+                completed = run_method(
+                    "MLM", prepared,
+                    runner=PANICLE_MLM,
+                    options=dict(
+                        K=prepared.kinship,
+                        cpu=options.ncpus,
+                        verbose=False,
+                    ),
+                )
+
+        elif method == 'FARMCPU':
+            # Leave p_threshold as None unless the caller set it explicitly so
+            # PANICLE_FarmCPU can use its rMVP-style default early-stop
+            # (0.01 / n_tests) and keep QTN_threshold at the uncorrected 0.01
+            # default.  Defaulting to `alpha` (0.05) previously forced
+            # QTN_threshold = max(0.05, 0.01) and disabled the 0.01/n stop.
+            fc_p = options.farmcpu.get('p_threshold', None)
+            fc_qtn = options.farmcpu.get('QTN_threshold', 0.01)  # Alpha for QTN selection, e.g., 0.01
+            fc_bin = options.farmcpu.get('bin_size')
+            fc_method_bin = options.farmcpu.get('method_bin', 'static')
+            fc_converge = options.farmcpu.get('converge', 1.0)
+            completed = run_method(
+                "FARMCPU", prepared,
+                runner=PANICLE_FarmCPU,
+                options=dict(
+                    maxLoop=options.max_iterations,
+                    p_threshold=fc_p,
+                    QTN_threshold=fc_qtn,
+                    n_eff=options.n_eff,
+                    converge=fc_converge,
+                    bin_size=fc_bin,
+                    method_bin=fc_method_bin,
+                    cpu=options.ncpus,
+                    verbose=False,
+                ),
+            )
+
+        elif method == 'BLINK':
+            blink_kwargs = {
+                key: options.blink[key]
+                for key in (
+                    'Prior',
+                    'maxLoop',
+                    'converge',
+                    'ld_threshold',
+                    'maf_threshold',
+                    'bic_method',
+                    'method_sub',
+                    'p_threshold',
+                    'qtn_threshold',
+                    'cut_off',
+                    'fdr_cut',
+                    'maxLine',
+                    'max_genotype_dosage',
+                )
+                if key in options.blink
+            }
+            blink_kwargs.setdefault('maxLoop', options.max_iterations)
+            completed = run_method(
+                "BLINK", prepared,
+                runner=PANICLE_BLINK,
+                options=dict(
+                    cpu=options.ncpus,
+                    verbose=False,
+                    **blink_kwargs,
+                ),
+            )
+
+        elif method == 'BAYESLOCO':
+            completed = run_method(
+                "BAYESLOCO", prepared,
+                runner=PANICLE_BayesLOCO,
+                options=dict(
+                    cpu=options.ncpus,
+                    verbose=False,
+                    bl_config=options.bayesloco,
+                ),
+            )
+            
+        else:
+            # Resampling is handled by run_analysis with trait/output context.
+            return MethodRunResult(method, error=f"Unknown method {method}")
+
+        completed.lambda_gc, completed.lambda_gc_is_approx = (
+            qq_compatible_genomic_inflation_factor(completed.result.pvalues)
+        )
+        return completed
+
+    except Exception as e:
+        return MethodRunResult(method, error=str(e))
+
+
 def _execute_single_method(
     method,
     y_sub,
@@ -147,126 +272,13 @@ def _execute_single_method(
     ncpus: int = 1,
     mlm_mode: str = "loco",
 ):
-    """Execute a method, recording failures and diagnostics in a named result."""
+    """Compatibility adapter for the former positional worker inputs."""
     prepared = PreparedTrait("", y_sub, g_sub, cov_sub, k_sub, np.arange(len(y_sub)), map_data)
-    try:
-        if method == 'GLM':
-            completed = run_method(
-                "GLM", prepared,
-                runner=PANICLE_GLM,
-                options=dict(
-                    cpu=ncpus,
-                    verbose=False,
-                ),
-            )
-
-        elif method == 'MLM':
-            mlm_kwargs = mlm_kwargs or {}
-            mode = normalize_mlm_mode(mlm_mode)
-            use_loco = mode == "loco" and map_data is not None
-            if use_loco:
-                completed = run_method(
-                    "MLM_LOCO", prepared,
-                    runner=PANICLE_MLM_LOCO,
-                    options=dict(
-                        loco_kinship=mlm_loco_kinship,
-                        verbose=False,
-                        **mlm_kwargs,
-                    ),
-                )
-            else:
-                if k_sub is None:
-                    return MethodRunResult("MLM", error="Kinship matrix missing")
-                completed = run_method(
-                    "MLM", prepared,
-                    runner=PANICLE_MLM,
-                    options=dict(
-                        K=k_sub,
-                        cpu=ncpus,
-                        verbose=False,
-                    ),
-                )
-
-        elif method == 'FARMCPU':
-            # Leave p_threshold as None unless the caller set it explicitly so
-            # PANICLE_FarmCPU can use its rMVP-style default early-stop
-            # (0.01 / n_tests) and keep QTN_threshold at the uncorrected 0.01
-            # default.  Defaulting to `alpha` (0.05) previously forced
-            # QTN_threshold = max(0.05, 0.01) and disabled the 0.01/n stop.
-            fc_p = fc_params.get('p_threshold', None)
-            fc_qtn = fc_params.get('QTN_threshold', 0.01)  # Alpha for QTN selection, e.g., 0.01
-            fc_bin = fc_params.get('bin_size')
-            fc_method_bin = fc_params.get('method_bin', 'static')
-            fc_converge = fc_params.get('converge', 1.0)
-            completed = run_method(
-                "FARMCPU", prepared,
-                runner=PANICLE_FarmCPU,
-                options=dict(
-                    maxLoop=max_iterations,
-                    p_threshold=fc_p,
-                    QTN_threshold=fc_qtn,
-                    n_eff=n_eff,
-                    converge=fc_converge,
-                    bin_size=fc_bin,
-                    method_bin=fc_method_bin,
-                    cpu=ncpus,
-                    verbose=False,
-                ),
-            )
-
-        elif method == 'BLINK':
-            blink_kwargs = {
-                key: blk_params[key]
-                for key in (
-                    'Prior',
-                    'maxLoop',
-                    'converge',
-                    'ld_threshold',
-                    'maf_threshold',
-                    'bic_method',
-                    'method_sub',
-                    'p_threshold',
-                    'qtn_threshold',
-                    'cut_off',
-                    'fdr_cut',
-                    'maxLine',
-                    'max_genotype_dosage',
-                )
-                if key in blk_params
-            }
-            blink_kwargs.setdefault('maxLoop', max_iterations)
-            completed = run_method(
-                "BLINK", prepared,
-                runner=PANICLE_BLINK,
-                options=dict(
-                    cpu=ncpus,
-                    verbose=False,
-                    **blink_kwargs,
-                ),
-            )
-
-        elif method == 'BAYESLOCO':
-            completed = run_method(
-                "BAYESLOCO", prepared,
-                runner=PANICLE_BayesLOCO,
-                options=dict(
-                    cpu=ncpus,
-                    verbose=False,
-                    bl_config=bl_params,
-                ),
-            )
-            
-        else:
-            # Resampling is handled by run_analysis with trait/output context.
-            return MethodRunResult(method, error=f"Unknown method {method}")
-
-        completed.lambda_gc, completed.lambda_gc_is_approx = (
-            qq_compatible_genomic_inflation_factor(completed.result.pvalues)
-        )
-        return completed
-
-    except Exception as e:
-        return MethodRunResult(method, error=str(e))
+    return _execute_prepared_method(method, prepared, MethodOptions(
+        farmcpu=fc_params, blink=blk_params, bayesloco=bl_params,
+        max_iterations=max_iterations, n_eff=n_eff, loco_kinship=mlm_loco_kinship,
+        mlm=mlm_kwargs, ncpus=ncpus, mlm_mode=mlm_mode,
+    ))
 
 
 def _run_single_method(*args, **kwargs):
@@ -996,27 +1008,20 @@ class GWASPipeline:
 
         # 2. Bonferroni / Thresholding Logic
         n_markers = self.genotype_matrix.n_markers
-        bonferroni_denom = float(n_markers)
-        threshold_source = "Bonferroni (markers)"
-        
+        estimated_me = (self.effective_tests_info or {}).get("Me")
+        base_policy = resolve_base_threshold(
+            n_markers=n_markers, alpha=alpha, significance=significance,
+            n_eff=n_eff, use_effective_tests=use_effective_tests, estimated_me=estimated_me,
+        )
         if significance is not None:
-             base_threshold = significance
-             self.log(f"   Using fixed significance threshold: {base_threshold}")
-             effective_tests_count = float('nan') # User override
-             threshold_source = "Fixed p-value"
+            self.log(f"   Using fixed significance threshold: {base_policy.value}")
         else:
-             # Logic to choose denominator
-             if n_eff:
-                 bonferroni_denom = float(n_eff)
-                 threshold_source = "Bonferroni (effective tests)"
-             elif use_effective_tests and self.effective_tests_info and self.effective_tests_info.get("Me"):
-                 bonferroni_denom = float(self.effective_tests_info["Me"])
-                 self.log(f"   Using effective tests (Me={bonferroni_denom}) for Bonferroni.")
-                 threshold_source = "Bonferroni (effective tests)"
-             
-             base_threshold = alpha / max(bonferroni_denom, 1.0)
-             effective_tests_count = bonferroni_denom
-             self.log(f"   Calculated Bonferroni threshold: {base_threshold:.2e} (alpha={alpha}, n={bonferroni_denom})")
+            if not n_eff and use_effective_tests and estimated_me:
+                self.log(f"   Using effective tests (Me={base_policy.n_tests}) for Bonferroni.")
+            self.log(f"   Calculated Bonferroni threshold: {base_policy.value:.2e} (alpha={alpha}, n={base_policy.n_tests})")
+
+        execution_order = ordered_pipeline_methods(methods)
+        report_options = ReportOptions(outputs, alpha, max_genotype_dosage, include_standard_errors)
 
         # 3. Main Loop over Traits
         summary_rows = []
@@ -1122,98 +1127,16 @@ class GWASPipeline:
 
             # Run methods in deterministic order. Method engines may still use
             # internal threading based on `cpu`.
-            method_results = {}
-            method_lambda_gc = {}  # Track lambda GC for each method
-            method_lambda_gc_is_approx = {}  # Track whether lambda uses QQ subsampling
-            
-            # Setup params for FarmCPU/BLINK
+            method_reports: Dict[str, MethodReport] = {}
             fc_params = farmcpu_params or {}
-            blk_params = blink_params or {}
-            bl_params = bayesloco_params or {}
-            method_thresholds: Dict[str, float] = {}
-            method_threshold_sources: Dict[str, str] = {}
-
-            # Determine effective tests for multiple testing correction (needed for FarmCPU thresholds)
-            effective_n = None
-            if use_effective_tests and self.effective_tests_info and self.effective_tests_info.get("Me"):
-                effective_n = int(self.effective_tests_info["Me"])
-            elif n_eff:
-                effective_n = n_eff
-
-            # Per-trait Bonferroni denominator and threshold: when the MAC
-            # filter drops markers, use the filtered count so thresholds
-            # reflect the number of tests actually performed on this trait.
-            trait_n_tested = int(g_sub.n_markers) if hasattr(g_sub, "n_markers") else int(n_markers)
-            if significance is not None:
-                trait_base_threshold = base_threshold
-                trait_effective_tests_count = effective_tests_count
-                trait_threshold_source = threshold_source
-            elif trait_keep_indices is not None:
-                # Filter is active for this trait: use the filtered count
-                # directly (effective_tests from LD was based on full set).
-                trait_base_threshold = alpha / max(trait_n_tested, 1)
-                trait_effective_tests_count = float(trait_n_tested)
-                trait_threshold_source = "Bonferroni (markers, post-MAC)"
-            else:
-                trait_base_threshold = base_threshold
-                trait_effective_tests_count = effective_tests_count
-                trait_threshold_source = threshold_source
-
-            fc_qtn_alpha = fc_params.get('QTN_threshold', 0.01)
-            if fc_params.get('QTN_threshold_is_corrected'):
-                fc_qtn_corrected = fc_qtn_alpha
-                fc_qtn_source = 'FarmCPU QTN threshold (corrected)'
-            else:
-                fc_n_tests = effective_n if effective_n else trait_n_tested
-                fc_qtn_corrected = fc_qtn_alpha / fc_n_tests
-                fc_qtn_source = 'FarmCPU QTN threshold'
-
-            # Resolve methods once and run them in-process. Each method handles
-            # its own internal threading using `cpu`.
-            methods_upper = [m.upper() for m in methods]
-            ordered_methods: List[str] = []
-            if 'GLM' in methods_upper:
-                ordered_methods.append('GLM')
-            if 'MLM' in methods_upper:
-                ordered_methods.append('MLM')
-            if 'FARMCPU' in methods_upper:
-                ordered_methods.append('FARMCPU')
-            if 'BLINK' in methods_upper:
-                ordered_methods.append('BLINK')
-            if 'BAYESLOCO' in methods_upper:
-                ordered_methods.append('BAYESLOCO')
-
-            # Track method-specific thresholds for plotting/reporting.
-            # Keys match method result names (e.g., 'FarmCPU', 'BLINK').
-            if 'FARMCPU' in methods_upper:
-                # FarmCPU applies multiple testing correction internally
-                # Use the same denominator for reporting consistency
-                method_thresholds['FarmCPU'] = fc_qtn_corrected  # Match worker return name
-                method_threshold_sources['FarmCPU'] = fc_qtn_source
-            if 'BLINK' in methods_upper:
-                method_thresholds['BLINK'] = trait_base_threshold
-                method_threshold_sources['BLINK'] = trait_threshold_source
-            if 'GLM' in methods_upper:
-                method_thresholds['GLM'] = trait_base_threshold
-                method_threshold_sources['GLM'] = trait_threshold_source
-            if 'MLM' in methods_upper:
-                method_thresholds['MLM'] = trait_base_threshold
-                method_threshold_sources['MLM'] = trait_threshold_source
-            if 'BAYESLOCO' in methods_upper:
-                method_thresholds['BAYESLOCO'] = trait_base_threshold
-                method_threshold_sources['BAYESLOCO'] = trait_threshold_source
-            if 'FARMCPURESAMPLING' in methods_upper:
-                if 'resampling_significance_threshold' in fc_params:
-                    resampling_thresh = fc_params['resampling_significance_threshold']
-                    resampling_source = 'Resampling significance threshold'
-                else:
-                    resampling_thresh = fc_qtn_corrected
-                    resampling_source = 'FarmCPU QTN threshold (default)'
-                method_thresholds['FarmCPUResampling'] = resampling_thresh
-                method_threshold_sources['FarmCPUResampling'] = resampling_source
-
-            # Resampling usually handled separately or sequentially due to complexity
-            run_resampling = 'FARMCPURESAMPLING' in methods_upper
+            thresholds = trait_thresholds(
+                base=base_policy, methods=methods, n_tested=g_sub.n_markers,
+                mac_filtered=trait_keep_indices is not None, significance=significance,
+                alpha=alpha, n_eff=n_eff, use_effective_tests=use_effective_tests,
+                estimated_me=estimated_me, farmcpu_params=fc_params,
+            )
+            ordered_methods = execution_order
+            run_resampling = 'FARMCPURESAMPLING' in methods_upper_check
 
             mlm_loco_kinship = None
             mlm_kwargs = {"cpu": method_cpus}
@@ -1230,64 +1153,44 @@ class GWASPipeline:
                     keep_indices=trait_keep_indices,
                 )
 
-            # Per-trait effective marker count for Bonferroni reporting
-            # (the raw scan ran on the filtered marker set).
-            trait_n_markers = g_sub.n_markers if hasattr(g_sub, "n_markers") else n_markers
+            method_options = MethodOptions(
+                farmcpu=fc_params, blink=blink_params or {},
+                bayesloco=bayesloco_params or {}, max_iterations=max_iterations,
+                n_eff=thresholds.effective_n, loco_kinship=mlm_loco_kinship,
+                mlm=mlm_kwargs, ncpus=method_cpus, mlm_mode=mlm_mode_norm,
+            )
 
             if ordered_methods:
                 self.log(f"   Running analysis for: {ordered_methods}")
                 for method in ordered_methods:
-                    if method == "GLM" and use_grouped_glm:
-                        res_name = "GLM"
-                        res_obj = grouped_glm_results[trait_name]
-                        lambda_gc, lambda_gc_is_approx = qq_compatible_genomic_inflation_factor(res_obj.pvalues)
-                        error = None
-                    elif method == "MLM" and use_grouped_mlm:
-                        res_name = "MLM"
-                        res_obj = grouped_mlm_results[trait_name]
-                        lambda_gc, lambda_gc_is_approx = qq_compatible_genomic_inflation_factor(res_obj.pvalues)
-                        error = None
+                    grouped = (
+                        grouped_glm_results if method == "GLM" and use_grouped_glm
+                        else grouped_mlm_results if method == "MLM" and use_grouped_mlm
+                        else None
+                    )
+                    if grouped is not None:
+                        completed = MethodRunResult(method, grouped[trait_name])
+                        completed.lambda_gc, completed.lambda_gc_is_approx = (
+                            qq_compatible_genomic_inflation_factor(completed.result.pvalues)
+                        )
                     else:
-                        loco_arg = mlm_loco_kinship if method == "MLM" else None
-                        mlm_kw_arg = mlm_kwargs if method == "MLM" else None
-                        completed = _execute_single_method(
-                            method,
-                            y_sub,
-                            g_sub,
-                            cov_sub,
-                            k_sub,
-                            trait_geno_map,
-                            fc_params,
-                            blk_params,
-                            bl_params,
-                            max_iterations,
-                            trait_base_threshold,
-                            trait_n_markers,
-                            effective_n,
-                            alpha,
-                            loco_arg,
-                            mlm_kw_arg,
-                            ncpus=method_cpus,
-                            mlm_mode=mlm_mode_norm,
+                        completed = _execute_prepared_method(
+                            method, prepared, method_options,
                         )
-                        res_name, res_obj = completed.name, completed.result
-                        lambda_gc, lambda_gc_is_approx = completed.lambda_gc, completed.lambda_gc_is_approx
-                        error = completed.error
-                        # Pad results back to full-map length (NaN for dropped markers).
-                        res_obj = pad_association_results(
-                            res_obj, trait_keep_indices, n_markers, full_map=self.geno_map,
+                        completed.result = pad_association_results(
+                            completed.result, trait_keep_indices, n_markers, full_map=self.geno_map,
                         )
-                    if error:
-                        self.log(f"   {method} Failed: {error}")
+                    if completed.error:
+                        self.log(f"   {method} Failed: {completed.error}")
                         continue
-                    method_results[res_name] = res_obj
-                    if lambda_gc is not None:
-                        method_lambda_gc[res_name] = lambda_gc
-                        method_lambda_gc_is_approx[res_name] = lambda_gc_is_approx
-                        lambda_label = "Lambda (GC, approx)" if lambda_gc_is_approx else "Lambda (GC)"
-                        self.log(f"   {res_name} {lambda_label}: {lambda_gc:.3f}")
-                        if lambda_gc > 1.3:
-                            self.log(f"   WARNING: Genomic inflation factor ({lambda_gc:.3f}) > 1.3 for {res_name}.")
+                    method_reports[completed.name] = MethodReport(
+                        completed, thresholds.methods[completed.name],
+                    )
+                    if completed.lambda_gc is not None:
+                        lambda_label = "Lambda (GC, approx)" if completed.lambda_gc_is_approx else "Lambda (GC)"
+                        self.log(f"   {completed.name} {lambda_label}: {completed.lambda_gc:.3f}")
+                        if completed.lambda_gc > 1.3:
+                            self.log(f"   WARNING: Genomic inflation factor ({completed.lambda_gc:.3f}) > 1.3 for {completed.name}.")
                             self.log(f"            This suggests population stratification or other confounding.")
                             self.log(f"            Consider using MLM or adding more PCs to control inflation.")
 
@@ -1296,7 +1199,7 @@ class GWASPipeline:
                  try:
                      self.log("   Running FarmCPU Resampling (Sequential)...")
                      runs = fc_params.get('resampling_runs', 100)
-                     sig_thresh = method_thresholds.get('FarmCPUResampling', fc_qtn_corrected)
+                     sig_thresh = thresholds.methods['FarmCPUResampling'].value
                      mask_prop = fc_params.get('resampling_mask_proportion', 0.1)
                      cluster = fc_params.get('resampling_cluster_markers', False)
                      ld_thresh = fc_params.get('resampling_ld_threshold', 0.7)
@@ -1317,27 +1220,23 @@ class GWASPipeline:
                              verbose=False,
                          ),
                      ).result
-                     method_results['FarmCPUResampling'] = res
+                     method_reports['FarmCPUResampling'] = MethodReport(
+                         MethodRunResult('FarmCPUResampling', res),
+                         thresholds.methods['FarmCPUResampling'],
+                     )
                      self.log(f"   Resampling identified {len(res.entries)} markers.")
                  except Exception as e:
                      self.log(f"   FarmCPU Resampling Failed: {e}")
 
             # Save and Report for this trait
             trait_runtime = time.time() - trait_start_time
-            trait_summary = self._save_trait_results(
-                trait_name, method_results,
-                trait_base_threshold, alpha, trait_effective_tests_count,
-                max_genotype_dosage, outputs, trait_threshold_source,
-                maf_keep_indices=trait_keep_indices,
-                include_standard_errors=include_standard_errors,
-                method_thresholds=method_thresholds,
-                method_threshold_sources=method_threshold_sources,
-                method_lambda_gc=method_lambda_gc,
-                method_lambda_gc_is_approx=method_lambda_gc_is_approx,
-                n_samples=n_samples_trait,
-                n_markers=n_markers,
-                runtime_seconds=trait_runtime,
-                geno_for_maf=g_sub
+            trait_summary = self._write_trait_report(
+                TraitReport(
+                    name=trait_name, methods=method_reports, base_threshold=thresholds.base,
+                    n_samples=n_samples_trait, n_markers=n_markers, runtime_seconds=trait_runtime,
+                    genotype_for_maf=g_sub, maf_keep_indices=trait_keep_indices,
+                ),
+                report_options,
             )
             summary_rows.extend(trait_summary)
             self.log(f"Trait {trait_name} completed in {trait_runtime:.2f} seconds")
@@ -1536,6 +1435,12 @@ class GWASPipeline:
         """Compatibility wrapper for callers of the former tuple-returning helper."""
         trait = self._prepare_trait(trait_name, n_pcs, need_kinship, min_mac, max_dosage)
         return None if trait is None else trait.legacy_tuple()
+
+    def _write_trait_report(self, report: TraitReport, options: ReportOptions):
+        context = TraitOutputContext(
+            self.output_dir, self.geno_map, self.genotype_matrix, self.log, PANICLE_Report,
+        )
+        return write_trait_report(context, report, options)
 
     def _save_trait_results(
         self,
