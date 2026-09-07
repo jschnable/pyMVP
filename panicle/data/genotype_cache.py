@@ -57,11 +57,19 @@ class GenotypeCache:
             logger.warning('[Cache] Failed to load cache: %s', exc)
             return None
 
-    def save(self, geno, ids, gmap, *, logger: logging.Logger) -> None:
+    def invalidate(self):
+        """Invalidate the old fingerprint before publishing a rebuilt genotype."""
+        try:
+            os.remove(self.path('filters.json'))
+        except FileNotFoundError:
+            pass
+
+    def save(self, geno, ids, gmap, *, logger: logging.Logger, genotype_written=False) -> None:
         """Write the existing cache format; failures do not discard parsed data."""
         try:
             logger.info('[Cache] Saving binary cache to %s.panicle.v2.*', self.base)
-            np.save(self.path('geno.npy'), geno)
+            if not genotype_written:
+                np.save(self.path('geno.npy'), geno)
             with open(self.path('ind.txt'), 'w') as handle:
                 for individual in ids:
                     handle.write(f'{individual}\n')

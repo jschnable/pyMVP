@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Close VCF readers and discard temporary genotype matrices after decoding
+  failures, including errors in the final bulk batch.
 - Significant-only output now handles NumPy-backed map columns correctly during
   selective row extraction, while retaining lazy decoding for cached columns.
 - Global MLM in `PANICLE(...)` now subsets the kinship matrix correctly when
@@ -15,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tests compare per-trait results with direct MLM using the retained samples.
 
 ### Changed
+- Bulk-decode diploid GT from extra FORMAT fields (including GT:DP and reordered
+  GT), and resume general decoding in the same input stream instead of restarting
+  after unsupported records. Preserve existing GT/DS, QC, and imputation rules.
+- Finalize VCF matrices in bounded tiles directly into large v2 caches, avoiding
+  a separate full-size heap matrix and cache copy. Fresh large loads return
+  writable copy-on-write memmaps; edits do not modify cached data.
+- Separate VCF backend decoding from scalar QC/map accumulation and temporary
+  matrix storage. Keep vectorized bulk QC outside the record-level path.
+- Decode simple-GT batches into marker-major storage, avoiding per-batch
+  transposed writes while preserving C-order sample-major returned arrays.
 - Extract pipeline threshold policy with explicit precedence, centralize method
   identities/CLI aliases/input contracts, and use named execution/reporting
   inputs while preserving legacy adapters and interface-specific ordering.

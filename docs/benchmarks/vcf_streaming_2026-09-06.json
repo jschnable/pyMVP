@@ -1,0 +1,397 @@
+{
+  "baseline": "Immediate preceding uncommitted VCF refactor; snapshot /tmp/panicle-vcf-stream-before.Lg5Sm0; see vcf_loader_changes_2026-09-06.md",
+  "method": "Warm filesystem, one workload warmup, three sequential timed force-recache loads; parsing/QC/imputation/map/cache included, hashing and JIT warmup excluded. Peak RSS is process-wide macOS bytes.",
+  "validation": {
+    "tests_passed": 408,
+    "tests_skipped": 1,
+    "parity_cases": 1024,
+    "baseline_error_outcomes": 32
+  },
+  "notes": [
+    "GT:DP fixture uses one-digit DP=8; variable-width fields have regression/parity tests.",
+    "gzip-ram is an experimental 512 MiB direct-cache threshold, not retained.",
+    "gzip-prefix includes an extra untimed cProfile pass; its peak RSS may include profiling overhead.",
+    "gzip repeats show timing instability; no gzip speedup claimed.",
+    "A metadata-prefix slice optimization followed the initial measurements; gzip repeat and htslib results include it.",
+    "No actual 10M marker production input measured."
+  ],
+  "runs": {
+    "gtdp-before": {
+      "input": "/tmp/panicle-vcf-1500-10k-gtdp.vcf",
+      "input_bytes": 90325881,
+      "backend": "builtin",
+      "seconds": [
+        1.8184925409732386,
+        1.8173407089198008,
+        1.825691125006415
+      ],
+      "median_seconds": 1.8184925409732386,
+      "cache_seconds": 0.007950291968882084,
+      "peak_rss_native": 284639232,
+      "fingerprint": {
+        "shape": [
+          1500,
+          10000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "e2e03fdfa9a531fcb5dc95b08edf27ec548fe18ad22399d35d02c11f7ef9aef4",
+        "map_sha256": "cef17365bfab7003d8b20529c85b69acb840c497ffb9a12e0607f21b1cc34aea",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "gtdp-after": {
+      "input": "/tmp/panicle-vcf-1500-10k-gtdp.vcf",
+      "input_bytes": 90325881,
+      "backend": "builtin",
+      "seconds": [
+        0.07973275007680058,
+        0.07652670796960592,
+        0.077813999960199
+      ],
+      "median_seconds": 0.077813999960199,
+      "cache_seconds": 0.0069911249447613955,
+      "peak_rss_native": 602669056,
+      "fingerprint": {
+        "shape": [
+          1500,
+          10000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "e2e03fdfa9a531fcb5dc95b08edf27ec548fe18ad22399d35d02c11f7ef9aef4",
+        "map_sha256": "cef17365bfab7003d8b20529c85b69acb840c497ffb9a12e0607f21b1cc34aea",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 23.36973477656177
+    },
+    "gtdp100k-before": {
+      "input": "/tmp/panicle-stream-1500-100k-gtdp.vcf",
+      "input_bytes": 903385883,
+      "backend": "builtin",
+      "seconds": [
+        18.33881729200948,
+        18.304297834052704,
+        18.5598893329734
+      ],
+      "median_seconds": 18.33881729200948,
+      "cache_seconds": 0.012418666039593518,
+      "peak_rss_native": 763822080,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "gtdp100k-after": {
+      "input": "/tmp/panicle-stream-1500-100k-gtdp.vcf",
+      "input_bytes": 903385883,
+      "backend": "builtin",
+      "seconds": [
+        0.7037463339511305,
+        0.6957875000080094,
+        0.6898602090077475
+      ],
+      "median_seconds": 0.6957875000080094,
+      "cache_seconds": 0.011558958096429706,
+      "peak_rss_native": 1055047680,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 26.35692261185833
+    },
+    "1m-before": {
+      "input": "/tmp/panicle-vcf-1500-1m.vcf",
+      "input_bytes": 6032785826,
+      "backend": "builtin",
+      "seconds": [
+        8.422083917073905,
+        8.337549458025023,
+        8.427082999958657
+      ],
+      "median_seconds": 8.422083917073905,
+      "cache_seconds": 0.013561458908952773,
+      "peak_rss_native": 4179165184,
+      "fingerprint": {
+        "shape": [
+          1500,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "a51047375efe35077ac669a6ab163e634f4d703d87538366c9b0be652e487ef3",
+        "map_sha256": "40c8576c98a35891f355ee92176568e0390e75edf7c0c21359c6bc4105e4d6b1",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "1m-after": {
+      "input": "/tmp/panicle-vcf-1500-1m.vcf",
+      "input_bytes": 6032785826,
+      "backend": "builtin",
+      "seconds": [
+        5.166789707960561,
+        4.842337958049029,
+        4.795193583006039
+      ],
+      "median_seconds": 4.842337958049029,
+      "cache_seconds": 0.014343417016789317,
+      "peak_rss_native": 4215275520,
+      "fingerprint": {
+        "shape": [
+          1500,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "a51047375efe35077ac669a6ab163e634f4d703d87538366c9b0be652e487ef3",
+        "map_sha256": "40c8576c98a35891f355ee92176568e0390e75edf7c0c21359c6bc4105e4d6b1",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 1.7392598348230843
+    },
+    "late-before": {
+      "input": "/tmp/panicle-stream-1500-100k-late.vcf",
+      "input_bytes": 603088885,
+      "backend": "builtin",
+      "seconds": [
+        3.251385333016515,
+        3.154567874968052,
+        3.1442066670861095
+      ],
+      "median_seconds": 3.154567874968052,
+      "cache_seconds": 0.01043050002772361,
+      "peak_rss_native": 1208877056,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "late-after": {
+      "input": "/tmp/panicle-stream-1500-100k-late.vcf",
+      "input_bytes": 603088885,
+      "backend": "builtin",
+      "seconds": [
+        0.5546249999897555,
+        0.5464727500220761,
+        0.5421569579048082
+      ],
+      "median_seconds": 0.5464727500220761,
+      "cache_seconds": 0.00925012503284961,
+      "peak_rss_native": 1089486848,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 5.77259867914844
+    },
+    "gzip-before": {
+      "input": "/tmp/panicle-vcf-1500-100k-fast.vcf.gz",
+      "input_bytes": 88795329,
+      "backend": "builtin",
+      "seconds": [
+        0.8310072090243921,
+        0.8287649169797078,
+        0.8263287079753354
+      ],
+      "median_seconds": 0.8287649169797078,
+      "cache_seconds": 0.010682041989639401,
+      "peak_rss_native": 907968512,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "gzip-after": {
+      "input": "/tmp/panicle-vcf-1500-100k-fast.vcf.gz",
+      "input_bytes": 88795329,
+      "backend": "builtin",
+      "seconds": [
+        0.9253478749888018,
+        0.8829616659786552,
+        0.8780484999297187
+      ],
+      "median_seconds": 0.8829616659786552,
+      "cache_seconds": 0.01025849999859929,
+      "peak_rss_native": 1087651840,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 0.938619363572396
+    },
+    "gzip-ram": {
+      "input": "/tmp/panicle-vcf-1500-100k-fast.vcf.gz",
+      "input_bytes": 88795329,
+      "backend": "builtin",
+      "seconds": [
+        1.2646417499054223,
+        1.2592415410326794,
+        1.2767349170753732
+      ],
+      "median_seconds": 1.2646417499054223,
+      "cache_seconds": 0.016311082988977432,
+      "peak_rss_native": 933593088,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 0.6553357241619517
+    },
+    "gzip-prefix": {
+      "input": "/tmp/panicle-vcf-1500-100k-fast.vcf.gz",
+      "input_bytes": 88795329,
+      "backend": "builtin",
+      "seconds": [
+        1.276835082913749,
+        1.291044416022487,
+        1.312935790978372
+      ],
+      "median_seconds": 1.291044416022487,
+      "cache_seconds": 0.009493499994277954,
+      "peak_rss_native": 1126121472,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 0.6419336985577982
+    },
+    "gzip-repeat-before": {
+      "input": "/tmp/panicle-vcf-1500-100k-fast.vcf.gz",
+      "input_bytes": 88795329,
+      "backend": "builtin",
+      "seconds": [
+        1.3065972500480711,
+        1.234953249921091,
+        1.2544420000631362
+      ],
+      "median_seconds": 1.2544420000631362,
+      "cache_seconds": 0.012655583093874156,
+      "peak_rss_native": 908574720,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "gzip-repeat-after": {
+      "input": "/tmp/panicle-vcf-1500-100k-fast.vcf.gz",
+      "input_bytes": 88795329,
+      "backend": "builtin",
+      "seconds": [
+        0.8343942919746041,
+        1.1316031659953296,
+        0.8577974160434678
+      ],
+      "median_seconds": 0.8577974160434678,
+      "cache_seconds": 0.010425792075693607,
+      "peak_rss_native": 1084997632,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 1.4623989028192281
+    },
+    "htslib-before": {
+      "input": "/tmp/panicle-vcf-1500-100k.vcf",
+      "input_bytes": 603085824,
+      "backend": "cyvcf2",
+      "seconds": [
+        7.706283167004585,
+        7.669072499964386,
+        7.725728916935623
+      ],
+      "median_seconds": 7.706283167004585,
+      "cache_seconds": 0.010167042026296258,
+      "peak_rss_native": 870055936,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      }
+    },
+    "htslib-after": {
+      "input": "/tmp/panicle-vcf-1500-100k.vcf",
+      "input_bytes": 603085824,
+      "backend": "cyvcf2",
+      "seconds": [
+        7.782952832989395,
+        7.801792165962979,
+        7.827262082952075
+      ],
+      "median_seconds": 7.801792165962979,
+      "cache_seconds": 0.01223216694779694,
+      "peak_rss_native": 601653248,
+      "fingerprint": {
+        "shape": [
+          1500,
+          100000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "b831b9eb31a8b8f725000cb7a5d4adf5062118734dfb37f396c59a9215d0ac12",
+        "map_sha256": "74eb9a7478dbe5ca283431b3db709ad303f6ec07bcda95324799f7a8b1b665a9",
+        "ids_sha256": "072833acb60c644b46aeef9027dd116891943d3589e8acab24563f6bcba475a8"
+      },
+      "speedup": 0.9877580693093732
+    }
+  }
+}
