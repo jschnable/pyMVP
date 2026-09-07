@@ -1,0 +1,3767 @@
+{
+  "date": "2026-09-07",
+  "purpose": "Portable opt-in cache-write and gzip-decoder comparison",
+  "source_commit": "61be38c",
+  "code_snapshots_sha256": {
+    "before": "d3961d5a6b9765d0bd6f8e08b313125a4a85851a2b141f894236acea76fef428",
+    "initial_candidate": "ed478e614a63b5c4f50019de755f1811a0356ff262a0524fe2af10d85b216358",
+    "final": "bb1b385da0866ba4d9e922318beb997bdfa19bbfda332da9f3a6fb46bd0023d5"
+  },
+  "prior_full_baselines": "vcf_cross_platform_2026-09-07.json",
+  "optional_isal_version": "1.8.0",
+  "tests": {
+    "mac_defaults": "437 passed, 1 skipped",
+    "mac_buffered_isal": "437 passed, 1 skipped",
+    "linux_buffered_isal": "437 passed, 1 skipped",
+    "stdlib_parity": "1024 baseline cases matched, including 32 error outcomes",
+    "isal_parity": "1024 baseline cases matched, including 32 error outcomes"
+  },
+  "notes": [
+    "Before snapshot includes prior uncommitted instrumentation changes.",
+    "Initial candidate used unconditional buffered writes: mac buffered runs and linux-full-buffered-stdlib use this snapshot. Final code restores mapped default and exposes the same buffered path explicitly.",
+    "Final code used for mac-1m-final-default, Linux subset non-before runs, and linux-full-buffered-isal.",
+    "Full runs have no full-workload warmup and one repetition. Subset runs have warmup plus three repetitions. No simultaneous benchmarks on a host; not controlled cold-storage trials.",
+    "Prior full baselines were from earlier runs, not an interleaved control; not all whole-load improvement can be attributed to writes.",
+    "New gzip timing includes readinto/copy work; old baseline timing was inside the stdlib reader.",
+    "Mac full ISA-L trial was not pursued after the substantial subset regression.",
+    "All full/subset output fingerprints match within their respective input sizes. Production data/caches untouched."
+  ],
+  "runs": {
+    "mac-full-buffered-stdlib": {
+      "input": "/private/tmp/panicle-portable-io.T0yXqL/maize-full.vcf.gz",
+      "input_bytes": 3647063164,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": false,
+      "seconds": [
+        180.5325017500436
+      ],
+      "median_seconds": 180.5325017500436,
+      "cache_seconds": 0.17626762494910508,
+      "peak_rss_native": 16334700544,
+      "peak_rss_bytes": 16334700544,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "stdlib",
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 228196352,
+            "peak_rss_bytes": 228196352,
+            "user_cpu_seconds": 0.6780269999999999,
+            "system_cpu_seconds": 0.117241,
+            "major_faults": 102,
+            "minor_faults": 41984,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 14459731968,
+            "peak_rss_bytes": 14459731968,
+            "user_cpu_seconds": 109.482273,
+            "system_cpu_seconds": 75.789464,
+            "major_faults": 2016755,
+            "minor_faults": 968013,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 559997,
+                "inclusive_seconds": 34.449754935805686,
+                "exclusive_seconds": 34.449754935805686
+              },
+              "spool_flush": {
+                "calls": 11,
+                "inclusive_seconds": 1.3606195419561118,
+                "exclusive_seconds": 1.3606195419561118
+              },
+              "spool_growth": {
+                "calls": 10,
+                "inclusive_seconds": 1.2965608754893765,
+                "exclusive_seconds": 0.2931327495025471
+              },
+              "spool_append": {
+                "calls": 380,
+                "inclusive_seconds": 15.779703255509958,
+                "exclusive_seconds": 14.483142380020581
+              },
+              "transpose_tiles": {
+                "calls": 1625,
+                "inclusive_seconds": 24.680320424144156,
+                "exclusive_seconds": 24.680320424144156
+              },
+              "tile_buffer_copies": {
+                "calls": 1625,
+                "inclusive_seconds": 0.9663638677448034,
+                "exclusive_seconds": 0.9663638677448034
+              },
+              "cache_file_writes": {
+                "calls": 271,
+                "inclusive_seconds": 68.40938345738687,
+                "exclusive_seconds": 68.40938345738687
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.09181079198606312,
+                "exclusive_seconds": 0.09181079198606312
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 94.95758279203437,
+                "exclusive_seconds": 0.45251283480320126
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 168.57580054202117,
+                "exclusive_seconds": 23.388759558671154
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.2838442500215024,
+                "exclusive_seconds": 0.2838442500215024
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 9.258138417033479,
+                "exclusive_seconds": 9.258138417033479
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 9.259692790918052,
+                "exclusive_seconds": 0.0015543738845735788
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 180.53230312501546,
+                "exclusive_seconds": 2.412965542054735
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 24511512576,
+              "spool_append_bytes": 18167776065,
+              "spool_plus_output_logical_peak_bytes": 42679288641,
+              "output_tile_write_bytes": 18167776065
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 18167776193,
+          "allocated_bytes": 18167779328
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 744182384,
+          "allocated_bytes": 744185856
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          12435165
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "4a8d59a04a98e1618139b5284db1bf802bd04b0eb9f068254a59fac451671778",
+        "map_sha256": "73a2227828a19b0bb85136b5156f4a644d2e48e993e4d2229caf1ae8e22f9082",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "mac-1m-final-default": {
+      "input": "/private/tmp/panicle-portable-io.T0yXqL/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        7.238409291952848,
+        6.915004500071518,
+        6.894502750015818
+      ],
+      "median_seconds": 6.915004500071518,
+      "cache_seconds": 0.011791333090513945,
+      "peak_rss_native": 4150542336,
+      "peak_rss_bytes": 4150542336,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "stdlib",
+        "vcf_cache_writer": "mapped",
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3866558464,
+            "peak_rss_bytes": 3866558464,
+            "user_cpu_seconds": 10.133731,
+            "system_cpu_seconds": 0.918499,
+            "major_faults": 179467,
+            "minor_faults": 260152,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4150263808,
+            "peak_rss_bytes": 4150263808,
+            "user_cpu_seconds": 18.698392,
+            "system_cpu_seconds": 1.545726,
+            "major_faults": 357810,
+            "minor_faults": 327078,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.627755772206001,
+                "exclusive_seconds": 2.627755772206001
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.21702975092921406,
+                "exclusive_seconds": 0.21702975092921406
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.1755198339233175,
+                "exclusive_seconds": 0.062398624955676496
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.29946187359746546,
+                "exclusive_seconds": 0.12394203967414796
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.8749814570182934,
+                "exclusive_seconds": 0.8749814570182934
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.26194587512873113,
+                "exclusive_seconds": 0.26194587512873113
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.206511624972336,
+                "exclusive_seconds": 0.206511624972336
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.5323949999874458,
+                "exclusive_seconds": 0.08504750090651214
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.349368292023428,
+                "exclusive_seconds": 1.8897556462325156
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.0217260419158265,
+                "exclusive_seconds": 0.0217260419158265
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6979734589112923,
+                "exclusive_seconds": 0.6979734589112923
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6985477909911424,
+                "exclusive_seconds": 0.0005743320798501372
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 7.238317833980545,
+                "exclusive_seconds": 0.16867570905014873
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4150263808,
+            "peak_rss_bytes": 4150263808,
+            "user_cpu_seconds": 19.773098,
+            "system_cpu_seconds": 1.585788,
+            "major_faults": 357810,
+            "minor_faults": 416253,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4150542336,
+            "peak_rss_bytes": 4150542336,
+            "user_cpu_seconds": 28.13727,
+            "system_cpu_seconds": 2.100015,
+            "major_faults": 536153,
+            "minor_faults": 482520,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.5680671982700005,
+                "exclusive_seconds": 2.5680671982700005
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.21635458304081112,
+                "exclusive_seconds": 0.21635458304081112
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16178062499966472,
+                "exclusive_seconds": 0.045400041970424354
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2731229194905609,
+                "exclusive_seconds": 0.11134229449089617
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7828150388086215,
+                "exclusive_seconds": 0.7828150388086215
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.1878665427211672,
+                "exclusive_seconds": 0.1878665427211672
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.20218845806084573,
+                "exclusive_seconds": 0.20218845806084573
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.365837667020969,
+                "exclusive_seconds": 0.09299362741876394
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.049453292042017,
+                "exclusive_seconds": 1.8424255072604865
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.026080792071297765,
+                "exclusive_seconds": 0.026080792071297765
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6738037919858471,
+                "exclusive_seconds": 0.6738037919858471
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6743833749787882,
+                "exclusive_seconds": 0.0005795829929411411
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.914914459106512,
+                "exclusive_seconds": 0.16499700001440942
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4150542336,
+            "peak_rss_bytes": 4150542336,
+            "user_cpu_seconds": 29.216931,
+            "system_cpu_seconds": 2.133047,
+            "major_faults": 536153,
+            "minor_faults": 571703,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4150542336,
+            "peak_rss_bytes": 4150542336,
+            "user_cpu_seconds": 37.524534,
+            "system_cpu_seconds": 2.655664,
+            "major_faults": 714496,
+            "minor_faults": 646224,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.5412491329479963,
+                "exclusive_seconds": 2.5412491329479963
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2142404989572242,
+                "exclusive_seconds": 0.2142404989572242
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16004029102623463,
+                "exclusive_seconds": 0.04651325009763241
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2723707922268659,
+                "exclusive_seconds": 0.11233050120063126
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7905340844299644,
+                "exclusive_seconds": 0.7905340844299644
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.1934057098114863,
+                "exclusive_seconds": 0.1934057098114863
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.2022967500379309,
+                "exclusive_seconds": 0.2022967500379309
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.3759429160272703,
+                "exclusive_seconds": 0.08899291371926665
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.02487166703213,
+                "exclusive_seconds": 1.8353088258299977
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.02184679196216166,
+                "exclusive_seconds": 0.02184679196216166
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6834924169816077,
+                "exclusive_seconds": 0.6834924169816077
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6840637079440057,
+                "exclusive_seconds": 0.0005712909623980522
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.894422290963121,
+                "exclusive_seconds": 0.1636401240248233
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 1.0060967844679747
+    },
+    "mac-1m-buffered-stdlib": {
+      "input": "/private/tmp/panicle-portable-io.T0yXqL/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        8.334333957987837,
+        8.201938209007494,
+        12.563793417066336
+      ],
+      "median_seconds": 8.334333957987837,
+      "cache_seconds": 0.0392902079038322,
+      "peak_rss_native": 2795896832,
+      "peak_rss_bytes": 2795896832,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "stdlib",
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2793717760,
+            "peak_rss_bytes": 2793717760,
+            "user_cpu_seconds": 10.270044,
+            "system_cpu_seconds": 1.369796,
+            "major_faults": 89340,
+            "minor_faults": 265616,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2793717760,
+            "peak_rss_bytes": 2793717760,
+            "user_cpu_seconds": 18.705708,
+            "system_cpu_seconds": 2.752708,
+            "major_faults": 178512,
+            "minor_faults": 332954,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.549688700004481,
+                "exclusive_seconds": 2.549688700004481
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.17642208316829056,
+                "exclusive_seconds": 0.17642208316829056
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.1709765000268817,
+                "exclusive_seconds": 0.054203666863031685
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.31158124981448054,
+                "exclusive_seconds": 0.14060474978759885
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 0.8686035024002194,
+                "exclusive_seconds": 0.8686035024002194
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.07759316463489085,
+                "exclusive_seconds": 0.07759316463489085
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 1.3131683710962534,
+                "exclusive_seconds": 1.3131683710962534
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.18016104109119624,
+                "exclusive_seconds": 0.18016104109119624
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 2.731698791962117,
+                "exclusive_seconds": 0.23252346273511648
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 7.433315875008702,
+                "exclusive_seconds": 1.840347133227624
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.02045120799448341,
+                "exclusive_seconds": 0.02045120799448341
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.7121172919869423,
+                "exclusive_seconds": 0.7121172919869423
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.7127526249969378,
+                "exclusive_seconds": 0.0006353330099955201
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 8.334233041969128,
+                "exclusive_seconds": 0.16771333396900445
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2795634688,
+            "peak_rss_bytes": 2795634688,
+            "user_cpu_seconds": 19.829188,
+            "system_cpu_seconds": 2.842952,
+            "major_faults": 195964,
+            "minor_faults": 404678,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2795634688,
+            "peak_rss_bytes": 2795634688,
+            "user_cpu_seconds": 28.248056,
+            "system_cpu_seconds": 4.128374,
+            "major_faults": 285136,
+            "minor_faults": 471333,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.56408478715457,
+                "exclusive_seconds": 2.56408478715457
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2257464579306543,
+                "exclusive_seconds": 0.2257464579306543
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.19811083399690688,
+                "exclusive_seconds": 0.07958283508196473
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.32093933306168765,
+                "exclusive_seconds": 0.12282849906478077
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 0.799196170293726,
+                "exclusive_seconds": 0.799196170293726
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.07127691595815122,
+                "exclusive_seconds": 0.07127691595815122
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 1.2077928719809279,
+                "exclusive_seconds": 1.2077928719809279
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.1917253329884261,
+                "exclusive_seconds": 0.1917253329884261
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 2.6156470000278205,
+                "exclusive_seconds": 0.2384372497908771
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 7.3506045419489965,
+                "exclusive_seconds": 1.8499334217049181
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.020397292100824416,
+                "exclusive_seconds": 0.020397292100824416
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6677797499578446,
+                "exclusive_seconds": 0.6677797499578446
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6683372500119731,
+                "exclusive_seconds": 0.000557500054128468
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 8.20185183302965,
+                "exclusive_seconds": 0.16251274896785617
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2795896832,
+            "peak_rss_bytes": 2795896832,
+            "user_cpu_seconds": 29.342413,
+            "system_cpu_seconds": 4.192379,
+            "major_faults": 298494,
+            "minor_faults": 547148,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2795896832,
+            "peak_rss_bytes": 2795896832,
+            "user_cpu_seconds": 37.845528,
+            "system_cpu_seconds": 5.811153,
+            "major_faults": 387666,
+            "minor_faults": 639556,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.5370393705088645,
+                "exclusive_seconds": 2.5370393705088645
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.22075008298270404,
+                "exclusive_seconds": 0.22075008298270404
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16305091592948884,
+                "exclusive_seconds": 0.04481891600880772
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.28161033103242517,
+                "exclusive_seconds": 0.11855941510293633
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 0.8682234630687162,
+                "exclusive_seconds": 0.8682234630687162
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.07681312784552574,
+                "exclusive_seconds": 0.07681312784552574
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 5.558066332829185,
+                "exclusive_seconds": 5.558066332829185
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.07082512497436255,
+                "exclusive_seconds": 0.07082512497436255
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 7.005991208017804,
+                "exclusive_seconds": 0.32954507623799145
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 11.643601958989166,
+                "exclusive_seconds": 1.8189610494300723
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.023662167019210756,
+                "exclusive_seconds": 0.023662167019210756
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.7056044999044389,
+                "exclusive_seconds": 0.7056044999044389
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.7063317090505734,
+                "exclusive_seconds": 0.0007272091461345553
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 12.563685290981084,
+                "exclusive_seconds": 0.19008945592213422
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 0.8347594213495136
+    },
+    "mac-1m-buffered-isal": {
+      "input": "/private/tmp/panicle-portable-io.T0yXqL/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        20.94328037498053,
+        20.322582166991197,
+        20.35648208402563
+      ],
+      "median_seconds": 20.35648208402563,
+      "cache_seconds": 0.014666792005300522,
+      "peak_rss_native": 2649718784,
+      "peak_rss_bytes": 2649718784,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "isal",
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2649718784,
+            "peak_rss_bytes": 2649718784,
+            "user_cpu_seconds": 22.631677,
+            "system_cpu_seconds": 1.8643619999999999,
+            "major_faults": 116502,
+            "minor_faults": 244331,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2649718784,
+            "peak_rss_bytes": 2649718784,
+            "user_cpu_seconds": 43.281236,
+            "system_cpu_seconds": 3.298288,
+            "major_faults": 205674,
+            "minor_faults": 307361,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 14.863818028592505,
+                "exclusive_seconds": 14.863818028592505
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.25579041708260775,
+                "exclusive_seconds": 0.25579041708260775
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.19950741692446172,
+                "exclusive_seconds": 0.05168349982704967
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.3614583309972659,
+                "exclusive_seconds": 0.16195091407280415
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 0.8005502467276528,
+                "exclusive_seconds": 0.8005502467276528
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.07586367044132203,
+                "exclusive_seconds": 0.07586367044132203
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 1.576246041804552,
+                "exclusive_seconds": 1.576246041804552
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.1877131670480594,
+                "exclusive_seconds": 0.1877131670480594
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.044704708037898,
+                "exclusive_seconds": 0.2963650820311159
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 20.085187915945426,
+                "exclusive_seconds": 1.8152068483177572
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.02278183400630951,
+                "exclusive_seconds": 0.02278183400630951
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6731139170005918,
+                "exclusive_seconds": 0.6731139170005918
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6737005000468343,
+                "exclusive_seconds": 0.0005865830462425947
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 20.943042999948375,
+                "exclusive_seconds": 0.16137274994980544
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2649718784,
+            "peak_rss_bytes": 2649718784,
+            "user_cpu_seconds": 44.37761,
+            "system_cpu_seconds": 3.37645,
+            "major_faults": 224545,
+            "minor_faults": 377668,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2649718784,
+            "peak_rss_bytes": 2649718784,
+            "user_cpu_seconds": 65.014744,
+            "system_cpu_seconds": 4.718269,
+            "major_faults": 313717,
+            "minor_faults": 458799,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 14.866309074801393,
+                "exclusive_seconds": 14.866309074801393
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2078112920280546,
+                "exclusive_seconds": 0.2078112920280546
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16541012492962182,
+                "exclusive_seconds": 0.06060374993830919
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.293750207638368,
+                "exclusive_seconds": 0.1283400827087462
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 0.793746831594035,
+                "exclusive_seconds": 0.793746831594035
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.07530195359140635,
+                "exclusive_seconds": 0.07530195359140635
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 1.078276666929014,
+                "exclusive_seconds": 1.078276666929014
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.21665050007868558,
+                "exclusive_seconds": 0.21665050007868558
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 2.497723791981116,
+                "exclusive_seconds": 0.23074292275123298
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 19.45796758297365,
+                "exclusive_seconds": 1.8001845085527748
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.022231957991607487,
+                "exclusive_seconds": 0.022231957991607487
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6816396249923855,
+                "exclusive_seconds": 0.6816396249923855
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6822186249773949,
+                "exclusive_seconds": 0.0005789999850094318
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 20.32248500001151,
+                "exclusive_seconds": 0.16006683406885713
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2649718784,
+            "peak_rss_bytes": 2649718784,
+            "user_cpu_seconds": 66.112082,
+            "system_cpu_seconds": 4.75484,
+            "major_faults": 313717,
+            "minor_faults": 547972,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2649718784,
+            "peak_rss_bytes": 2649718784,
+            "user_cpu_seconds": 86.739574,
+            "system_cpu_seconds": 6.060106,
+            "major_faults": 402889,
+            "minor_faults": 622781,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 14.83685264387168,
+                "exclusive_seconds": 14.83685264387168
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.19847708265297115,
+                "exclusive_seconds": 0.19847708265297115
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16893091588281095,
+                "exclusive_seconds": 0.04756845813244581
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.28279375238344073,
+                "exclusive_seconds": 0.11386283650062978
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 0.7976284965407103,
+                "exclusive_seconds": 0.7976284965407103
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.07007642544340342,
+                "exclusive_seconds": 0.07007642544340342
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 1.1964139587944373,
+                "exclusive_seconds": 1.1964139587944373
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.19691608403809369,
+                "exclusive_seconds": 0.19691608403809369
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 2.577535624965094,
+                "exclusive_seconds": 0.23938603524584323
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 19.50573479209561,
+                "exclusive_seconds": 1.8085527708753943
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.022659208974801004,
+                "exclusive_seconds": 0.022659208974801004
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6678616249701008,
+                "exclusive_seconds": 0.6678616249701008
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6686411669943482,
+                "exclusive_seconds": 0.0007795420242473483
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 20.35639295889996,
+                "exclusive_seconds": 0.15935779083520174
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 0.34176650775838296
+    },
+    "mac-1m-before": {
+      "input": "/private/tmp/panicle-portable-io.T0yXqL/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        7.125580166932195,
+        6.957163792103529,
+        6.8243550000479445
+      ],
+      "median_seconds": 6.957163792103529,
+      "cache_seconds": 0.014864625059999526,
+      "peak_rss_native": 4185047040,
+      "peak_rss_bytes": 4185047040,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3903488000,
+            "peak_rss_bytes": 3903488000,
+            "user_cpu_seconds": 10.793296,
+            "system_cpu_seconds": 0.811477,
+            "major_faults": 178409,
+            "minor_faults": 263638,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4185047040,
+            "peak_rss_bytes": 4185047040,
+            "user_cpu_seconds": 19.176682,
+            "system_cpu_seconds": 1.49548,
+            "major_faults": 356752,
+            "minor_faults": 330477,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.2303396788192913,
+                "exclusive_seconds": 2.2303396788192913
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2280845430213958,
+                "exclusive_seconds": 0.2280845430213958
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.1669562088791281,
+                "exclusive_seconds": 0.04590758285485208
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.34440854215063155,
+                "exclusive_seconds": 0.17745233327150345
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7798275429522619,
+                "exclusive_seconds": 0.7798275429522619
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.3369208355434239,
+                "exclusive_seconds": 0.3369208355434239
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.24725249991752207,
+                "exclusive_seconds": 0.24725249991752207
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.5744131250539795,
+                "exclusive_seconds": 0.10337632964365184
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.25909679196775,
+                "exclusive_seconds": 2.1099354459438473
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.022433417034335434,
+                "exclusive_seconds": 0.022433417034335434
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6766713339602575,
+                "exclusive_seconds": 0.6766713339602575
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.677216290961951,
+                "exclusive_seconds": 0.0005449570016935468
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 7.125458666938357,
+                "exclusive_seconds": 0.166712166974321
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4185047040,
+            "peak_rss_bytes": 4185047040,
+            "user_cpu_seconds": 20.289744,
+            "system_cpu_seconds": 1.538178,
+            "major_faults": 356752,
+            "minor_faults": 419653,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4185047040,
+            "peak_rss_bytes": 4185047040,
+            "user_cpu_seconds": 28.727093,
+            "system_cpu_seconds": 2.069683,
+            "major_faults": 535095,
+            "minor_faults": 485869,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.2466130441753194,
+                "exclusive_seconds": 2.2466130441753194
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2307220430811867,
+                "exclusive_seconds": 0.2307220430811867
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.17760670778807253,
+                "exclusive_seconds": 0.055419998709112406
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.29640370956622064,
+                "exclusive_seconds": 0.11879700177814811
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7833035785006359,
+                "exclusive_seconds": 0.7833035785006359
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.19936812389642,
+                "exclusive_seconds": 0.19936812389642
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.2227052920497954,
+                "exclusive_seconds": 0.2227052920497954
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.4439690000144765,
+                "exclusive_seconds": 0.13005667156539857
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.111582292011008,
+                "exclusive_seconds": 2.124596538254991
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.020313165965490043,
+                "exclusive_seconds": 0.020313165965490043
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6619553329655901,
+                "exclusive_seconds": 0.6619553329655901
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6625725410412997,
+                "exclusive_seconds": 0.000617208075709641
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.957080333959311,
+                "exclusive_seconds": 0.16261233494151384
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4185047040,
+            "peak_rss_bytes": 4185047040,
+            "user_cpu_seconds": 29.799849,
+            "system_cpu_seconds": 2.102099,
+            "major_faults": 535095,
+            "minor_faults": 575042,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4185047040,
+            "peak_rss_bytes": 4185047040,
+            "user_cpu_seconds": 38.152998,
+            "system_cpu_seconds": 2.608814,
+            "major_faults": 713438,
+            "minor_faults": 652405,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.2499851144384593,
+                "exclusive_seconds": 2.2499851144384593
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2210171661572531,
+                "exclusive_seconds": 0.2210171661572531
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16776391817256808,
+                "exclusive_seconds": 0.045911669032648206
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.27718670980539173,
+                "exclusive_seconds": 0.10942279163282365
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7858841312117875,
+                "exclusive_seconds": 0.7858841312117875
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.1957830929895863,
+                "exclusive_seconds": 0.1957830929895863
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.2028399589471519,
+                "exclusive_seconds": 0.2028399589471519
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.3714205829892308,
+                "exclusive_seconds": 0.08774848282337189
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 5.981867957976647,
+                "exclusive_seconds": 2.083275550743565
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.020730125019326806,
+                "exclusive_seconds": 0.020730125019326806
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6606197080109268,
+                "exclusive_seconds": 0.6606197080109268
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6611592079279944,
+                "exclusive_seconds": 0.0005394999170675874
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.824271374964155,
+                "exclusive_seconds": 0.1605140840401873
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-1m-mapped-stdlib": {
+      "input": "/tmp/panicle-portable-io.Px3ynj/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        16.480520627024816,
+        15.892244096001377,
+        16.14287677500397
+      ],
+      "median_seconds": 16.14287677500397,
+      "cache_seconds": 0.0263794940256048,
+      "peak_rss_native": 3604556,
+      "peak_rss_bytes": 3691065344,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "stdlib",
+        "vcf_cache_writer": "mapped",
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3579336,
+            "peak_rss_bytes": 3665240064,
+            "user_cpu_seconds": 21.318865,
+            "system_cpu_seconds": 7.117948,
+            "major_faults": 1467,
+            "minor_faults": 2858460,
+            "input_blocks": 0,
+            "output_blocks": 5825888,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 2982854656,
+              "cancelled_write_bytes": 8192
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3600500,
+            "peak_rss_bytes": 3686912000,
+            "user_cpu_seconds": 38.394124,
+            "system_cpu_seconds": 11.196577,
+            "major_faults": 2934,
+            "minor_faults": 5590793,
+            "input_blocks": 0,
+            "output_blocks": 11649464,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 5964525568,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 6.158613076404436,
+                "exclusive_seconds": 6.158613076404436
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 1.0860027840535622,
+                "exclusive_seconds": 1.0860027840535622
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.4208767479576636,
+                "exclusive_seconds": 0.019408937921980396
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 1.028197448962601,
+                "exclusive_seconds": 0.6073207010049373
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.6547816791280638,
+                "exclusive_seconds": 1.6547816791280638
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7560807388217654,
+                "exclusive_seconds": 0.7560807388217654
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.5059250930207781,
+                "exclusive_seconds": 0.5059250930207781
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.8327066609926987,
+                "exclusive_seconds": 0.23138417600421235
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 14.869839633000083,
+                "exclusive_seconds": 3.850322446640348
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14480135100893676,
+                "exclusive_seconds": 0.14480135100893676
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.114627994975308,
+                "exclusive_seconds": 1.114627994975308
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1150946610141546,
+                "exclusive_seconds": 0.0004666660388465971
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 16.480389953008853,
+                "exclusive_seconds": 0.3506543079856783
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3600500,
+            "peak_rss_bytes": 3686912000,
+            "user_cpu_seconds": 39.841035,
+            "system_cpu_seconds": 11.254377,
+            "major_faults": 2934,
+            "minor_faults": 5613087,
+            "input_blocks": 0,
+            "output_blocks": 11649472,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 5964529664,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3602112,
+            "peak_rss_bytes": 3688562688,
+            "user_cpu_seconds": 56.990941,
+            "system_cpu_seconds": 15.284375,
+            "major_faults": 4401,
+            "minor_faults": 8356834,
+            "input_blocks": 0,
+            "output_blocks": 17473048,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 8946200576,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 6.154147491353797,
+                "exclusive_seconds": 6.154147491353797
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.5172822099993937,
+                "exclusive_seconds": 0.5172822099993937
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.294326062023174,
+                "exclusive_seconds": 0.011830100032966584
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.8638264730107039,
+                "exclusive_seconds": 0.5695004109875299
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.6908435251680203,
+                "exclusive_seconds": 1.6908435251680203
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7729865152796265,
+                "exclusive_seconds": 0.7729865152796265
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.48275768500752747,
+                "exclusive_seconds": 0.48275768500752747
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.4112215230125003,
+                "exclusive_seconds": 0.2298475495481398
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 14.257475935999537,
+                "exclusive_seconds": 3.828280448622536
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.1451049399911426,
+                "exclusive_seconds": 0.1451049399911426
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1342439659929369,
+                "exclusive_seconds": 1.1342439659929369
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1346722110174596,
+                "exclusive_seconds": 0.00042824502452276647
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 15.89212289097486,
+                "exclusive_seconds": 0.3548698039667215
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3602112,
+            "peak_rss_bytes": 3688562688,
+            "user_cpu_seconds": 58.444837,
+            "system_cpu_seconds": 15.342382,
+            "major_faults": 4401,
+            "minor_faults": 8379128,
+            "input_blocks": 0,
+            "output_blocks": 17473048,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 8946200576,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3604556,
+            "peak_rss_bytes": 3691065344,
+            "user_cpu_seconds": 75.537963,
+            "system_cpu_seconds": 19.351709,
+            "major_faults": 5868,
+            "minor_faults": 11109198,
+            "input_blocks": 0,
+            "output_blocks": 23296624,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 11927871488,
+              "cancelled_write_bytes": 20480
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 6.132378283713479,
+                "exclusive_seconds": 6.132378283713479
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.507691709935898,
+                "exclusive_seconds": 0.507691709935898
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.2797725960263051,
+                "exclusive_seconds": 0.011075765069108456
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.8511416830588132,
+                "exclusive_seconds": 0.5713690870325081
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.6534851888136473,
+                "exclusive_seconds": 1.6534851888136473
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7485571972210892,
+                "exclusive_seconds": 0.7485571972210892
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.8295681629970204,
+                "exclusive_seconds": 0.8295681629970204
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.7011423200019635,
+                "exclusive_seconds": 0.2305368919915054
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 14.505456657003378,
+                "exclusive_seconds": 3.820794370229123
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.15704126298078336,
+                "exclusive_seconds": 0.15704126298078336
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1177242230041884,
+                "exclusive_seconds": 1.1177242230041884
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1181372810096946,
+                "exclusive_seconds": 0.0004130580055061728
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 16.142756428016583,
+                "exclusive_seconds": 0.3621212270227261
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461006336
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-1m-mapped-isal": {
+      "input": "/tmp/panicle-portable-io.Px3ynj/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        12.18964396501542,
+        12.2325523319887,
+        12.5976067869924
+      ],
+      "median_seconds": 12.2325523319887,
+      "cache_seconds": 0.02554339900962077,
+      "peak_rss_native": 3590500,
+      "peak_rss_bytes": 3676672000,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "isal",
+        "vcf_cache_writer": "mapped",
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3555080,
+            "peak_rss_bytes": 3640401920,
+            "user_cpu_seconds": 16.534932,
+            "system_cpu_seconds": 6.971837,
+            "major_faults": 1470,
+            "minor_faults": 2849468,
+            "input_blocks": 1368,
+            "output_blocks": 5823584,
+            "linux_process_io_bytes": {
+              "read_bytes": 700416,
+              "write_bytes": 2981675008,
+              "cancelled_write_bytes": 8192
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3590500,
+            "peak_rss_bytes": 3676672000,
+            "user_cpu_seconds": 29.995871,
+            "system_cpu_seconds": 10.936725,
+            "major_faults": 2937,
+            "minor_faults": 5555460,
+            "input_blocks": 1368,
+            "output_blocks": 11647160,
+            "linux_process_io_bytes": {
+              "read_bytes": 700416,
+              "write_bytes": 5963345920,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.468269592965953,
+                "exclusive_seconds": 2.468269592965953
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.5103804050013423,
+                "exclusive_seconds": 0.5103804050013423
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.3006911509728525,
+                "exclusive_seconds": 0.015964530990459025
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.8752966859610751,
+                "exclusive_seconds": 0.5746055349882226
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.6789129400567617,
+                "exclusive_seconds": 1.6789129400567617
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7624965989380144,
+                "exclusive_seconds": 0.7624965989380144
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.4966632339928765,
+                "exclusive_seconds": 0.4966632339928765
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.401547412999207,
+                "exclusive_seconds": 0.23782085499260575
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 10.570153631997528,
+                "exclusive_seconds": 3.825039940071292
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14405912399524823,
+                "exclusive_seconds": 0.14405912399524823
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1267645019979682,
+                "exclusive_seconds": 1.1267645019979682
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1271933690004516,
+                "exclusive_seconds": 0.0004288670024834573
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 12.189480175002245,
+                "exclusive_seconds": 0.3480740500090178
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3590500,
+            "peak_rss_bytes": 3676672000,
+            "user_cpu_seconds": 31.447353,
+            "system_cpu_seconds": 10.997209,
+            "major_faults": 2937,
+            "minor_faults": 5577756,
+            "input_blocks": 1368,
+            "output_blocks": 11647168,
+            "linux_process_io_bytes": {
+              "read_bytes": 700416,
+              "write_bytes": 5963350016,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3590500,
+            "peak_rss_bytes": 3676672000,
+            "user_cpu_seconds": 45.021246,
+            "system_cpu_seconds": 14.952395,
+            "major_faults": 4404,
+            "minor_faults": 8277522,
+            "input_blocks": 1368,
+            "output_blocks": 17470744,
+            "linux_process_io_bytes": {
+              "read_bytes": 700416,
+              "write_bytes": 8945020928,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.4657682384131476,
+                "exclusive_seconds": 2.4657682384131476
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.4969826760061551,
+                "exclusive_seconds": 0.4969826760061551
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.2708247849950567,
+                "exclusive_seconds": 0.012980450002942234
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.8389583199750632,
+                "exclusive_seconds": 0.5681335349800065
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.7403728361823596,
+                "exclusive_seconds": 1.7403728361823596
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7841927248809952,
+                "exclusive_seconds": 0.7841927248809952
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.492220099986298,
+                "exclusive_seconds": 0.492220099986298
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.492044585000258,
+                "exclusive_seconds": 0.23612058293656446
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 10.617551359988283,
+                "exclusive_seconds": 3.8207802165998146
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.1473996940185316,
+                "exclusive_seconds": 0.1473996940185316
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1095261150039732,
+                "exclusive_seconds": 1.1095261150039732
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1099265719822142,
+                "exclusive_seconds": 0.0004004569782409817
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 12.232439896994038,
+                "exclusive_seconds": 0.35756227100500837
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3590500,
+            "peak_rss_bytes": 3676672000,
+            "user_cpu_seconds": 46.470737,
+            "system_cpu_seconds": 15.007082,
+            "major_faults": 4404,
+            "minor_faults": 8299816,
+            "input_blocks": 1368,
+            "output_blocks": 17470744,
+            "linux_process_io_bytes": {
+              "read_bytes": 700416,
+              "write_bytes": 8945020928,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3590500,
+            "peak_rss_bytes": 3676672000,
+            "user_cpu_seconds": 59.895234,
+            "system_cpu_seconds": 19.020425,
+            "major_faults": 5871,
+            "minor_faults": 11003188,
+            "input_blocks": 1368,
+            "output_blocks": 23294320,
+            "linux_process_io_bytes": {
+              "read_bytes": 700416,
+              "write_bytes": 11926691840,
+              "cancelled_write_bytes": 20480
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 2.471309315878898,
+                "exclusive_seconds": 2.471309315878898
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.8401041050092317,
+                "exclusive_seconds": 0.8401041050092317
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.27240896003786474,
+                "exclusive_seconds": 0.014121055020950735
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.8476160409918521,
+                "exclusive_seconds": 0.5752070809539873
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.654194515926065,
+                "exclusive_seconds": 1.654194515926065
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7534898981102742,
+                "exclusive_seconds": 0.7534898981102742
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.505079263006337,
+                "exclusive_seconds": 0.505079263006337
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.737802882998949,
+                "exclusive_seconds": 0.24322300596395507
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 10.874969908007188,
+                "exclusive_seconds": 3.818241668137489
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14822089500376023,
+                "exclusive_seconds": 0.14822089500376023
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.2155785309732892,
+                "exclusive_seconds": 1.2155785309732892
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.2159962099976838,
+                "exclusive_seconds": 0.0004176790243946016
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 12.597495036985492,
+                "exclusive_seconds": 0.35830802397686057
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461006336
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-1m-buffered-stdlib": {
+      "input": "/tmp/panicle-portable-io.Px3ynj/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        16.994334262009943,
+        16.45460635999916,
+        15.52603506599553
+      ],
+      "median_seconds": 16.45460635999916,
+      "cache_seconds": 0.026215491991024464,
+      "peak_rss_native": 2216100,
+      "peak_rss_bytes": 2269286400,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "stdlib",
+        "vcf_cache_writer": "buffered",
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2192080,
+            "peak_rss_bytes": 2244689920,
+            "user_cpu_seconds": 20.16388,
+            "system_cpu_seconds": 6.673355,
+            "major_faults": 6,
+            "minor_faults": 2496063,
+            "input_blocks": 0,
+            "output_blocks": 5823584,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 2981675008,
+              "cancelled_write_bytes": 8192
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2209292,
+            "peak_rss_bytes": 2262315008,
+            "user_cpu_seconds": 37.198695,
+            "system_cpu_seconds": 10.483122999999999,
+            "major_faults": 12,
+            "minor_faults": 4863790,
+            "input_blocks": 0,
+            "output_blocks": 11647160,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 5963345920,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 6.130907696147915,
+                "exclusive_seconds": 6.130907696147915
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 1.2347054770216346,
+                "exclusive_seconds": 1.2347054770216346
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.39545022300444543,
+                "exclusive_seconds": 0.017254523962037638
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.9802323079784401,
+                "exclusive_seconds": 0.5847820849739946
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 1.5546480870398227,
+                "exclusive_seconds": 1.5546480870398227
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.1400299198285211,
+                "exclusive_seconds": 0.1400299198285211
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 0.4346992500650231,
+                "exclusive_seconds": 0.4346992500650231
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 1.2674850199837238,
+                "exclusive_seconds": 1.2674850199837238
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 4.467438994994154,
+                "exclusive_seconds": 0.21406694009783678
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 15.395271128014429,
+                "exclusive_seconds": 3.8166921288939193
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14272670398349874,
+                "exclusive_seconds": 0.14272670398349874
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1011642449884675,
+                "exclusive_seconds": 1.1011642449884675
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1015923259838019,
+                "exclusive_seconds": 0.0004280809953343123
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 16.99420178399305,
+                "exclusive_seconds": 0.35461162601131946
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2209292,
+            "peak_rss_bytes": 2262315008,
+            "user_cpu_seconds": 38.64503,
+            "system_cpu_seconds": 10.543097,
+            "major_faults": 12,
+            "minor_faults": 4886086,
+            "input_blocks": 0,
+            "output_blocks": 11647168,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 5963350016,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2216100,
+            "peak_rss_bytes": 2269286400,
+            "user_cpu_seconds": 55.679381,
+            "system_cpu_seconds": 14.269252999999999,
+            "major_faults": 18,
+            "minor_faults": 7276203,
+            "input_blocks": 0,
+            "output_blocks": 17470744,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 8945020928,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 6.130153889156645,
+                "exclusive_seconds": 6.130153889156645
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 1.4224470389890485,
+                "exclusive_seconds": 1.4224470389890485
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.8941543679975439,
+                "exclusive_seconds": 0.01454183500027284
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 1.4732694470149,
+                "exclusive_seconds": 0.579115079017356
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 1.5545482177403755,
+                "exclusive_seconds": 1.5545482177403755
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.140072429087013,
+                "exclusive_seconds": 0.140072429087013
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 0.4347582140180748,
+                "exclusive_seconds": 0.4347582140180748
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.495349762000842,
+                "exclusive_seconds": 0.495349762000842
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.3757038970070425,
+                "exclusive_seconds": 0.20814076816895977
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 14.824438067007577,
+                "exclusive_seconds": 3.8453108338289894
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14506834899657406,
+                "exclusive_seconds": 0.14506834899657406
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1339410320215393,
+                "exclusive_seconds": 1.1339410320215393
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1343586719885934,
+                "exclusive_seconds": 0.00041763996705412865
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 16.454458386986516,
+                "exclusive_seconds": 0.3505932989937719
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 2216100,
+            "peak_rss_bytes": 2269286400,
+            "user_cpu_seconds": 57.134124,
+            "system_cpu_seconds": 14.329269,
+            "major_faults": 18,
+            "minor_faults": 7298499,
+            "input_blocks": 0,
+            "output_blocks": 17470744,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 8945020928,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 2216100,
+            "peak_rss_bytes": 2269286400,
+            "user_cpu_seconds": 74.14647,
+            "system_cpu_seconds": 18.071877,
+            "major_faults": 24,
+            "minor_faults": 9686043,
+            "input_blocks": 0,
+            "output_blocks": 23294320,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 11926691840,
+              "cancelled_write_bytes": 20480
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 45032,
+                "inclusive_seconds": 6.120840566465631,
+                "exclusive_seconds": 6.120840566465631
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.5085259529587347,
+                "exclusive_seconds": 0.5085259529587347
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.2896431880071759,
+                "exclusive_seconds": 0.0138808450428769
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.8643518090248108,
+                "exclusive_seconds": 0.5747086210176349
+              },
+              "transpose_tiles": {
+                "calls": 131,
+                "inclusive_seconds": 1.5725908930180594,
+                "exclusive_seconds": 1.5725908930180594
+              },
+              "tile_buffer_copies": {
+                "calls": 131,
+                "inclusive_seconds": 0.1402140319987666,
+                "exclusive_seconds": 0.1402140319987666
+              },
+              "cache_file_writes": {
+                "calls": 22,
+                "inclusive_seconds": 0.4464227399439551,
+                "exclusive_seconds": 0.4464227399439551
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.4876841380028054,
+                "exclusive_seconds": 0.4876841380028054
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.0902629970223643,
+                "exclusive_seconds": 0.21058758406434208
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 13.909815060993424,
+                "exclusive_seconds": 3.8343596884806175
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14428649700130336,
+                "exclusive_seconds": 0.14428649700130336
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1184991160116624,
+                "exclusive_seconds": 1.1184991160116624
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1189430020167492,
+                "exclusive_seconds": 0.0004438860050868243
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 15.525930026022252,
+                "exclusive_seconds": 0.3528854660107754
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461006336
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-1m-before": {
+      "input": "/tmp/panicle-portable-io.Px3ynj/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        17.125594892015215,
+        18.07062569601112,
+        17.34535689500626
+      ],
+      "median_seconds": 17.34535689500626,
+      "cache_seconds": 0.025431682995986193,
+      "peak_rss_native": 3605424,
+      "peak_rss_bytes": 3691954176,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3583800,
+            "peak_rss_bytes": 3669811200,
+            "user_cpu_seconds": 21.13878,
+            "system_cpu_seconds": 7.285059,
+            "major_faults": 1473,
+            "minor_faults": 2857826,
+            "input_blocks": 970896,
+            "output_blocks": 5825888,
+            "linux_process_io_bytes": {
+              "read_bytes": 497098752,
+              "write_bytes": 2982854656,
+              "cancelled_write_bytes": 4096
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3601732,
+            "peak_rss_bytes": 3688173568,
+            "user_cpu_seconds": 38.47977,
+            "system_cpu_seconds": 11.376949,
+            "major_faults": 2940,
+            "minor_faults": 5579578,
+            "input_blocks": 970896,
+            "output_blocks": 11649464,
+            "linux_process_io_bytes": {
+              "read_bytes": 497098752,
+              "write_bytes": 5964525568,
+              "cancelled_write_bytes": 59662336
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 93569,
+                "inclusive_seconds": 5.819962134002708,
+                "exclusive_seconds": 5.819962134002708
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 1.160072912927717,
+                "exclusive_seconds": 1.160072912927717
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.6155821360298432,
+                "exclusive_seconds": 0.029889953089877963
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 1.2135791120526846,
+                "exclusive_seconds": 0.5979969760228414
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.6978289721009787,
+                "exclusive_seconds": 1.6978289721009787
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7728512190515175,
+                "exclusive_seconds": 0.7728512190515175
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.9246230150165502,
+                "exclusive_seconds": 0.9246230150165502
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 4.206389724975452,
+                "exclusive_seconds": 0.23670578881865367
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 15.492393282998819,
+                "exclusive_seconds": 4.2524623119679745
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.1452905700134579,
+                "exclusive_seconds": 0.1452905700134579
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1320446220051963,
+                "exclusive_seconds": 1.1320446220051963
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1324826769996434,
+                "exclusive_seconds": 0.0004380549944471568
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 17.125463351025246,
+                "exclusive_seconds": 0.3552968210133258
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3601732,
+            "peak_rss_bytes": 3688173568,
+            "user_cpu_seconds": 39.94117,
+            "system_cpu_seconds": 11.432034,
+            "major_faults": 2940,
+            "minor_faults": 5601872,
+            "input_blocks": 970896,
+            "output_blocks": 11649472,
+            "linux_process_io_bytes": {
+              "read_bytes": 497098752,
+              "write_bytes": 5964529664,
+              "cancelled_write_bytes": 59662336
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3604948,
+            "peak_rss_bytes": 3691466752,
+            "user_cpu_seconds": 57.233348,
+            "system_cpu_seconds": 15.581561,
+            "major_faults": 4407,
+            "minor_faults": 8344789,
+            "input_blocks": 970896,
+            "output_blocks": 17473048,
+            "linux_process_io_bytes": {
+              "read_bytes": 497098752,
+              "write_bytes": 8946200576,
+              "cancelled_write_bytes": 59666432
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 93569,
+                "inclusive_seconds": 5.820066646847408,
+                "exclusive_seconds": 5.820066646847408
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 1.7753414220060222,
+                "exclusive_seconds": 1.7753414220060222
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 1.3479556890088134,
+                "exclusive_seconds": 0.022431308985687792
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 1.932897994061932,
+                "exclusive_seconds": 0.5849423050531186
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.719252622075146,
+                "exclusive_seconds": 1.719252622075146
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7806569802633021,
+                "exclusive_seconds": 0.7806569802633021
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 1.2115636189992074,
+                "exclusive_seconds": 1.2115636189992074
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 4.40973333598231,
+                "exclusive_seconds": 0.24844307266175747
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 16.422431955987122,
+                "exclusive_seconds": 4.259733979095472
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.15193758098757826,
+                "exclusive_seconds": 0.15193758098757826
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1164471130177844,
+                "exclusive_seconds": 1.1164471130177844
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1168512540170923,
+                "exclusive_seconds": 0.00040414099930785596
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 18.070491376012797,
+                "exclusive_seconds": 0.3792705850210041
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3604948,
+            "peak_rss_bytes": 3691466752,
+            "user_cpu_seconds": 58.700624,
+            "system_cpu_seconds": 15.633507999999999,
+            "major_faults": 4407,
+            "minor_faults": 8367083,
+            "input_blocks": 970896,
+            "output_blocks": 17473048,
+            "linux_process_io_bytes": {
+              "read_bytes": 497098752,
+              "write_bytes": 8946200576,
+              "cancelled_write_bytes": 59666432
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3605424,
+            "peak_rss_bytes": 3691954176,
+            "user_cpu_seconds": 75.874102,
+            "system_cpu_seconds": 19.765908,
+            "major_faults": 5874,
+            "minor_faults": 11107507,
+            "input_blocks": 970896,
+            "output_blocks": 23296624,
+            "linux_process_io_bytes": {
+              "read_bytes": 497098752,
+              "write_bytes": 11927871488,
+              "cancelled_write_bytes": 59670528
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 93569,
+                "inclusive_seconds": 5.807469937659334,
+                "exclusive_seconds": 5.807469937659334
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.9567330990103073,
+                "exclusive_seconds": 0.9567330990103073
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.5344959679932799,
+                "exclusive_seconds": 0.01972636498976499
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 1.1127448728948366,
+                "exclusive_seconds": 0.5782489049015567
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.6417825832031667,
+                "exclusive_seconds": 1.6417825832031667
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.7420896033290774,
+                "exclusive_seconds": 0.7420896033290774
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 1.4496016730263364,
+                "exclusive_seconds": 1.4496016730263364
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 4.521530744998017,
+                "exclusive_seconds": 0.24609338943264447
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 15.712931921007112,
+                "exclusive_seconds": 4.271186365454923
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.14907748400582932,
+                "exclusive_seconds": 0.14907748400582932
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.1278004880005028,
+                "exclusive_seconds": 1.1278004880005028
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.1282155840017367,
+                "exclusive_seconds": 0.00041509600123390555
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 17.3452388959995,
+                "exclusive_seconds": 0.3550139069848228
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461006336
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-full-buffered-isal": {
+      "input": "/tmp/panicle-portable-io.Px3ynj/maize-full.vcf.gz",
+      "input_bytes": 3647063164,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": false,
+      "seconds": [
+        134.62214042199776
+      ],
+      "median_seconds": 134.62214042199776,
+      "cache_seconds": 0.2623743540025316,
+      "peak_rss_native": 20632248,
+      "peak_rss_bytes": 21127421952,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "isal",
+        "vcf_cache_writer": "buffered",
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 252740,
+            "peak_rss_bytes": 258805760,
+            "user_cpu_seconds": 1.593468,
+            "system_cpu_seconds": 2.812827,
+            "major_faults": 0,
+            "minor_faults": 37551,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 20610204,
+            "peak_rss_bytes": 21104848896,
+            "user_cpu_seconds": 161.210534,
+            "system_cpu_seconds": 46.243707,
+            "major_faults": 10,
+            "minor_faults": 30728510,
+            "input_blocks": 1385320,
+            "output_blocks": 72466168,
+            "linux_process_io_bytes": {
+              "read_bytes": 709283840,
+              "write_bytes": 37102678016,
+              "cancelled_write_bytes": 4096
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 559997,
+                "inclusive_seconds": 22.845273230108432,
+                "exclusive_seconds": 22.845273230108432
+              },
+              "spool_flush": {
+                "calls": 11,
+                "inclusive_seconds": 6.390104433055967,
+                "exclusive_seconds": 6.390104433055967
+              },
+              "spool_growth": {
+                "calls": 10,
+                "inclusive_seconds": 4.8854276339989156,
+                "exclusive_seconds": 0.14715684394468553
+              },
+              "spool_append": {
+                "calls": 380,
+                "inclusive_seconds": 11.965187597845215,
+                "exclusive_seconds": 7.0797599638463
+              },
+              "transpose_tiles": {
+                "calls": 1625,
+                "inclusive_seconds": 19.886464026232716,
+                "exclusive_seconds": 19.886464026232716
+              },
+              "tile_buffer_copies": {
+                "calls": 1625,
+                "inclusive_seconds": 1.7377205869124737,
+                "exclusive_seconds": 1.7377205869124737
+              },
+              "cache_file_writes": {
+                "calls": 271,
+                "inclusive_seconds": 5.758071540272795,
+                "exclusive_seconds": 5.758071540272795
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.564230933028739,
+                "exclusive_seconds": 0.564230933028739
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 31.281586335011525,
+                "exclusive_seconds": 1.683265605563065
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 112.8152967710048,
+                "exclusive_seconds": 46.72324960803962
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.8838854299974628,
+                "exclusive_seconds": 1.8838854299974628
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 15.229503715992905,
+                "exclusive_seconds": 15.229503715992905
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 15.230046922020847,
+                "exclusive_seconds": 0.0005432060279417783
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 134.62203830300132,
+                "exclusive_seconds": 4.692809179978212
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 24511512576,
+              "spool_append_bytes": 18167776065,
+              "spool_plus_output_logical_peak_bytes": 42679288641,
+              "output_tile_write_bytes": 18167776065
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 18167776193,
+          "allocated_bytes": 18167889920
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 744182384,
+          "allocated_bytes": 744189952
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          12435165
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "4a8d59a04a98e1618139b5284db1bf802bd04b0eb9f068254a59fac451671778",
+        "map_sha256": "73a2227828a19b0bb85136b5156f4a644d2e48e993e4d2229caf1ae8e22f9082",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 1.3533871231276773
+    },
+    "linux-full-buffered-stdlib": {
+      "input": "/tmp/panicle-portable-io.Px3ynj/maize-full.vcf.gz",
+      "input_bytes": 3647063164,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": false,
+      "seconds": [
+        182.19587133501773
+      ],
+      "median_seconds": 182.19587133501773,
+      "cache_seconds": 0.2640234920254443,
+      "peak_rss_native": 20708728,
+      "peak_rss_bytes": 21205737472,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "vcf_gzip_backend": "stdlib",
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 253336,
+            "peak_rss_bytes": 259416064,
+            "user_cpu_seconds": 1.5854759999999999,
+            "system_cpu_seconds": 2.91568,
+            "major_faults": 0,
+            "minor_faults": 37639,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 20639268,
+            "peak_rss_bytes": 21134610432,
+            "user_cpu_seconds": 212.251132,
+            "system_cpu_seconds": 45.168615,
+            "major_faults": 10,
+            "minor_faults": 30520804,
+            "input_blocks": 5786224,
+            "output_blocks": 72466672,
+            "linux_process_io_bytes": {
+              "read_bytes": 2962546688,
+              "write_bytes": 37102936064,
+              "cancelled_write_bytes": 4096
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 559997,
+                "inclusive_seconds": 69.94483822895563,
+                "exclusive_seconds": 69.94483822895563
+              },
+              "spool_flush": {
+                "calls": 11,
+                "inclusive_seconds": 3.8919039889005944,
+                "exclusive_seconds": 3.8919039889005944
+              },
+              "spool_growth": {
+                "calls": 10,
+                "inclusive_seconds": 2.5739327739865985,
+                "exclusive_seconds": 0.11923484507133253
+              },
+              "spool_append": {
+                "calls": 380,
+                "inclusive_seconds": 9.754970759910066,
+                "exclusive_seconds": 7.181037985923467
+              },
+              "transpose_tiles": {
+                "calls": 1625,
+                "inclusive_seconds": 20.095984483050415,
+                "exclusive_seconds": 20.095984483050415
+              },
+              "tile_buffer_copies": {
+                "calls": 1625,
+                "inclusive_seconds": 1.7611501363862772,
+                "exclusive_seconds": 1.7611501363862772
+              },
+              "cache_file_writes": {
+                "calls": 271,
+                "inclusive_seconds": 5.789815506024752,
+                "exclusive_seconds": 5.789815506024752
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.4550977270118892,
+                "exclusive_seconds": 0.4550977270118892
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 30.77350871899398,
+                "exclusive_seconds": 1.2342548065353185
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 160.58758474700153,
+                "exclusive_seconds": 50.11426703914185
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.8801093960064463,
+                "exclusive_seconds": 1.8801093960064463
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 15.041292309004348,
+                "exclusive_seconds": 15.041292309004348
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 15.041825596999843,
+                "exclusive_seconds": 0.0005332879954949021
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 182.19575506501133,
+                "exclusive_seconds": 4.6862353250035085
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 24511512576,
+              "spool_append_bytes": 18167776065,
+              "spool_plus_output_logical_peak_bytes": 42679288641,
+              "output_tile_write_bytes": 18167776065
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 18167776193,
+          "allocated_bytes": 18167889920
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 744182384,
+          "allocated_bytes": 744185856
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          12435165
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "4a8d59a04a98e1618139b5284db1bf802bd04b0eb9f068254a59fac451671778",
+        "map_sha256": "73a2227828a19b0bb85136b5156f4a644d2e48e993e4d2229caf1ae8e22f9082",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    }
+  }
+}

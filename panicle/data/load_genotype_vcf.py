@@ -21,6 +21,7 @@ from __future__ import print_function
 from panicle.data.genotype_cache import GenotypeCache
 from .vcf_records import VCFFilters, VariantAccumulator, BuiltinDecodeState
 from .vcf_format import extract_gt_fields
+from .vcf_compression import open_compressed
 from contextlib import nullcontext
 
 import logging
@@ -225,8 +226,7 @@ def _open_binary(path):
     p = str(path)
     pl = p.lower()
     if pl.endswith('.gz') or pl.endswith('.bgz'):
-        raw = gzip.GzipFile(filename=p, mode='rb')
-        return io.BufferedReader(raw, buffer_size=128 * 1024)
+        return open_compressed(p)
     return open(p, 'rb')
 
 

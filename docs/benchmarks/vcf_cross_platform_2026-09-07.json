@@ -1,0 +1,1893 @@
+{
+  "date": "2026-09-07",
+  "purpose": "Portable instrumentation and cross-system baseline; no algorithm, tile, thread, or cache-format tuning.",
+  "code_snapshot_sha256": "4e87c1586cd8a8a0b1383b2f81d39699506779a417bc5d5ee02c48fcf34106e6",
+  "source_commit": "61be38c plus uncommitted benchmark/instrumentation changes captured in code-final.tar.gz",
+  "verified_input_sha256": {
+    "full": "a55de26934e8d3e6eac996172e47829b2255dc7a05187023d113d7d805155e6e",
+    "subset": "452d3ed6b5650987ff14a7ba260f1329bdf2035f4586ad6b9ceb43941ed75dfc"
+  },
+  "scratch": {
+    "mac": "/private/tmp/panicle-cross-platform.qU2puv",
+    "linux": "james@beadledesktop:/tmp/panicle-cross-platform.qkSnyL"
+  },
+  "supplemental_hardware": {
+    "mac_ram_bytes": 34359738368,
+    "mac_ram_source": "sysctl -n hw.memsize from previous production test; optional psutil RAM probe unavailable in benchmark environment",
+    "linux_cpu": "12th Gen Intel Core i9-12900K",
+    "linux_storage": "Input copied to /tmp on /dev/nvme0n1p2; spool/cache also on this NVMe filesystem",
+    "mac_storage": "Input symlink to existing scratch copy; spool/cache on local /private/tmp APFS volume"
+  },
+  "tests": {
+    "mac_full_suite_passed": 419,
+    "mac_full_suite_skipped": 1,
+    "linux_targeted_passed": 32
+  },
+  "notes": [
+    "All full-panel fingerprints match across hosts and the previous production test; all subset fingerprints match with timing off/on on both hosts.",
+    "Full-panel timings are one instrumented load per host, no workload warmup, imports/hashing excluded. Input checksums read before tests; not controlled cold-storage tests. First-load/JIT effects included.",
+    "Subset timings: same first 1M markers, gzip level 1, one warmup and three timed runs per condition; off condition precedes on on each host. Not a randomized overhead experiment.",
+    "Full/subset production measurements started after setup/transfers/tests. mac-1m-stages is an earlier pilot overlapping transfer and using an earlier counter-only code revision; retained but excluded from headline baselines.",
+    "Native runtime thread settings retained: Mac Numba 10, Linux Numba 24. OS, libraries, CPU, RAM and filesystem differ. These runs do not isolate a hardware-only or RAM-only effect.",
+    "Resource counters are raw snapshots; RSS normalized to bytes on Darwin/Linux. Peak RSS is process-wide and includes hashing/warmup where applicable. Other systems can report null.",
+    "Linux /proc/self/io is process-attributed I/O, not complete physical-device tracing. Macintosh block counters are zero/unavailable here, not proof of no disk I/O.",
+    "Logical byte counters are not physical I/O or peak allocated disk usage. Spool-plus-output capacity excludes metadata, source and any preexisting cache; sparse capacity can exceed allocation.",
+    "Timing stages are nested; inclusive times overlap, exclusive times sum to the instrumented load total. Stream residual includes parsing, QC, genotype decoding and untimed buffered I/O.",
+    "speedup fields in subset on reports are instrumentation-off/on ratios, not algorithmic speedups.",
+    "No production VCFs or caches changed on beadledesktop. Scratch copies and caches retained; no commit/push performed."
+  ],
+  "runs": {
+    "mac-full-stages": {
+      "input": "/private/tmp/panicle-cross-platform.qU2puv/maize-full.vcf.gz",
+      "input_bytes": 3647063164,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": false,
+      "seconds": [
+        312.1396037080558
+      ],
+      "median_seconds": 312.1396037080558,
+      "cache_seconds": 0.1698303750017658,
+      "peak_rss_native": 16024666112,
+      "peak_rss_bytes": 16024666112,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 227573760,
+            "peak_rss_bytes": 227573760,
+            "user_cpu_seconds": 0.6536919999999999,
+            "system_cpu_seconds": 0.103382,
+            "major_faults": 52,
+            "minor_faults": 41963,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 15860154368,
+            "peak_rss_bytes": 15860154368,
+            "user_cpu_seconds": 110.22796,
+            "system_cpu_seconds": 218.327108,
+            "major_faults": 3111285,
+            "minor_faults": 2452381,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 1690460,
+                "inclusive_seconds": 30.587687032995746,
+                "exclusive_seconds": 30.587687032995746
+              },
+              "spool_flush": {
+                "calls": 11,
+                "inclusive_seconds": 1.5485450830310583,
+                "exclusive_seconds": 1.5485450830310583
+              },
+              "spool_growth": {
+                "calls": 10,
+                "inclusive_seconds": 1.4120540828444064,
+                "exclusive_seconds": 0.20607862481847405
+              },
+              "spool_append": {
+                "calls": 380,
+                "inclusive_seconds": 12.930085971718654,
+                "exclusive_seconds": 11.518031888874248
+              },
+              "transpose_tiles": {
+                "calls": 1518,
+                "inclusive_seconds": 23.305822461959906,
+                "exclusive_seconds": 23.305822461959906
+              },
+              "output_tile_writes": {
+                "calls": 1518,
+                "inclusive_seconds": 205.72829615802038,
+                "exclusive_seconds": 205.72829615802038
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.19308458303567022,
+                "exclusive_seconds": 0.19308458303567022
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 229.95059129106812,
+                "exclusive_seconds": 0.38081846304703504
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 299.4221420410322,
+                "exclusive_seconds": 25.95377774524968
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.28666462493129075,
+                "exclusive_seconds": 0.28666462493129075
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 9.923624041955918,
+                "exclusive_seconds": 9.923624041955918
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 9.925153207965195,
+                "exclusive_seconds": 0.0015291660092771053
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 312.1394047909416,
+                "exclusive_seconds": 2.5054449170129374
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 24511512576,
+              "spool_append_bytes": 18167776065,
+              "spool_plus_output_logical_peak_bytes": 42679288641,
+              "output_tile_write_bytes": 18167776065
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 18167776193,
+          "allocated_bytes": 18167779328
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 744182384,
+          "allocated_bytes": 744185856
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          12435165
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "4a8d59a04a98e1618139b5284db1bf802bd04b0eb9f068254a59fac451671778",
+        "map_sha256": "73a2227828a19b0bb85136b5156f4a644d2e48e993e4d2229caf1ae8e22f9082",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-full-stages": {
+      "input": "/tmp/panicle-cross-platform.qkSnyL/maize-full.vcf.gz",
+      "input_bytes": 3647063164,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": false,
+      "seconds": [
+        230.71427018698887
+      ],
+      "median_seconds": 230.71427018698887,
+      "cache_seconds": 0.3198475560056977,
+      "peak_rss_native": 38319432,
+      "peak_rss_bytes": 39239098368,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 253452,
+            "peak_rss_bytes": 259534848,
+            "user_cpu_seconds": 1.315706,
+            "system_cpu_seconds": 2.394926,
+            "major_faults": 0,
+            "minor_faults": 37616,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 38319432,
+            "peak_rss_bytes": 39239098368,
+            "user_cpu_seconds": 247.381829,
+            "system_cpu_seconds": 54.965742,
+            "major_faults": 1471,
+            "minor_faults": 34974053,
+            "input_blocks": 0,
+            "output_blocks": 72480112,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 37109817344,
+              "cancelled_write_bytes": 4096
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 2119589,
+                "inclusive_seconds": 79.83186625942471,
+                "exclusive_seconds": 79.83186625942471
+              },
+              "spool_flush": {
+                "calls": 11,
+                "inclusive_seconds": 3.579588156979298,
+                "exclusive_seconds": 3.579588156979298
+              },
+              "spool_growth": {
+                "calls": 10,
+                "inclusive_seconds": 3.000525798968738,
+                "exclusive_seconds": 0.20214045199099928
+              },
+              "spool_append": {
+                "calls": 380,
+                "inclusive_seconds": 12.130817548750201,
+                "exclusive_seconds": 9.130291749781463
+              },
+              "transpose_tiles": {
+                "calls": 1518,
+                "inclusive_seconds": 26.239974206400802,
+                "exclusive_seconds": 26.239974206400802
+              },
+              "output_tile_writes": {
+                "calls": 1518,
+                "inclusive_seconds": 12.029448629560648,
+                "exclusive_seconds": 12.029448629560648
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 1.5793791780015454,
+                "exclusive_seconds": 1.5793791780015454
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 42.44170471900725,
+                "exclusive_seconds": 1.8116998950426932
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 205.5752659330028,
+                "exclusive_seconds": 71.17087740582065
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 2.0213544739817735,
+                "exclusive_seconds": 2.0213544739817735
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 17.691868213994894,
+                "exclusive_seconds": 17.691868213994894
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 17.6926149649953,
+                "exclusive_seconds": 0.0007467510004062206
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 230.71412886900362,
+                "exclusive_seconds": 5.4248934970237315
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 24511512576,
+              "spool_append_bytes": 18167776065,
+              "spool_plus_output_logical_peak_bytes": 42679288641,
+              "output_tile_write_bytes": 18167776065
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 18167776193,
+          "allocated_bytes": 18167865344
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 744182384,
+          "allocated_bytes": 744189952
+        },
+        {
+          "name": "maize-full.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          12435165
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "4a8d59a04a98e1618139b5284db1bf802bd04b0eb9f068254a59fac451671778",
+        "map_sha256": "73a2227828a19b0bb85136b5156f4a644d2e48e993e4d2229caf1ae8e22f9082",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "mac-1m-off": {
+      "input": "/private/tmp/panicle-cross-platform.qU2puv/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        6.9009874580660835,
+        6.8213375840568915,
+        6.820140541996807
+      ],
+      "median_seconds": 6.8213375840568915,
+      "cache_seconds": 0.014707542024552822,
+      "peak_rss_native": 3977248768,
+      "peak_rss_bytes": 3977248768,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3866394624,
+            "peak_rss_bytes": 3866394624,
+            "user_cpu_seconds": 10.131116,
+            "system_cpu_seconds": 0.7847489999999999,
+            "major_faults": 179479,
+            "minor_faults": 260120,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3866394624,
+            "peak_rss_bytes": 3866394624,
+            "user_cpu_seconds": 18.505796,
+            "system_cpu_seconds": 1.445401,
+            "major_faults": 357822,
+            "minor_faults": 359967,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": null
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3866394624,
+            "peak_rss_bytes": 3866394624,
+            "user_cpu_seconds": 19.577603,
+            "system_cpu_seconds": 1.486674,
+            "major_faults": 357822,
+            "minor_faults": 449145,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3977248768,
+            "peak_rss_bytes": 3977248768,
+            "user_cpu_seconds": 27.981751,
+            "system_cpu_seconds": 2.045092,
+            "major_faults": 536165,
+            "minor_faults": 516158,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": null
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3977248768,
+            "peak_rss_bytes": 3977248768,
+            "user_cpu_seconds": 29.054029,
+            "system_cpu_seconds": 2.081526,
+            "major_faults": 536165,
+            "minor_faults": 605331,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3977248768,
+            "peak_rss_bytes": 3977248768,
+            "user_cpu_seconds": 37.495,
+            "system_cpu_seconds": 2.598305,
+            "major_faults": 714508,
+            "minor_faults": 679481,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": null
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": false,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "mac-1m-on": {
+      "input": "/private/tmp/panicle-cross-platform.qU2puv/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        6.840412375051528,
+        6.786531583056785,
+        6.780444166972302
+      ],
+      "median_seconds": 6.786531583056785,
+      "cache_seconds": 0.014465040992945433,
+      "peak_rss_native": 4152098816,
+      "peak_rss_bytes": 4152098816,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3866673152,
+            "peak_rss_bytes": 3866673152,
+            "user_cpu_seconds": 10.216752,
+            "system_cpu_seconds": 0.668422,
+            "major_faults": 178534,
+            "minor_faults": 261061,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4149919744,
+            "peak_rss_bytes": 4149919744,
+            "user_cpu_seconds": 18.710201,
+            "system_cpu_seconds": 1.181341,
+            "major_faults": 356877,
+            "minor_faults": 327946,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.2598165622912347,
+                "exclusive_seconds": 2.2598165622912347
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.20984204194974154,
+                "exclusive_seconds": 0.20984204194974154
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.15893808414693922,
+                "exclusive_seconds": 0.04533620912116021
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2681041312171146,
+                "exclusive_seconds": 0.10916604707017541
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7779564268421382,
+                "exclusive_seconds": 0.7779564268421382
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.20398050302173942,
+                "exclusive_seconds": 0.20398050302173942
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.20172445802018046,
+                "exclusive_seconds": 0.20172445802018046
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.3699256660183892,
+                "exclusive_seconds": 0.09002411121036857
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 5.959174082963727,
+                "exclusive_seconds": 2.061327723436989
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.02020837494637817,
+                "exclusive_seconds": 0.02020837494637817
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.698928292025812,
+                "exclusive_seconds": 0.698928292025812
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.699499125010334,
+                "exclusive_seconds": 0.000570832984521985
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.840315124951303,
+                "exclusive_seconds": 0.16143354203086346
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4149919744,
+            "peak_rss_bytes": 4149919744,
+            "user_cpu_seconds": 19.785181,
+            "system_cpu_seconds": 1.218961,
+            "major_faults": 356877,
+            "minor_faults": 417121,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4152098816,
+            "peak_rss_bytes": 4152098816,
+            "user_cpu_seconds": 28.229599,
+            "system_cpu_seconds": 1.708125,
+            "major_faults": 535220,
+            "minor_faults": 483132,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.2627652045339346,
+                "exclusive_seconds": 2.2627652045339346
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.19814525032415986,
+                "exclusive_seconds": 0.19814525032415986
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.14680341817438602,
+                "exclusive_seconds": 0.04566866788081825
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2616848738398403,
+                "exclusive_seconds": 0.11488145566545427
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7786922146333382,
+                "exclusive_seconds": 0.7786922146333382
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.18734945554751903,
+                "exclusive_seconds": 0.18734945554751903
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.2070392919704318,
+                "exclusive_seconds": 0.2070392919704318
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.3807828749995679,
+                "exclusive_seconds": 0.1106914128176868
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 5.9584124580724165,
+                "exclusive_seconds": 2.0531795046990737
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.020254750037565827,
+                "exclusive_seconds": 0.020254750037565827
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6518847920233384,
+                "exclusive_seconds": 0.6518847920233384
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6523962499340996,
+                "exclusive_seconds": 0.0005114579107612371
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.786446750047617,
+                "exclusive_seconds": 0.15538329200353473
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4152098816,
+            "peak_rss_bytes": 4152098816,
+            "user_cpu_seconds": 29.301247,
+            "system_cpu_seconds": 1.742751,
+            "major_faults": 535220,
+            "minor_faults": 572305,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4152098816,
+            "peak_rss_bytes": 4152098816,
+            "user_cpu_seconds": 37.736789,
+            "system_cpu_seconds": 2.239627,
+            "major_faults": 713563,
+            "minor_faults": 638895,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.263176115229726,
+                "exclusive_seconds": 2.263176115229726
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.2119643319165334,
+                "exclusive_seconds": 0.2119643319165334
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16362595895770937,
+                "exclusive_seconds": 0.05057796009350568
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.27322237484622747,
+                "exclusive_seconds": 0.1095964158885181
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7817225031321868,
+                "exclusive_seconds": 0.7817225031321868
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.1950788372196257,
+                "exclusive_seconds": 0.1950788372196257
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.19766487495508045,
+                "exclusive_seconds": 0.19766487495508045
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.355325791053474,
+                "exclusive_seconds": 0.08194324269425124
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 5.959343458060175,
+                "exclusive_seconds": 2.067619176930748
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.01971629203762859,
+                "exclusive_seconds": 0.01971629203762859
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.643854041933082,
+                "exclusive_seconds": 0.643854041933082
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6444183749845251,
+                "exclusive_seconds": 0.0005643330514431
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.780362125020474,
+                "exclusive_seconds": 0.15688399993814528
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 1.0051286876918104
+    },
+    "linux-1m-off": {
+      "input": "/tmp/panicle-cross-platform.qkSnyL/maize-v2-first-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        18.378540692006936,
+        18.51080843998352,
+        18.621155201020883
+      ],
+      "median_seconds": 18.51080843998352,
+      "cache_seconds": 0.03244291199371219,
+      "peak_rss_native": 3579548,
+      "peak_rss_bytes": 3665457152,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3552668,
+            "peak_rss_bytes": 3637932032,
+            "user_cpu_seconds": 22.570567,
+            "system_cpu_seconds": 7.124446,
+            "major_faults": 1467,
+            "minor_faults": 2851997,
+            "input_blocks": 967760,
+            "output_blocks": 5823584,
+            "linux_process_io_bytes": {
+              "read_bytes": 495493120,
+              "write_bytes": 2981675008,
+              "cancelled_write_bytes": 4096
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3570396,
+            "peak_rss_bytes": 3656085504,
+            "user_cpu_seconds": 41.219566,
+            "system_cpu_seconds": 11.782444,
+            "major_faults": 2934,
+            "minor_faults": 5588423,
+            "input_blocks": 967760,
+            "output_blocks": 11647160,
+            "linux_process_io_bytes": {
+              "read_bytes": 495493120,
+              "write_bytes": 5963345920,
+              "cancelled_write_bytes": 59662336
+            }
+          },
+          "timing": null
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3570396,
+            "peak_rss_bytes": 3656085504,
+            "user_cpu_seconds": 42.772487,
+            "system_cpu_seconds": 11.832665,
+            "major_faults": 2934,
+            "minor_faults": 5610719,
+            "input_blocks": 967760,
+            "output_blocks": 11647160,
+            "linux_process_io_bytes": {
+              "read_bytes": 495493120,
+              "write_bytes": 5963345920,
+              "cancelled_write_bytes": 59662336
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3579548,
+            "peak_rss_bytes": 3665457152,
+            "user_cpu_seconds": 61.88292,
+            "system_cpu_seconds": 16.33881,
+            "major_faults": 4401,
+            "minor_faults": 8356468,
+            "input_blocks": 967760,
+            "output_blocks": 17470736,
+            "linux_process_io_bytes": {
+              "read_bytes": 495493120,
+              "write_bytes": 8945016832,
+              "cancelled_write_bytes": 59666432
+            }
+          },
+          "timing": null
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3579548,
+            "peak_rss_bytes": 3665457152,
+            "user_cpu_seconds": 63.664434,
+            "system_cpu_seconds": 16.405761,
+            "major_faults": 4401,
+            "minor_faults": 8378764,
+            "input_blocks": 967760,
+            "output_blocks": 17470736,
+            "linux_process_io_bytes": {
+              "read_bytes": 495493120,
+              "write_bytes": 8945016832,
+              "cancelled_write_bytes": 59666432
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3579548,
+            "peak_rss_bytes": 3665457152,
+            "user_cpu_seconds": 83.014375,
+            "system_cpu_seconds": 20.838547,
+            "major_faults": 5868,
+            "minor_faults": 11124320,
+            "input_blocks": 967760,
+            "output_blocks": 23294312,
+            "linux_process_io_bytes": {
+              "read_bytes": 495493120,
+              "write_bytes": 11926687744,
+              "cancelled_write_bytes": 59670528
+            }
+          },
+          "timing": null
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461006336
+        },
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": false,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "linux-1m-on": {
+      "input": "/tmp/panicle-cross-platform.qkSnyL/maize-v2-first-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        18.58129880798515,
+        19.413352229021257,
+        18.705960886989487
+      ],
+      "median_seconds": 18.705960886989487,
+      "cache_seconds": 0.026325008977437392,
+      "peak_rss_native": 3583388,
+      "peak_rss_bytes": 3669389312,
+      "environment": {
+        "system": "Linux",
+        "release": "6.8.0-139-generic",
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "python": "3.12.3",
+        "numpy": "1.26.4",
+        "pandas": "2.1.4",
+        "logical_cpus": 24,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.62.1",
+        "numba_threads": 24,
+        "ram_bytes": 134844833792
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3553572,
+            "peak_rss_bytes": 3638857728,
+            "user_cpu_seconds": 22.586091,
+            "system_cpu_seconds": 7.009407,
+            "major_faults": 1467,
+            "minor_faults": 2851383,
+            "input_blocks": 0,
+            "output_blocks": 5823584,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 2981675008,
+              "cancelled_write_bytes": 8192
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3582404,
+            "peak_rss_bytes": 3668381696,
+            "user_cpu_seconds": 41.54387,
+            "system_cpu_seconds": 11.589684,
+            "major_faults": 2934,
+            "minor_faults": 5574213,
+            "input_blocks": 0,
+            "output_blocks": 11647160,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 5963345920,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 93569,
+                "inclusive_seconds": 6.620178976561874,
+                "exclusive_seconds": 6.620178976561874
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.5625442189339083,
+                "exclusive_seconds": 0.5625442189339083
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.2987872750090901,
+                "exclusive_seconds": 0.012022863054880872
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.9780449540121481,
+                "exclusive_seconds": 0.679257679003058
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 2.1739280958718155,
+                "exclusive_seconds": 2.1739280958718155
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.9200080539740156,
+                "exclusive_seconds": 0.9200080539740156
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.5322622589883395,
+                "exclusive_seconds": 0.5322622589883395
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 4.146969917987008,
+                "exclusive_seconds": 0.24499170217313804
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 16.718237165012397,
+                "exclusive_seconds": 4.973043316451367
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.15771234201383777,
+                "exclusive_seconds": 0.15771234201383777
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.3044103290012572,
+                "exclusive_seconds": 1.3044103290012572
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.3049548699927982,
+                "exclusive_seconds": 0.0005445409915409982
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 18.581092439009808,
+                "exclusive_seconds": 0.40018806199077517
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3582404,
+            "peak_rss_bytes": 3668381696,
+            "user_cpu_seconds": 43.315868,
+            "system_cpu_seconds": 11.649426,
+            "major_faults": 2934,
+            "minor_faults": 5596509,
+            "input_blocks": 0,
+            "output_blocks": 11647160,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 5963345920,
+              "cancelled_write_bytes": 12288
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3582404,
+            "peak_rss_bytes": 3668381696,
+            "user_cpu_seconds": 62.940527,
+            "system_cpu_seconds": 16.14157,
+            "major_faults": 4401,
+            "minor_faults": 8340066,
+            "input_blocks": 0,
+            "output_blocks": 17470736,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 8945016832,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 93569,
+                "inclusive_seconds": 6.920854647119995,
+                "exclusive_seconds": 6.920854647119995
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.5786414599861018,
+                "exclusive_seconds": 0.5786414599861018
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.36466603106237017,
+                "exclusive_seconds": 0.018179043079726398
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 1.1319776090385858,
+                "exclusive_seconds": 0.7673115779762156
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 2.0570639142242726,
+                "exclusive_seconds": 2.0570639142242726
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.8868505271093454,
+                "exclusive_seconds": 0.8868505271093454
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.5046104149951134,
+                "exclusive_seconds": 0.5046104149951134
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.9154900689900387,
+                "exclusive_seconds": 0.23481074065784924
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 17.29206755402265,
+                "exclusive_seconds": 5.3237452288740315
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.17744260997278616,
+                "exclusive_seconds": 0.17744260997278616
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.5726475100091193,
+                "exclusive_seconds": 1.5726475100091193
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.5731300699990243,
+                "exclusive_seconds": 0.00048255998990498483
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 19.41322382897488,
+                "exclusive_seconds": 0.3705835949804168
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3582404,
+            "peak_rss_bytes": 3668381696,
+            "user_cpu_seconds": 64.678323,
+            "system_cpu_seconds": 16.196576,
+            "major_faults": 4401,
+            "minor_faults": 8362362,
+            "input_blocks": 0,
+            "output_blocks": 17470736,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 8945016832,
+              "cancelled_write_bytes": 16384
+            }
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 3583388,
+            "peak_rss_bytes": 3669389312,
+            "user_cpu_seconds": 83.824656,
+            "system_cpu_seconds": 20.88717,
+            "major_faults": 5868,
+            "minor_faults": 11105384,
+            "input_blocks": 0,
+            "output_blocks": 23294312,
+            "linux_process_io_bytes": {
+              "read_bytes": 0,
+              "write_bytes": 11926687744,
+              "cancelled_write_bytes": 20480
+            }
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 93569,
+                "inclusive_seconds": 6.696366957592545,
+                "exclusive_seconds": 6.696366957592545
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.5365300979465246,
+                "exclusive_seconds": 0.5365300979465246
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.27678013595868833,
+                "exclusive_seconds": 0.011792853008955717
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.9683401031070389,
+                "exclusive_seconds": 0.6915599671483506
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 1.9278713990643155,
+                "exclusive_seconds": 1.9278713990643155
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.8841947428591084,
+                "exclusive_seconds": 0.8841947428591084
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.5692604689975269,
+                "exclusive_seconds": 0.5692604689975269
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 3.9171818470058497,
+                "exclusive_seconds": 0.26431242108810693
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 16.63822495000204,
+                "exclusive_seconds": 5.056336042296607
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.18736905002151616,
+                "exclusive_seconds": 0.18736905002151616
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 1.4636517969775014,
+                "exclusive_seconds": 1.4636517969775014
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 1.4643730529933237,
+                "exclusive_seconds": 0.0007212560158222914
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 18.70583489400451,
+                "exclusive_seconds": 0.4158678409876302
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461006336
+        },
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-v2-first-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 0.9895673658153695
+    },
+    "mac-1m-stages": {
+      "input": "/private/tmp/panicle-cross-platform.qU2puv/maize-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        6.893635959015228,
+        6.922125165932812,
+        6.767653584014624
+      ],
+      "median_seconds": 6.893635959015228,
+      "cache_seconds": 0.016759541002102196,
+      "peak_rss_native": 4152213504,
+      "peak_rss_bytes": 4152213504,
+      "environment": {
+        "system": "Darwin",
+        "release": "25.2.0",
+        "machine": "arm64",
+        "processor": "arm",
+        "python": "3.14.7",
+        "numpy": "2.5.1",
+        "pandas": "3.0.5",
+        "logical_cpus": 10,
+        "thread_environment": {
+          "NUMBA_NUM_THREADS": null,
+          "OMP_NUM_THREADS": null,
+          "OPENBLAS_NUM_THREADS": null,
+          "MKL_NUM_THREADS": null
+        },
+        "numba": "0.67.0",
+        "numba_threads": 10,
+        "ram_bytes": null
+      },
+      "measurements": [
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 3867115520,
+            "peak_rss_bytes": 3867115520,
+            "user_cpu_seconds": 9.915695,
+            "system_cpu_seconds": 0.880539,
+            "major_faults": 178497,
+            "minor_faults": 261126,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4151951360,
+            "peak_rss_bytes": 4151951360,
+            "user_cpu_seconds": 18.175655,
+            "system_cpu_seconds": 1.502299,
+            "major_faults": 356840,
+            "minor_faults": 328078,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.210403034114279,
+                "exclusive_seconds": 2.210403034114279
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.22041995800100267,
+                "exclusive_seconds": 0.22041995800100267
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16653058305382729,
+                "exclusive_seconds": 0.04675604205112904
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2878274149261415,
+                "exclusive_seconds": 0.12129683187231421
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7574183760443702,
+                "exclusive_seconds": 0.7574183760443702
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.2901315452763811,
+                "exclusive_seconds": 0.2901315452763811
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.257612582994625,
+                "exclusive_seconds": 0.257612582994625
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.5029153750510886,
+                "exclusive_seconds": 0.09710745373740792
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.050897540990263,
+                "exclusive_seconds": 2.0497517168987542
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.020845375023782253,
+                "exclusive_seconds": 0.020845375023782253
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6635311249410734,
+                "exclusive_seconds": 0.6635311249410734
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6640912090661004,
+                "exclusive_seconds": 0.0005600841250270605
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.893524041981436,
+                "exclusive_seconds": 0.15768991690129042
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4151951360,
+            "peak_rss_bytes": 4151951360,
+            "user_cpu_seconds": 19.244101,
+            "system_cpu_seconds": 1.543877,
+            "major_faults": 356840,
+            "minor_faults": 417253,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4152213504,
+            "peak_rss_bytes": 4152213504,
+            "user_cpu_seconds": 27.501723,
+            "system_cpu_seconds": 2.089836,
+            "major_faults": 535183,
+            "minor_faults": 483711,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.205280308611691,
+                "exclusive_seconds": 2.205280308611691
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.21516987611539662,
+                "exclusive_seconds": 0.21516987611539662
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.15841774980071932,
+                "exclusive_seconds": 0.043837123666889966
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2697907491819933,
+                "exclusive_seconds": 0.11137299938127398
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7539317994378507,
+                "exclusive_seconds": 0.7539317994378507
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.37292762100696564,
+                "exclusive_seconds": 0.37292762100696564
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.268066041986458,
+                "exclusive_seconds": 0.268066041986458
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.5715506669366732,
+                "exclusive_seconds": 0.0760359545238316
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 6.076255582971498,
+                "exclusive_seconds": 2.029633858241141
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.02070479199755937,
+                "exclusive_seconds": 0.02070479199755937
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6685730830067769,
+                "exclusive_seconds": 0.6685730830067769
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6691020419821143,
+                "exclusive_seconds": 0.0005289589753374457
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.922041499987245,
+                "exclusive_seconds": 0.15597908303607255
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        },
+        {
+          "resources_before": {
+            "available": true,
+            "peak_rss_native": 4152213504,
+            "peak_rss_bytes": 4152213504,
+            "user_cpu_seconds": 28.567794,
+            "system_cpu_seconds": 2.124907,
+            "major_faults": 535183,
+            "minor_faults": 572884,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "resources_after_load": {
+            "available": true,
+            "peak_rss_native": 4152213504,
+            "peak_rss_bytes": 4152213504,
+            "user_cpu_seconds": 36.836329,
+            "system_cpu_seconds": 2.655229,
+            "major_faults": 713526,
+            "minor_faults": 638625,
+            "input_blocks": 0,
+            "output_blocks": 0,
+            "linux_process_io_bytes": null
+          },
+          "timing": {
+            "stages": {
+              "gzip_read_decompress": {
+                "calls": 48816,
+                "inclusive_seconds": 2.220765857025981,
+                "exclusive_seconds": 2.220765857025981
+              },
+              "spool_flush": {
+                "calls": 7,
+                "inclusive_seconds": 0.21697604283690453,
+                "exclusive_seconds": 0.21697604283690453
+              },
+              "spool_growth": {
+                "calls": 6,
+                "inclusive_seconds": 0.16188529215287417,
+                "exclusive_seconds": 0.04695395729504526
+              },
+              "spool_append": {
+                "calls": 31,
+                "inclusive_seconds": 0.2725507941795513,
+                "exclusive_seconds": 0.11066550202667713
+              },
+              "transpose_tiles": {
+                "calls": 123,
+                "inclusive_seconds": 0.7610014220699668,
+                "exclusive_seconds": 0.7610014220699668
+              },
+              "output_tile_writes": {
+                "calls": 123,
+                "inclusive_seconds": 0.18895333202090114,
+                "exclusive_seconds": 0.18895333202090114
+              },
+              "cache_flush": {
+                "calls": 1,
+                "inclusive_seconds": 0.20250445802230388,
+                "exclusive_seconds": 0.20250445802230388
+              },
+              "finalization": {
+                "calls": 1,
+                "inclusive_seconds": 1.4012884999392554,
+                "exclusive_seconds": 0.146784579847008
+              },
+              "builtin_stream": {
+                "calls": 1,
+                "inclusive_seconds": 5.9402705419342965,
+                "exclusive_seconds": 2.045665390789509
+              },
+              "map_canonicalization": {
+                "calls": 1,
+                "inclusive_seconds": 0.01975895802024752,
+                "exclusive_seconds": 0.01975895802024752
+              },
+              "map_serialization": {
+                "calls": 1,
+                "inclusive_seconds": 0.6549410000443459,
+                "exclusive_seconds": 0.6549410000443459
+              },
+              "cache_save": {
+                "calls": 1,
+                "inclusive_seconds": 0.6554939580382779,
+                "exclusive_seconds": 0.0005529579939320683
+              },
+              "load_total": {
+                "calls": 1,
+                "inclusive_seconds": 6.767571625066921,
+                "exclusive_seconds": 0.15204816707409918
+              }
+            },
+            "logical_counters": {
+              "spool_capacity_peak_bytes": 1531969536,
+              "spool_append_bytes": 1461000000,
+              "spool_plus_output_logical_peak_bytes": 2992969536,
+              "output_tile_write_bytes": 1461000000
+            }
+          }
+        }
+      ],
+      "cache_files": [
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.geno.npy",
+          "logical_bytes": 1461000128,
+          "allocated_bytes": 1461002240
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.ind.txt",
+          "logical_bytes": 9114,
+          "allocated_bytes": 12288
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.map.npz",
+          "logical_bytes": 59639547,
+          "allocated_bytes": 59641856
+        },
+        {
+          "name": "maize-1m.vcf.gz.panicle.v2.filters.json",
+          "logical_bytes": 124,
+          "allocated_bytes": 4096
+        }
+      ],
+      "stages_enabled": true,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    }
+  }
+}

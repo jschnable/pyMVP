@@ -2,8 +2,9 @@
 
 Generate once, then run before/after sequentially on the same input. Timed loads
 force cache rebuilds and include imputation, map construction and cache output.
-Imports, JIT warmup and checksums are excluded. This is a warm-filesystem test,
-not a cold-storage benchmark. Peak RSS is process-wide, including warmup.
+Imports and checksums are excluded. By default a full workload warmup excludes
+JIT warmup too; --skip-warmup includes first-load/JIT effects in the first run.
+This is not a controlled cold-storage benchmark. Peak RSS is process-wide.
 """
 import argparse
 import cProfile
@@ -11,12 +12,16 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
-import resource
+from contextlib import nullcontext
 import time
 
 import numpy as np
 
 from panicle.data.load_genotype_vcf import load_genotype_vcf
+if __package__:
+    from .vcf_observability import StageRecorder, resources, environment, cache_disk_usage
+else:
+    from vcf_observability import StageRecorder, resources, environment, cache_disk_usage
 
 
 def generate(path, samples, markers, extra_format, late_general=False):
@@ -55,12 +60,17 @@ def generate(path, samples, markers, extra_format, late_general=False):
 def fingerprint(result):
     genotype, ids, gmap = result
     digest = hashlib.sha256()
-    for start in range(0, genotype.shape[0], 32):
-        digest.update(genotype[start:start + 32].tobytes(order='C'))
+    for row in genotype:
+        for start in range(0, row.size, 8 * 1024 * 1024):
+            digest.update(row[start:start + 8 * 1024 * 1024].tobytes(order='C'))
     frame = gmap.to_dataframe() if hasattr(gmap, 'to_dataframe') else gmap
-    metadata = hashlib.sha256(frame.to_csv(index=False).encode()).hexdigest()
+    metadata = hashlib.sha256()
+    if len(frame) == 0:
+        metadata.update(frame.to_csv(index=False).encode())
+    for start in range(0, len(frame), 8192):
+        metadata.update(frame.iloc[start:start + 8192].to_csv(index=False, header=start == 0).encode())
     return dict(shape=list(genotype.shape), dtype=str(genotype.dtype),
-                genotype_sha256=digest.hexdigest(), map_sha256=metadata,
+                genotype_sha256=digest.hexdigest(), map_sha256=metadata.hexdigest(),
                 ids_sha256=hashlib.sha256('\n'.join(ids).encode()).hexdigest())
 
 
@@ -78,6 +88,10 @@ def main():
     parser.add_argument('--compare', type=Path)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--profile', type=Path)
+    parser.add_argument('--skip-warmup', action='store_true', help='Avoid an extra full load of production-scale files')
+    parser.add_argument('--max-missing', type=float, default=.2)
+    parser.add_argument('--min-maf', type=float, default=.01)
+    parser.add_argument('--stages', action='store_true', help='Opt-in stage timings; no tile/thread tuning')
     args = parser.parse_args()
     if args.generate:
         generate(args.input, args.samples, args.markers, args.extra_format, args.late_general)
@@ -86,16 +100,35 @@ def main():
     if args.output is None or args.repeats < 1:
         parser.error('Loading requires --output and --repeats >= 1')
     # Warm on the actual workload: includes both QC and imputation kernels.
-    options = dict(backend=args.backend, drop_monomorphic=True, max_missing=.2, min_maf=.01)
-    result = load_genotype_vcf(args.input, force_recache=True, **options)
-    expected = fingerprint(result)
-    del result
-    timings = []
-    for _ in range(args.repeats):
-        started = time.perf_counter()
+    options = dict(backend=args.backend, drop_monomorphic=True,
+                   max_missing=args.max_missing, min_maf=args.min_maf)
+    expected = None
+    if not args.skip_warmup:
         result = load_genotype_vcf(args.input, force_recache=True, **options)
+        expected = fingerprint(result)
+        del result
+    timings = []
+    measurements = []
+    for _ in range(args.repeats):
+        before_resources = resources()
+        started = time.perf_counter()
+        with StageRecorder() if args.stages else nullcontext() as metrics:
+            if metrics is None:
+                result = load_genotype_vcf(args.input, force_recache=True, **options)
+            else:
+                result = metrics.call('load_total', load_genotype_vcf, args.input, force_recache=True, **options)
         timings.append(time.perf_counter() - started)
-        assert fingerprint(result) == expected
+        measurements.append(dict(resources_before=before_resources, resources_after_load=resources(),
+                                 timing=metrics.report() if metrics else None))
+        if metrics:
+            print(json.dumps(metrics.report()), flush=True)
+        print(f'Run {len(timings)}: load finished in {timings[-1]:.3f} s; hashing output', flush=True)
+        actual = fingerprint(result)
+        first_measurement = expected is None
+        if expected is None:
+            expected = actual
+        assert actual == expected
+        print('Fingerprints recorded' if first_measurement else 'Fingerprints verified', flush=True)
         del result
     if args.profile:
         profiler = cProfile.Profile()
@@ -108,8 +141,11 @@ def main():
     # and metadata are already compared on the freshly built output above.
     np.testing.assert_equal(result[0].shape, expected['shape'])
     row = dict(input=str(args.input), input_bytes=args.input.stat().st_size,
-               backend=args.backend, seconds=timings, median_seconds=float(np.median(timings)),
-               cache_seconds=cache_seconds, peak_rss_native=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+               backend=args.backend, options=options, warmup=not args.skip_warmup,
+               seconds=timings, median_seconds=float(np.median(timings)),
+               cache_seconds=cache_seconds, peak_rss_native=resources().get('peak_rss_native'),
+               peak_rss_bytes=resources().get('peak_rss_bytes'), environment=environment(),
+               measurements=measurements, cache_files=cache_disk_usage(args.input), stages_enabled=args.stages,
                fingerprint=expected)
     if args.compare:
         before = json.loads(args.compare.read_text())

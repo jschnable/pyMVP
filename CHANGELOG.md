@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tests compare per-trait results with direct MLM using the retained samples.
 
 ### Changed
+- Use bounded buffered writes for direct VCF cache construction, removing the
+  mapped-output writer and its selection option. Prioritize shorter large-panel
+  loads over the small-file overhead. Cache format and small/uncached RAM paths
+  are unchanged. ISA-L gzip decoding (`panicle[vcf-fast]`) remains opt-in;
+  standard gzip remains the default.
+- Add opt-in VCF stage timing, logical storage counters, normalized memory and
+  resource reporting, with verified macOS/ARM64 and Linux/x86-64 production
+  baselines. Loader algorithms and tuning defaults remain unchanged.
 - Bulk-decode diploid GT from extra FORMAT fields (including GT:DP and reordered
   GT), and resume general decoding in the same input stream instead of restarting
   after unsupported records. Preserve existing GT/DS, QC, and imputation rules.

@@ -35,6 +35,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional accelerated VCF gzip/BGZF reading; stdlib remains available.
+vcf-fast = ["isal>=1.8"]
 # PLINK .bed support
 plink = [
     "bed-reader>=1.0.0",

@@ -202,6 +202,13 @@ CSV or TSV files with an **ID column** and numeric columns for traits/covariates
 
 **Performance notes:** VCF is typically the slowest format on the first run, but PANICLE caches parsed marker data so subsequent loads are competitive with other formats. BCF is roughly ~2x faster than VCF on the first run, and PLINK/bed is roughly ~4x faster than VCF on the first run (exact speedups depend on marker count, sample size, and hardware).
 
+Large fresh VCF loads use bounded buffered cache writes automatically.
+Optional `pip install 'panicle[vcf-fast]'` plus
+`PANICLE_VCF_GZIP_BACKEND=isal` enables an alternative built-in gzip decoder.
+The alternative decoder is opt-in: it can help some platforms and slow others down. See the
+[cross-platform measurements and configuration guide](docs/vcf_portable_io_2026-09-07.md)
+before enabling it. Existing cache formats are unchanged; standard gzip remains the default.
+
 ## Tips
 
 1.  **Effective Tests**: Use `--compute-effective-tests` to calculate a less stringent, more accurate Bonferroni threshold based on marker linkage (`Me`).

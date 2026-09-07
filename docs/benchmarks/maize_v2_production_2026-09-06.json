@@ -1,0 +1,140 @@
+{
+  "date": "2026-09-06 America/Chicago",
+  "code_commit": "61be38c",
+  "source": "james@beadledesktop:/home/james/data/Common_Data/Markers/Maize/Maize_Marcin1461_filtered_v2.vcf.gz",
+  "local_directory": "/private/tmp/panicle-maize-v2.g7fPxq",
+  "source_and_copy_sha256": "a55de26934e8d3e6eac996172e47829b2255dc7a05187023d113d7d805155e6e",
+  "local_ram_bytes": 34359738368,
+  "baseline": "Snapshot /tmp/panicle-vcf-stream-before.Lg5Sm0, preceding streaming/FORMAT/cache optimization; same baseline as vcf_streaming_2026-09-06.json",
+  "notes": [
+    "Full current load is one run with no workload warmup; includes first-load/JIT effects, excludes imports and hashing; input was read for transfer checksum beforehand.",
+    "No full old-loader run on the 32 GiB Mac; full-scale speedup is not established.",
+    "Subset: first 1,000,000 real records, recompressed as gzip level 1. Sequential baseline/current processes with one warmup, three timed repeats, and a separate profiling pass. Same filters and interpreter.",
+    "Peak RSS is macOS bytes, process-wide, including hashing and the optional profiling pass.",
+    "Cached-load time measures opening lazy mappings, not reading the entire matrix.",
+    "Full validation checks all record counts/FORMAT layouts and sample ordering; dosage comparison is sampled at 126 markers, not an exhaustive baseline comparison.",
+    "System vm_stat swapouts remained 591426 from before to after the full load; compression increased. RSS does not measure total system memory pressure.",
+    "No source VCF/cache writes on beadledesktop. Local scratch retained at completion (~23 GiB)."
+  ],
+  "subset_profile_cumulative_seconds": {
+    "before": {
+      "total": 13.21,
+      "finalize": 4.718,
+      "gzip_readinto": 2.648,
+      "zlib_decompress": 2.078,
+      "map_cache_save": 1.296
+    },
+    "after": {
+      "total": 10.18,
+      "finalize": 1.408,
+      "gzip_readinto": 2.644,
+      "zlib_decompress": 2.077,
+      "map_cache_save": 1.273
+    }
+  },
+  "tests": {
+    "passed": 412,
+    "skipped": 1
+  },
+  "runs": {
+    "full-current": {
+      "input": "/private/tmp/panicle-maize-v2.g7fPxq/Maize_Marcin1461_filtered_v2.vcf.gz",
+      "input_bytes": 3647063164,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": false,
+      "seconds": [
+        302.67566337506287
+      ],
+      "median_seconds": 302.67566337506287,
+      "cache_seconds": 0.17109883402008563,
+      "peak_rss_native": 15450013696,
+      "fingerprint": {
+        "shape": [
+          1461,
+          12435165
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "4a8d59a04a98e1618139b5284db1bf802bd04b0eb9f068254a59fac451671778",
+        "map_sha256": "73a2227828a19b0bb85136b5156f4a644d2e48e993e4d2229caf1ae8e22f9082",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "full-validation": {
+      "records": 12435165,
+      "samples": 1461,
+      "independently_checked_markers": 126,
+      "checked_genotypes": 184086,
+      "formats": {
+        "GT": 12435165
+      },
+      "prefix_markers": 1000000
+    },
+    "subset-before": {
+      "input": "/private/tmp/panicle-maize-v2.g7fPxq/maize-v2-first-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        10.362117709009908,
+        10.200670833000913,
+        10.233380084042437
+      ],
+      "median_seconds": 10.233380084042437,
+      "cache_seconds": 0.013633416034281254,
+      "peak_rss_native": 4079206400,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      }
+    },
+    "subset-after": {
+      "input": "/private/tmp/panicle-maize-v2.g7fPxq/maize-v2-first-1m.vcf.gz",
+      "input_bytes": 495857206,
+      "backend": "builtin",
+      "options": {
+        "backend": "builtin",
+        "drop_monomorphic": true,
+        "max_missing": 1,
+        "min_maf": 0
+      },
+      "warmup": true,
+      "seconds": [
+        6.9710905000101775,
+        6.761174290906638,
+        6.77495574997738
+      ],
+      "median_seconds": 6.77495574997738,
+      "cache_seconds": 0.014270541025325656,
+      "peak_rss_native": 4142399488,
+      "fingerprint": {
+        "shape": [
+          1461,
+          1000000
+        ],
+        "dtype": "int8",
+        "genotype_sha256": "f157180f9960234811a3e5fcf0b543b5176f0c1152772f0536daeb860e71865e",
+        "map_sha256": "cf9c9a48534da696fdc43145c677ec1a028f7f86e4d850db347930f95fe9b6a5",
+        "ids_sha256": "38664e2a8b4304ec78ad1ed1efef5e8efc26f21585cb74e2e5bab250986a1342"
+      },
+      "speedup": 1.510471870473339
+    }
+  }
+}
